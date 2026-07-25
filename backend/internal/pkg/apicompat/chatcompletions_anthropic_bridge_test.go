@@ -131,20 +131,44 @@ func TestAnthropicToChatCompletionsRequest_ToolResultBecomesToolMessage(t *testi
 	require.Equal(t, `"sunny, 72F"`, string(toolMsg.Content))
 }
 
-func TestAnthropicToChatCompletionsRequest_ThinkingDropped(t *testing.T) {
+func TestAnthropicToChatCompletionsRequest_ThinkingPreservedAcrossToolRoundTrip(t *testing.T) {
 	req := &AnthropicRequest{
 		Model:     "claude-sonnet-4-20250514",
 		MaxTokens: 100,
 		Messages: []AnthropicMessage{
-			{Role: "assistant", Content: json.RawMessage(`[{"type":"thinking","thinking":"secret thoughts"},{"type":"text","text":"answer"}]`)},
+			{Role: "user", Content: json.RawMessage(`"check weather"`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"thinking","thinking":"inspect location"},{"type":"thinking","thinking":"call weather tool"},{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"SF"}}]`)},
+			{Role: "user", Content: json.RawMessage(`[{"type":"tool_result","tool_use_id":"toolu_1","content":"sunny"}]`)},
 		},
 	}
 
 	out, err := AnthropicToChatCompletionsRequest(req)
 	require.NoError(t, err)
-	require.Len(t, out.Messages, 1)
-	// Only text survives; thinking is dropped
-	require.Equal(t, `"answer"`, string(out.Messages[0].Content))
+	require.Len(t, out.Messages, 3)
+	require.Equal(t, "assistant", out.Messages[1].Role)
+	require.Equal(t, "inspect location\ncall weather tool", out.Messages[1].ReasoningContent)
+	require.Empty(t, out.Messages[1].Content)
+	require.Len(t, out.Messages[1].ToolCalls, 1)
+	require.Equal(t, "toolu_1", out.Messages[1].ToolCalls[0].ID)
+	require.Equal(t, "tool", out.Messages[2].Role)
+	require.Equal(t, "toolu_1", out.Messages[2].ToolCallID)
+}
+
+func TestAnthropicToChatCompletionsRequest_StopSequencesMapToStop(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-sonnet-4-20250514",
+		MaxTokens: 100,
+		StopSeqs:  []string{"END", "STOP"},
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"hello"`)}},
+	}
+
+	out, err := AnthropicToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.JSONEq(t, `["END","STOP"]`, string(out.Stop))
+
+	payload, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.Contains(t, string(payload), `"stop":["END","STOP"]`)
 }
 
 func TestAnthropicToChatCompletionsRequest_ToolChoiceAuto(t *testing.T) {

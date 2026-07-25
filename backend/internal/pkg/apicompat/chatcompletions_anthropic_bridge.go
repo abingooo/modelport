@@ -54,6 +54,13 @@ func AnthropicToChatCompletionsRequest(req *AnthropicRequest) (*ChatCompletionsR
 		Messages: messages,
 		Stream:   req.Stream,
 	}
+	if len(req.StopSeqs) > 0 {
+		stop, err := json.Marshal(req.StopSeqs)
+		if err != nil {
+			return nil, fmt.Errorf("convert stop_sequences: %w", err)
+		}
+		out.Stop = stop
+	}
 
 	// Sampling params: reasoning models (gpt-5.x) reject temperature/top_p.
 	if !isReasoningModel(req.Model) {
@@ -249,8 +256,8 @@ func anthropicUserToChatMessages(raw json.RawMessage) ([]ChatMessage, error) {
 
 // anthropicAssistantToChatMessages handles an Anthropic assistant message.
 // Text content → assistant message content; tool_use blocks → tool_calls on the
-// same assistant message; thinking blocks are dropped (Chat Completions has no
-// inbound thinking field, matching anthropicAssistantToResponses).
+// same assistant message; thinking blocks → reasoning_content so reasoning can
+// survive multi-turn tool-call round trips.
 func anthropicAssistantToChatMessages(raw json.RawMessage) ([]ChatMessage, error) {
 	// Plain string → single assistant message.
 	var s string
@@ -270,6 +277,13 @@ func anthropicAssistantToChatMessages(raw json.RawMessage) ([]ChatMessage, error
 		content, _ := json.Marshal(text)
 		msg.Content = content
 	}
+	var reasoningParts []string
+	for _, b := range blocks {
+		if b.Type == "thinking" && b.Thinking != "" {
+			reasoningParts = append(reasoningParts, b.Thinking)
+		}
+	}
+	msg.ReasoningContent = strings.Join(reasoningParts, "\n")
 
 	for _, b := range blocks {
 		if b.Type != "tool_use" {

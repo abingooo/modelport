@@ -311,6 +311,27 @@ func TestAccountHandlerSyncUpstreamModels_ConfigErrorReturnsBadRequest(t *testin
 	require.Contains(t, rec.Body.String(), "No OpenAI API key is available")
 }
 
+func TestAccountHandlerSyncUpstreamModels_DeepSeekConfigErrorNamesPlatform(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:       46,
+			Name:     "deepseek-apikey-missing-key",
+			Platform: service.PlatformDeepSeek,
+			Type:     service.AccountTypeAPIKey,
+			Status:   service.StatusActive,
+		},
+	}
+	router := setupSyncUpstreamModelsRouter(svc, &syncUpstreamHTTPUpstream{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/46/models/sync-upstream", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "No DeepSeek API key is available")
+}
+
 func TestAccountHandlerSyncUpstreamModels_UpstreamErrorDoesNotExposeBody(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),

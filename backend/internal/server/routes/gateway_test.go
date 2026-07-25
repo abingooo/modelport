@@ -333,6 +333,35 @@ func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesDedicatedOpenAICompatibleProvidersRejectResponsesWebSocket(t *testing.T) {
+	platforms := []string{
+		service.PlatformDeepSeek, service.PlatformQwen, service.PlatformGLM, service.PlatformKimi,
+		service.PlatformDoubao, service.PlatformSiliconFlow, service.PlatformOpenRouter,
+		service.PlatformMiniMax, service.PlatformMiMo,
+	}
+	for _, platform := range platforms {
+		t.Run(platform, func(t *testing.T) {
+			router := newGatewayRoutesTestRouter(platform)
+			for _, path := range []string{
+				"/v1/responses",
+				"/responses",
+				"/backend-api/codex/responses",
+			} {
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.Header.Set("Connection", "Upgrade")
+				req.Header.Set("Upgrade", "websocket")
+				req.Header.Set("Sec-WebSocket-Version", "13")
+				req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+				w := httptest.NewRecorder()
+
+				router.ServeHTTP(w, req)
+				require.Equal(t, http.StatusNotFound, w.Code, "platform=%s path=%s", platform, path)
+				require.Contains(t, w.Body.String(), "not supported for this OpenAI-compatible provider", "platform=%s path=%s", platform, path)
+			}
+		})
+	}
+}
+
 func TestGatewayRoutesOpenAICountTokensPathIsRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformOpenAI)
 

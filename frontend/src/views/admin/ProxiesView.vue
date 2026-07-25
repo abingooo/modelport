@@ -988,6 +988,7 @@ import { useTableSelection } from '@/composables/useTableSelection'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatDateTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
+import { platformDisplayName } from '@/utils/providerPresets'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -1780,7 +1781,7 @@ const qualityTargetLabel = (target: string) => {
     case 'grok':
       return 'Grok'
     default:
-      return target
+      return platformDisplayName(target)
   }
 }
 

@@ -83,6 +83,93 @@ func TestForwardAsAnthropic_ForceChatCompletionsNonStreaming(t *testing.T) {
 	require.False(t, result.Stream)
 }
 
+func TestForwardAsAnthropic_DeepSeekAlwaysUsesChatCompletions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{"model":"deepseek-chat","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"chatcmpl_deepseek","object":"chat.completion","model":"deepseek-chat","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+		)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          rawChatCompletionsTestConfig(),
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		Platform: PlatformDeepSeek,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "sk-deepseek-test",
+			"base_url": "https://api.deepseek.com",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "https://api.deepseek.com/v1/chat/completions", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer sk-deepseek-test", upstream.lastReq.Header.Get("Authorization"))
+	require.True(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
+	require.Equal(t, "ok", gjson.Get(rec.Body.String(), "content.0.text").String())
+}
+
+func TestForwardAsAnthropic_DedicatedProvidersUseChatCompletions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, platform := range openai_compat.ProviderIDs() {
+		t.Run(platform, func(t *testing.T) {
+			preset, ok := openai_compat.LookupProvider(platform)
+			require.True(t, ok)
+			model := preset.DefaultTestModel
+			if model == "" {
+				model = "configured-model"
+			}
+			body := []byte(`{"model":"` + model + `","max_tokens":32,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_messages_" + platform}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"chatcmpl_provider","object":"chat.completion","model":"` + model + `","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}`,
+				)),
+			}}
+			account := &Account{
+				Platform: platform,
+				Type:     AccountTypeAPIKey,
+				Credentials: map[string]any{
+					"api_key": "sk-provider-test",
+				},
+			}
+			if platform == PlatformDoubao {
+				account.Credentials["endpoint_id"] = "ep-provider-test"
+			}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+			result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, buildOpenAIChatCompletionsURL(preset.DefaultBaseURL), upstream.lastReq.URL.String())
+			require.Equal(t, "Bearer sk-provider-test", upstream.lastReq.Header.Get("Authorization"))
+			require.Equal(t, "ok", gjson.Get(rec.Body.String(), "content.0.text").String())
+			require.Equal(t, 3, result.Usage.InputTokens)
+			require.Equal(t, 2, result.Usage.OutputTokens)
+		})
+	}
+}
+
 // Covers the fully-new streaming composition: text block is still open when
 // [DONE] arrives, so finalization must close it (content_block_stop) before
 // message_delta / message_stop.

@@ -207,6 +207,7 @@ describe('admin UsageTable tooltip', () => {
       request_id: 'req-admin-model-1',
       model: 'claude-sonnet-4',
       upstream_model: 'claude-sonnet-4-20250514',
+      billing_model: 'claude-sonnet-4-pricing',
       actual_cost: 0,
       total_cost: 0,
       account_rate_multiplier: 1,
@@ -238,6 +239,7 @@ describe('admin UsageTable tooltip', () => {
     const text = wrapper.text()
     expect(text).toContain('claude-sonnet-4')
     expect(text).toContain('claude-sonnet-4-20250514')
+    expect(text).toContain('admin.usage.billingModel: claude-sonnet-4-pricing')
   })
 
   it.each([

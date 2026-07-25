@@ -545,6 +545,7 @@ export default {
       allBillingModes: 'All Billing Modes',
       ipAddress: 'IP',
       clickToViewBalance: 'Click to view balance history',
+      billingModel: 'Billing model',
       failedToLoadUser: 'Failed to load user info',
       userDeletedBadge: 'Deleted',
       tokenRanking: {

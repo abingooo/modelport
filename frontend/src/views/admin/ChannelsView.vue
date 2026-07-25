@@ -650,6 +650,7 @@ import Toggle from '@/components/common/Toggle.vue'
 import PricingEntryCard from '@/components/admin/channel/PricingEntryCard.vue'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useKeyedDebouncedSearch } from '@/composables/useKeyedDebouncedSearch'
+import { CONCRETE_PLATFORM_ORDER } from '@/utils/providerPresets'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -760,7 +761,7 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok']
+const platformOrder: GroupPlatform[] = [...CONCRETE_PLATFORM_ORDER]
 
 // ── Helpers ──
 function formatDate(value: string): string {

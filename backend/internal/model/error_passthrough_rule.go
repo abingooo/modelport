@@ -37,11 +37,24 @@ const (
 	PlatformGemini      = "gemini"
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
+	PlatformDeepSeek    = "deepseek"
+	PlatformQwen        = "qwen"
+	PlatformGLM         = "glm"
+	PlatformKimi        = "kimi"
+	PlatformDoubao      = "doubao"
+	PlatformSiliconFlow = "siliconflow"
+	PlatformOpenRouter  = "openrouter"
+	PlatformMiniMax     = "minimax"
+	PlatformMiMo        = "mimo"
 )
 
 // AllPlatforms 返回所有支持的平台列表
 func AllPlatforms() []string {
-	return []string{PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok}
+	return []string{
+		PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformDeepSeek,
+		PlatformQwen, PlatformGLM, PlatformKimi, PlatformDoubao, PlatformSiliconFlow, PlatformOpenRouter,
+		PlatformMiniMax, PlatformMiMo,
+	}
 }
 
 // Validate 验证规则配置的有效性

@@ -16,6 +16,9 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	if req == nil {
 		return nil, fmt.Errorf("responses request is nil")
 	}
+	if req.PromptCacheKey != "" {
+		return nil, fmt.Errorf("prompt_cache_key is not supported when converting a Responses request to Chat Completions: no reliable equivalent field exists")
+	}
 
 	messages, err := responsesInputToChatMessages(req.Instructions, req.Input)
 	if err != nil {

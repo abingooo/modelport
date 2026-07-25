@@ -183,7 +183,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				AccountID:          account.ID,
 				AccountName:        account.Name,
 				UpstreamStatusCode: resp.StatusCode,
-				UpstreamRequestID:  firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+				UpstreamRequestID:  firstNonEmpty(providerUpstreamRequestID(account, resp.Header), resp.Header.Get("xai-request-id")),
 				Kind:               kind,
 				Message:            upstreamMsg,
 			})
@@ -214,7 +214,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	if clientStream {
 		result, forwardErr = s.streamRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime, len(body))
 	} else {
-		result, forwardErr = s.bufferRawChatCompletions(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		result, forwardErr = s.bufferRawChatCompletions(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
 	if result != nil {
 		addOpenAIUsage(&result.Usage, bridgeUsage)
@@ -253,7 +253,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	startTime time.Time,
 	requestBodyLen int,
 ) (*OpenAIForwardResult, error) {
-	requestID := resp.Header.Get("x-request-id")
+	requestID := providerUpstreamRequestID(account, resp.Header)
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
@@ -302,11 +302,10 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
 			if trimmedPayload != "[DONE]" {
-				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
 				if u := extractCCStreamUsage(payload); u != nil {
 					usage = *u
 				}
-				if firstTokenMs == nil && !usageOnlyChunk {
+				if firstTokenMs == nil && chatCompletionsPayloadStartsOutput(payload) {
 					elapsed := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &elapsed
 				}
@@ -332,6 +331,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				zap.String("request_id", requestID),
 			)
 		}
+		return nil, fmt.Errorf("read upstream chat completions stream: %w", err)
 	} else if !clientDisconnected && !clientOutputStarted {
 		if refusalDetector.IsSilentRefusal() {
 			return nil, newOpenAISilentRefusalFailoverError(c, account, requestID)
@@ -409,6 +409,7 @@ func extractCCStreamUsage(payload string) *OpenAIUsage {
 func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -416,7 +417,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	serviceTier *string,
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
-	requestID := resp.Header.Get("x-request-id")
+	requestID := providerUpstreamRequestID(account, resp.Header)
 
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {

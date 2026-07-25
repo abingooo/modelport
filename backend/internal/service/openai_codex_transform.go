@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 )
 
 var codexModelMap = map[string]string{
@@ -1066,6 +1067,11 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 func normalizeOpenAIModelForUpstream(account *Account, model string) string {
 	if account == nil || account.Type == AccountTypeOAuth {
 		return normalizeCodexModel(model)
+	}
+	if preset, ok := openai_compat.LookupProvider(account.Platform); ok && preset.ModelReferenceMode == "endpoint_or_model" {
+		if endpointID := strings.TrimSpace(account.GetCredential("endpoint_id")); endpointID != "" {
+			return endpointID
+		}
 	}
 	return strings.TrimSpace(model)
 }

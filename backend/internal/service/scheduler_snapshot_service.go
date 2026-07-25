@@ -579,10 +579,12 @@ func (s *SchedulerSnapshotService) handleBulkAccountEvent(ctx context.Context, p
 			continue
 		}
 		accountGroupIDs := s.normalizeGroupIDs(account.GroupIDs)
-		switch account.Platform {
-		case PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformGrok:
+		switch {
+		case account.Platform == PlatformAnthropic, account.Platform == PlatformGemini,
+			account.Platform == PlatformOpenAI, account.Platform == PlatformGrok,
+			IsDedicatedOpenAICompatiblePlatform(account.Platform):
 			addPlatformGroups(account.Platform, accountGroupIDs)
-		case PlatformAntigravity:
+		case account.Platform == PlatformAntigravity:
 			// 批量更新可能刚关闭 mixed_scheduling，仍需清理两个兼容平台的旧快照。
 			addPlatformGroups(PlatformAntigravity, accountGroupIDs)
 			addPlatformGroups(PlatformAnthropic, accountGroupIDs)
@@ -795,8 +797,8 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
-func schedulerSnapshotPlatforms() [5]string {
-	return [5]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok}
+func schedulerSnapshotPlatforms() []string {
+	return append([]string(nil), ConcretePlatforms...)
 }
 
 // 生命周期辅助函数有意排除 group0；full rebuild 构造 group0 canonical 集时必须显式调用 canonical helper。
@@ -808,7 +810,7 @@ func schedulerBucketsForGroup(groupID int64) []SchedulerBucket {
 }
 
 func schedulerCanonicalBuckets(groupID int64) []SchedulerBucket {
-	buckets := make([]SchedulerBucket, 0, 12)
+	buckets := make([]SchedulerBucket, 0, len(schedulerSnapshotPlatforms())*2+2)
 	for _, platform := range schedulerSnapshotPlatforms() {
 		buckets = append(buckets,
 			SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeSingle},

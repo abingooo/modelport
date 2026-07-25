@@ -4,9 +4,23 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
+import { allModels, buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
+  it.each([
+    ['qwen', 'qwen3.7-plus'],
+    ['glm', 'glm-5.2'],
+    ['kimi', 'kimi-k3'],
+    ['doubao', 'doubao-seed-1.8'],
+    ['siliconflow', 'deepseek-ai/DeepSeek-V3.2'],
+    ['openrouter', 'openai/gpt-4o-mini'],
+    ['minimax', 'MiniMax-M3'],
+    ['mimo', 'mimo-v2.5']
+  ])('%s 建议模型进入平台列表和全局白名单选项', (platform, suggestion) => {
+    expect(getModelsByPlatform(platform)).toContain(suggestion)
+    expect(allModels).toContainEqual({ value: suggestion, label: suggestion })
+  })
+
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
     const models = getModelsByPlatform('openai')
 

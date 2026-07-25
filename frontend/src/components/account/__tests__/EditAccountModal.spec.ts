@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
 const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
@@ -314,6 +314,30 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+  })
+
+  it.each([
+    ['qwen'],
+    ['glm'],
+    ['kimi'],
+    ['doubao'],
+    ['siliconflow'],
+    ['openrouter'],
+    ['minimax'],
+    ['mimo']
+  ])('uses a neutral API key placeholder when editing a %s account', async (platform) => {
+    const account = {
+      ...buildAccount(),
+      platform,
+      credentials: { base_url: 'https://provider.example/v1' },
+      credentials_status: { has_api_key: true }
+    } as any
+
+    const wrapper = mountModal(account)
+    await flushPromises()
+
+    expect(wrapper.get('input[type="password"][placeholder="Enter API key"]').exists()).toBe(true)
+    wrapper.unmount()
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {

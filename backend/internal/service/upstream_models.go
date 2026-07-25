@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 )
 
 const upstreamModelsBodyLimit int64 = 8 << 20
@@ -139,6 +140,14 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
 	case account.IsOpenAI():
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
+	case account.IsDedicatedOpenAICompatibleProvider():
+		preset, ok := openai_compat.LookupProvider(account.Platform)
+		if !ok || !preset.Capabilities.ModelList {
+			return nil, newUpstreamModelSyncUnsupportedError(
+				fmt.Sprintf("%s does not expose a compatible model-list endpoint", account.Platform), nil,
+			)
+		}
+		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():
 		return s.buildGeminiUpstreamModelsRequest(ctx, account)
 	case account.IsAnthropic():
@@ -204,7 +213,11 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 		)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(normalizedBaseURL), nil)
+	modelListPath := "/models"
+	if preset, ok := openai_compat.LookupProvider(account.Platform); ok && strings.TrimSpace(preset.ModelListPath) != "" {
+		modelListPath = preset.ModelListPath
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAICompatibleModelsURL(normalizedBaseURL, modelListPath), nil)
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Grok model list URL", err)
 	}
@@ -338,34 +351,50 @@ func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Con
 }
 
 func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
+	providerName := "OpenAI"
+	providerHeaders := map[string]string(nil)
+	if preset, ok := openai_compat.LookupProvider(account.Platform); ok {
+		providerName = preset.DisplayName
+		providerHeaders = preset.DefaultHeaders
+	}
 	if account.Type != AccountTypeAPIKey {
 		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported OpenAI account type for upstream model sync: %s", account.Type), nil,
+			fmt.Sprintf("Unsupported %s account type for upstream model sync: %s", providerName, account.Type), nil,
 		)
 	}
-	apiKey := strings.TrimSpace(account.GetOpenAIApiKey())
+	apiKey := account.GetOpenAICompatibleAPIKey()
 	if apiKey == "" {
-		return nil, newUpstreamModelSyncConfigError("No OpenAI API key is available", nil)
+		return nil, newUpstreamModelSyncConfigError(fmt.Sprintf("No %s API key is available", providerName), nil)
 	}
 
-	baseURL := account.GetOpenAIBaseURL()
+	baseURL := account.GetOpenAICompatibleBaseURL()
 	if strings.TrimSpace(baseURL) == "" {
 		baseURL = "https://api.openai.com"
 	}
 	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI base URL", err)
+		return nil, newUpstreamModelSyncConfigError(fmt.Sprintf("Invalid %s base URL", providerName), err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(normalizedBaseURL), nil)
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI model list URL", err)
+		return nil, newUpstreamModelSyncConfigError(fmt.Sprintf("Invalid %s model list URL", providerName), err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	applyOpenAICompatibleAuthentication(account, req.Header, apiKey)
+	for key, value := range providerHeaders {
+		req.Header.Set(key, value)
+	}
 	// 账号级请求头覆写：模型列表探测与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
 	return req, nil
+}
+
+func buildOpenAICompatibleModelsURL(baseURL, modelListPath string) string {
+	if strings.TrimSpace(modelListPath) == "" || strings.TrimSpace(modelListPath) == "/models" {
+		return buildOpenAIModelsURL(baseURL)
+	}
+	return strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(modelListPath, "/")
 }
 
 func (s *AccountTestService) buildGeminiUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {

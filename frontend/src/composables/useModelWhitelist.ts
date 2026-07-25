@@ -1,3 +1,8 @@
+import {
+  getOpenAICompatibleProviderPreset,
+  OPENAI_COMPATIBLE_PROVIDER_PRESETS
+} from '@/utils/providerPresets'
+
 // =====================
 // 模型列表（硬编码，与 new-api 一致）
 // =====================
@@ -229,7 +234,7 @@ const perplexityModels = [
 ]
 
 // 所有模型（去重）
-const allModelsList: string[] = [
+const allModelsList = Array.from(new Set([
   ...openaiModels,
   ...claudeModels,
   ...geminiModels,
@@ -247,8 +252,9 @@ const allModelsList: string[] = [
   ...baiduModels,
   ...sparkModels,
   ...hunyuanModels,
-  ...perplexityModels
-]
+  ...perplexityModels,
+  ...OPENAI_COMPATIBLE_PROVIDER_PRESETS.flatMap(preset => preset.modelSuggestions)
+]))
 
 // 转换为下拉选项格式
 export const allModels = allModelsList.map(m => ({ value: m, label: m }))
@@ -407,13 +413,17 @@ export const commonErrorCodes = [
 
 // 按平台获取模型
 export function getModelsByPlatform(platform: string): string[] {
+  const providerPreset = getOpenAICompatibleProviderPreset(platform)
+  if (providerPreset) return [...providerPreset.modelSuggestions]
+
   switch (platform) {
     case 'openai': return openaiModels
     case 'anthropic':
     case 'claude': return claudeModels
     case 'gemini': return geminiModels
     case 'antigravity': return antigravityModels
-    case 'zhipu': return zhipuModels
+    case 'zhipu':
+    case 'glm': return zhipuModels
     case 'qwen': return qwenModels
     case 'deepseek': return deepseekModels
     case 'mistral': return mistralModels
@@ -422,14 +432,15 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'grok': return xaiModels
     case 'cohere': return cohereModels
     case 'yi': return yiModels
-    case 'moonshot': return moonshotModels
+    case 'moonshot':
+    case 'kimi': return moonshotModels
     case 'doubao': return doubaoModels
     case 'minimax': return minimaxModels
     case 'baidu': return baiduModels
     case 'spark': return sparkModels
     case 'hunyuan': return hunyuanModels
     case 'perplexity': return perplexityModels
-    default: return claudeModels
+    default: return getOpenAICompatibleProviderPreset(platform)?.modelSuggestions ?? claudeModels
   }
 }
 

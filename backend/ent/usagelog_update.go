@@ -122,6 +122,26 @@ func (_u *UsageLogUpdate) ClearRequestedModel() *UsageLogUpdate {
 	return _u
 }
 
+// SetBillingModel sets the "billing_model" field.
+func (_u *UsageLogUpdate) SetBillingModel(v string) *UsageLogUpdate {
+	_u.mutation.SetBillingModel(v)
+	return _u
+}
+
+// SetNillableBillingModel sets the "billing_model" field if the given value is not nil.
+func (_u *UsageLogUpdate) SetNillableBillingModel(v *string) *UsageLogUpdate {
+	if v != nil {
+		_u.SetBillingModel(*v)
+	}
+	return _u
+}
+
+// ClearBillingModel clears the value of the "billing_model" field.
+func (_u *UsageLogUpdate) ClearBillingModel() *UsageLogUpdate {
+	_u.mutation.ClearBillingModel()
+	return _u
+}
+
 // SetUpstreamModel sets the "upstream_model" field.
 func (_u *UsageLogUpdate) SetUpstreamModel(v string) *UsageLogUpdate {
 	_u.mutation.SetUpstreamModel(v)
@@ -1011,6 +1031,11 @@ func (_u *UsageLogUpdate) check() error {
 			return &ValidationError{Name: "requested_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingModel(); ok {
+		if err := usagelog.BillingModelValidator(v); err != nil {
+			return &ValidationError{Name: "billing_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_model": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UpstreamModel(); ok {
 		if err := usagelog.UpstreamModelValidator(v); err != nil {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
@@ -1101,6 +1126,12 @@ func (_u *UsageLogUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.RequestedModelCleared() {
 		_spec.ClearField(usagelog.FieldRequestedModel, field.TypeString)
+	}
+	if value, ok := _u.mutation.BillingModel(); ok {
+		_spec.SetField(usagelog.FieldBillingModel, field.TypeString, value)
+	}
+	if _u.mutation.BillingModelCleared() {
+		_spec.ClearField(usagelog.FieldBillingModel, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpstreamModel(); ok {
 		_spec.SetField(usagelog.FieldUpstreamModel, field.TypeString, value)
@@ -1576,6 +1607,26 @@ func (_u *UsageLogUpdateOne) SetNillableRequestedModel(v *string) *UsageLogUpdat
 // ClearRequestedModel clears the value of the "requested_model" field.
 func (_u *UsageLogUpdateOne) ClearRequestedModel() *UsageLogUpdateOne {
 	_u.mutation.ClearRequestedModel()
+	return _u
+}
+
+// SetBillingModel sets the "billing_model" field.
+func (_u *UsageLogUpdateOne) SetBillingModel(v string) *UsageLogUpdateOne {
+	_u.mutation.SetBillingModel(v)
+	return _u
+}
+
+// SetNillableBillingModel sets the "billing_model" field if the given value is not nil.
+func (_u *UsageLogUpdateOne) SetNillableBillingModel(v *string) *UsageLogUpdateOne {
+	if v != nil {
+		_u.SetBillingModel(*v)
+	}
+	return _u
+}
+
+// ClearBillingModel clears the value of the "billing_model" field.
+func (_u *UsageLogUpdateOne) ClearBillingModel() *UsageLogUpdateOne {
+	_u.mutation.ClearBillingModel()
 	return _u
 }
 
@@ -2481,6 +2532,11 @@ func (_u *UsageLogUpdateOne) check() error {
 			return &ValidationError{Name: "requested_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_model": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.BillingModel(); ok {
+		if err := usagelog.BillingModelValidator(v); err != nil {
+			return &ValidationError{Name: "billing_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_model": %w`, err)}
+		}
+	}
 	if v, ok := _u.mutation.UpstreamModel(); ok {
 		if err := usagelog.UpstreamModelValidator(v); err != nil {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
@@ -2588,6 +2644,12 @@ func (_u *UsageLogUpdateOne) sqlSave(ctx context.Context) (_node *UsageLog, err 
 	}
 	if _u.mutation.RequestedModelCleared() {
 		_spec.ClearField(usagelog.FieldRequestedModel, field.TypeString)
+	}
+	if value, ok := _u.mutation.BillingModel(); ok {
+		_spec.SetField(usagelog.FieldBillingModel, field.TypeString, value)
+	}
+	if _u.mutation.BillingModelCleared() {
+		_spec.ClearField(usagelog.FieldBillingModel, field.TypeString)
 	}
 	if value, ok := _u.mutation.UpstreamModel(); ok {
 		_spec.SetField(usagelog.FieldUpstreamModel, field.TypeString, value)

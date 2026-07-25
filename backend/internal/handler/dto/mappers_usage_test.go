@@ -110,11 +110,13 @@ func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *test
 	t.Parallel()
 
 	upstreamModel := "claude-sonnet-4-20250514"
+	billingModel := "claude-sonnet-4"
 	log := &service.UsageLog{
 		RequestID:      "req_4",
 		Model:          upstreamModel,
 		RequestedModel: "claude-sonnet-4",
 		UpstreamModel:  &upstreamModel,
+		BillingModel:   &billingModel,
 	}
 
 	userDTO := UsageLogFromService(log)
@@ -126,10 +128,12 @@ func TestUsageLogFromService_UsesRequestedModelAndKeepsUpstreamAdminOnly(t *test
 	userJSON, err := json.Marshal(userDTO)
 	require.NoError(t, err)
 	require.NotContains(t, string(userJSON), "upstream_model")
+	require.NotContains(t, string(userJSON), "billing_model")
 
 	adminJSON, err := json.Marshal(adminDTO)
 	require.NoError(t, err)
 	require.Contains(t, string(adminJSON), `"upstream_model":"claude-sonnet-4-20250514"`)
+	require.Contains(t, string(adminJSON), `"billing_model":"claude-sonnet-4"`)
 }
 
 func TestUsageLogFromService_KeepsUserBillingAndIPWithoutAdminCostFields(t *testing.T) {

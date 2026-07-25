@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -453,6 +454,11 @@ func normalizeGrokMediaEligibilityUpdateExtra(account *Account, input *UpdateAcc
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if IsDedicatedOpenAICompatiblePlatform(input.Platform) {
+		if err := validateDedicatedProviderCredentials(input.Platform, input.Type, input.Credentials); err != nil {
+			return nil, err
+		}
+	}
 	// Probe/session state is system-managed. New accounts always start with automatic refresh disabled.
 	delete(accountExtra, UpstreamBillingProbeEnabledExtraKey)
 	delete(accountExtra, UpstreamBillingProbeExtraKey)
@@ -511,6 +517,35 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 		account.LoadFactor = input.LoadFactor
 	}
 	return account, nil
+}
+
+func validateDedicatedProviderCredentials(platform, accountType string, credentials map[string]any) error {
+	if accountType != AccountTypeAPIKey {
+		return fmt.Errorf("%s accounts only support apikey type", platform)
+	}
+	apiKey, _ := credentials["api_key"].(string)
+	if strings.TrimSpace(apiKey) == "" {
+		return fmt.Errorf("%s accounts require an API key", platform)
+	}
+	if rawBaseURL, exists := credentials["base_url"]; exists {
+		baseURL, ok := rawBaseURL.(string)
+		if !ok {
+			return fmt.Errorf("%s account base_url must be a string", platform)
+		}
+		baseURL = strings.TrimSpace(baseURL)
+		if baseURL != "" {
+			parsed, err := url.Parse(baseURL)
+			if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+				return fmt.Errorf("%s account base_url must be a valid HTTP(S) URL", platform)
+			}
+		}
+	}
+	if rawEndpointID, exists := credentials["endpoint_id"]; exists {
+		if _, ok := rawEndpointID.(string); !ok {
+			return fmt.Errorf("%s account endpoint_id must be a string", platform)
+		}
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
@@ -603,6 +638,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if err != nil {
 		return nil, err
 	}
+	if IsDedicatedOpenAICompatiblePlatform(account.Platform) && input.Type != "" && input.Type != AccountTypeAPIKey {
+		return nil, fmt.Errorf("%s accounts only support apikey type", account.Platform)
+	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
 		normalizedExtra, err = normalizeOpenAILongContextBillingUpdateExtra(account, input)
@@ -662,6 +700,11 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		account.Credentials = MergePreservingSensitiveCreds(account.Credentials, input.Credentials)
 		// 校验并规范化请求头覆写配置（header 名小写化、格式检查）
 		if err := NormalizeHeaderOverrideCredentials(account.Credentials); err != nil {
+			return nil, err
+		}
+	}
+	if IsDedicatedOpenAICompatiblePlatform(account.Platform) {
+		if err := validateDedicatedProviderCredentials(account.Platform, account.Type, account.Credentials); err != nil {
 			return nil, err
 		}
 	}

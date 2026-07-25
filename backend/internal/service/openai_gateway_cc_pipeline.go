@@ -14,8 +14,11 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -111,7 +114,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		AccountID:          account.ID,
 		AccountName:        account.Name,
 		UpstreamStatusCode: resp.StatusCode,
-		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		UpstreamRequestID:  providerUpstreamRequestID(account, resp.Header),
 		Kind:               "failover",
 		Message:            upstreamMsg,
 		Detail:             upstreamDetail,
@@ -131,7 +134,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 
 // openAIChatCompletionsTargetURL 解析账号的（非 Grok）Chat Completions 上游端点。
 func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) (string, error) {
-	baseURL := account.GetOpenAIBaseURL()
+	baseURL := account.GetOpenAICompatibleBaseURL()
 	if baseURL == "" {
 		baseURL = "https://api.openai.com"
 	}
@@ -145,7 +148,7 @@ func (s *OpenAIGatewayService) openAIChatCompletionsTargetURL(account *Account) 
 // resolveCCFallbackTarget 解析两条 CC 回退路径共用的账号凭证与上游端点
 // （回退路径仅面向 APIKey 账号，凭证恒为 openai api_key）。
 func (s *OpenAIGatewayService) resolveCCFallbackTarget(account *Account) (apiKey string, targetURL string, err error) {
-	apiKey = account.GetOpenAIApiKey()
+	apiKey = account.GetOpenAICompatibleAPIKey()
 	if apiKey == "" {
 		return "", "", fmt.Errorf("account %d missing api_key", account.ID)
 	}
@@ -173,6 +176,15 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	userAgent string,
 	grokCacheIdentity string,
 ) (*http.Response, error) {
+	var err error
+	body, err = normalizeProviderChatCompletionsRequest(account, body)
+	if err != nil {
+		var validationErr *ProviderRequestValidationError
+		if errors.As(err, &validationErr) {
+			writeProviderRequestValidationError(c, validationErr)
+		}
+		return nil, fmt.Errorf("normalize provider request: %w", err)
+	}
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
@@ -181,7 +193,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Authorization", "Bearer "+bearerToken)
+	applyOpenAICompatibleAuthentication(account, upstreamReq.Header, bearerToken)
 	if stream {
 		upstreamReq.Header.Set("Accept", "text/event-stream")
 	} else {
@@ -207,6 +219,11 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 		}
 		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
 	}
+	if preset, ok := openai_compat.LookupProvider(account.Platform); ok {
+		for key, value := range preset.DefaultHeaders {
+			upstreamReq.Header.Set(key, value)
+		}
+	}
 	// 账号级请求头覆写：放在所有内置默认头（含 Grok CLI 身份头）之后应用，
 	// 使配置值获得除共享传输层强制头之外的最高优先级。
 	account.ApplyHeaderOverrides(upstreamReq.Header)
@@ -222,6 +239,238 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	return resp, nil
 }
 
+func applyOpenAICompatibleAuthentication(account *Account, headers http.Header, token string) {
+	headerName := "Authorization"
+	authScheme := "Bearer"
+	if account != nil {
+		if preset, ok := openai_compat.LookupProvider(account.Platform); ok {
+			if strings.TrimSpace(preset.AuthHeader) != "" {
+				headerName = preset.AuthHeader
+			}
+			authScheme = strings.TrimSpace(preset.AuthScheme)
+		}
+	}
+	value := token
+	if authScheme != "" {
+		value = authScheme + " " + token
+	}
+	headers.Set(headerName, value)
+}
+
+type ProviderRequestValidationError struct {
+	Provider  string
+	Parameter string
+	Allowed   []int
+	Actual    string
+	Message   string
+}
+
+func (e *ProviderRequestValidationError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	return fmt.Sprintf("%s only supports %s=%s; received %s", e.Provider, e.Parameter, joinIntegerValues(e.Allowed), e.Actual)
+}
+
+func joinIntegerValues(values []int) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, fmt.Sprintf("%d", value))
+	}
+	return strings.Join(parts, " or ")
+}
+
+func writeProviderRequestValidationError(c *gin.Context, err *ProviderRequestValidationError) {
+	if c == nil || err == nil || c.Writer.Written() {
+		return
+	}
+	path := ""
+	if c.Request != nil && c.Request.URL != nil {
+		path = c.Request.URL.Path
+	}
+	switch {
+	case strings.HasSuffix(path, "/messages"):
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	case strings.HasSuffix(path, "/responses"):
+		writeOpenAIResponsesFallbackError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	default:
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+	}
+}
+
+func normalizeProviderChatCompletionsRequest(account *Account, body []byte) ([]byte, error) {
+	if account == nil {
+		return body, nil
+	}
+	preset, ok := openai_compat.LookupProvider(account.Platform)
+	if !ok {
+		return body, nil
+	}
+	return normalizeProviderRequestWithPreset(preset, body)
+}
+
+func normalizeProviderRequestWithPreset(preset openai_compat.ProviderPreset, body []byte) ([]byte, error) {
+	if err := validateProviderRequestCapabilities(preset, body); err != nil {
+		return body, err
+	}
+	normalized := body
+	for name, allowed := range preset.AllowedIntegerParameters {
+		current := gjson.GetBytes(normalized, name)
+		if !current.Exists() {
+			continue
+		}
+		valid := current.Type == gjson.Number && current.Float() == float64(current.Int())
+		if valid {
+			for _, value := range allowed {
+				if current.Int() == int64(value) {
+					valid = true
+					break
+				}
+				valid = false
+			}
+		}
+		if !valid {
+			return body, &ProviderRequestValidationError{
+				Provider: preset.DisplayName, Parameter: name,
+				Allowed: append([]int(nil), allowed...), Actual: current.Raw,
+			}
+		}
+	}
+	for name, action := range preset.RequestParameterRules {
+		if !gjson.GetBytes(normalized, name).Exists() {
+			continue
+		}
+		if action == openai_compat.ParameterReject {
+			return body, &ProviderRequestValidationError{
+				Provider: preset.DisplayName, Parameter: name,
+				Message: fmt.Sprintf("%s does not support request parameter %s", preset.DisplayName, name),
+			}
+		}
+		if action != openai_compat.ParameterDrop {
+			continue
+		}
+		var err error
+		normalized, err = sjson.DeleteBytes(normalized, name)
+		if err != nil {
+			return body, err
+		}
+	}
+	for name, value := range preset.ForcedIntegerParameters {
+		current := gjson.GetBytes(normalized, name)
+		if !current.Exists() || (current.Type == gjson.Number && current.Float() == float64(value)) {
+			continue
+		}
+		var err error
+		normalized, err = sjson.SetBytes(normalized, name, value)
+		if err != nil {
+			return body, err
+		}
+	}
+	return normalized, nil
+}
+
+func validateProviderRequestCapabilities(preset openai_compat.ProviderPreset, body []byte) error {
+	unsupported := func(parameter, capability string) error {
+		return &ProviderRequestValidationError{
+			Provider:  preset.DisplayName,
+			Parameter: parameter,
+			Message:   fmt.Sprintf("%s does not support %s", preset.DisplayName, capability),
+		}
+	}
+	capabilities := preset.Capabilities
+	if gjson.GetBytes(body, "stream").Bool() && !capabilities.Streaming {
+		return unsupported("stream", "streaming requests")
+	}
+	if capabilities.Reasoning == openai_compat.CapabilityUnsupported &&
+		(gjson.GetBytes(body, "reasoning_effort").Exists() || gjson.GetBytes(body, "reasoning").Exists()) {
+		return unsupported("reasoning_effort", "reasoning parameters")
+	}
+	if capabilities.Tools == openai_compat.CapabilityUnsupported && chatRequestUsesTools(body) {
+		return unsupported("tools", "tool calls")
+	}
+	if capabilities.Vision == openai_compat.CapabilityUnsupported && chatRequestUsesVision(body) {
+		return unsupported("messages.content.image_url", "vision input")
+	}
+	if capabilities.JSONSchema == openai_compat.CapabilityUnsupported &&
+		strings.EqualFold(strings.TrimSpace(gjson.GetBytes(body, "response_format.type").String()), "json_schema") {
+		return unsupported("response_format", "JSON Schema output")
+	}
+	if capabilities.PromptCache == openai_compat.CapabilityUnsupported &&
+		(gjson.GetBytes(body, "prompt_cache_key").Exists() || jsonResultContainsKey(gjson.ParseBytes(body), "cache_control")) {
+		return unsupported("prompt_cache_key", "prompt cache controls")
+	}
+	return nil
+}
+
+func chatRequestUsesTools(body []byte) bool {
+	if gjson.GetBytes(body, "tools").Exists() || gjson.GetBytes(body, "tool_choice").Exists() ||
+		gjson.GetBytes(body, "parallel_tool_calls").Exists() {
+		return true
+	}
+	for _, message := range gjson.GetBytes(body, "messages").Array() {
+		if message.Get("tool_calls").Exists() || message.Get("tool_call_id").Exists() || message.Get("role").String() == "tool" {
+			return true
+		}
+	}
+	return false
+}
+
+func chatRequestUsesVision(body []byte) bool {
+	for _, message := range gjson.GetBytes(body, "messages").Array() {
+		for _, part := range message.Get("content").Array() {
+			partType := strings.ToLower(strings.TrimSpace(part.Get("type").String()))
+			if partType == "image_url" || partType == "input_image" || part.Get("image_url").Exists() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonResultContainsKey(value gjson.Result, key string) bool {
+	found := false
+	value.ForEach(func(currentKey, child gjson.Result) bool {
+		if value.IsObject() && currentKey.String() == key {
+			found = true
+			return false
+		}
+		if (child.IsObject() || child.IsArray()) && jsonResultContainsKey(child, key) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func providerUpstreamRequestID(account *Account, headers http.Header) string {
+	if headers == nil {
+		return ""
+	}
+	requestIDHeaders := []string{"x-request-id", "request-id"}
+	if account != nil {
+		if preset, ok := openai_compat.LookupProvider(account.Platform); ok && len(preset.RequestIDHeaders) > 0 {
+			requestIDHeaders = preset.RequestIDHeaders
+		}
+	}
+	for _, name := range requestIDHeaders {
+		if value := strings.TrimSpace(headers.Get(name)); value != "" {
+			return value
+		}
+		for actualName, values := range headers {
+			if !strings.EqualFold(actualName, name) {
+				continue
+			}
+			for _, value := range values {
+				if value = strings.TrimSpace(value); value != "" {
+					return value
+				}
+			}
+		}
+	}
+	return ""
+}
+
 // ccStreamScanState 是 scanCCStream 返回的读取状态快照。
 type ccStreamScanState struct {
 	// Usage 为 include_usage chunk 中最近一次出现的用量（上游可能重复发送，
@@ -235,6 +484,14 @@ type ccStreamScanState struct {
 	// 非 nil 时调用方必须跳过 finalize 并返回 usage-incomplete 错误，避免
 	// 把上游截断伪装成正常收尾。
 	Err error
+}
+
+func chatCompletionsPayloadStartsOutput(payload string) bool {
+	var chunk apicompat.ChatCompletionsChunk
+	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+		return false
+	}
+	return chatChunkStartsResponsesOutput(&chunk)
 }
 
 // scanCCStream 驱动两条 CC 回退路径共享的 SSE 读循环：提取 data 行、在 [DONE]

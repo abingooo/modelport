@@ -79,7 +79,7 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.getPlatformQuotas).toHaveBeenCalledWith(99)
   })
 
-  it('空数据渲染 5 个 platform 行', async () => {
+  it('空数据渲染全部 platform 行', async () => {
     const w = await mountAndOpen()
     const html = w.html()
     expect(html).toContain('anthropic')
@@ -87,6 +87,9 @@ describe('UserPlatformQuotaModal', () => {
     expect(html).toContain('gemini')
     expect(html).toContain('antigravity')
     expect(html).toContain('grok')
+    expect(html).toContain('deepseek')
+    expect(html).toContain('qwen')
+    expect(html).toContain('mimo')
   })
 
   it('已有数据正确填充 limit input', async () => {
@@ -98,13 +101,13 @@ describe('UserPlatformQuotaModal', () => {
     })
     const w = await mountAndOpen()
     const inputs = w.findAll('input[type=number]')
-    // 5 platforms × 3 windows = 15 inputs
-    expect(inputs.length).toBe(15)
+    // 14 platforms x 3 windows
+    expect(inputs.length).toBe(42)
     // 第一个 input 是 anthropic.daily = 10
     expect((inputs[0].element as HTMLInputElement).value).toBe('10')
   })
 
-  it('保存提交完整 5 platform payload', async () => {
+  it('保存提交完整 platform payload', async () => {
     apiMocks.getPlatformQuotas.mockResolvedValueOnce({
       platform_quotas: [
         { platform: 'openai', daily_limit_usd: null, weekly_limit_usd: 20, monthly_limit_usd: null,
@@ -121,9 +124,10 @@ describe('UserPlatformQuotaModal', () => {
     expect(apiMocks.updatePlatformQuotas).toHaveBeenCalledTimes(1)
     const [uid, payload] = apiMocks.updatePlatformQuotas.mock.calls[0]
     expect(uid).toBe(99)
-    expect(payload).toHaveLength(5) // 5 platforms always submitted
+    expect(payload).toHaveLength(14)
     const openai = payload.find((p: any) => p.platform === 'openai')
     expect(openai.weekly_limit_usd).toBe(20)
+    expect(payload.some((p: any) => p.platform === 'deepseek')).toBe(true)
   })
 
   it('全部清空把所有 limit 置 null（确认通过）', async () => {

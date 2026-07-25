@@ -85,6 +85,11 @@ func RequestedModel(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldRequestedModel, v))
 }
 
+// BillingModel applies equality check predicate on the "billing_model" field. It's identical to BillingModelEQ.
+func BillingModel(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBillingModel, v))
+}
+
 // UpstreamModel applies equality check predicate on the "upstream_model" field. It's identical to UpstreamModelEQ.
 func UpstreamModel(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldEQ(FieldUpstreamModel, v))
@@ -538,6 +543,81 @@ func RequestedModelEqualFold(v string) predicate.UsageLog {
 // RequestedModelContainsFold applies the ContainsFold predicate on the "requested_model" field.
 func RequestedModelContainsFold(v string) predicate.UsageLog {
 	return predicate.UsageLog(sql.FieldContainsFold(FieldRequestedModel, v))
+}
+
+// BillingModelEQ applies the EQ predicate on the "billing_model" field.
+func BillingModelEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEQ(FieldBillingModel, v))
+}
+
+// BillingModelNEQ applies the NEQ predicate on the "billing_model" field.
+func BillingModelNEQ(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNEQ(FieldBillingModel, v))
+}
+
+// BillingModelIn applies the In predicate on the "billing_model" field.
+func BillingModelIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIn(FieldBillingModel, vs...))
+}
+
+// BillingModelNotIn applies the NotIn predicate on the "billing_model" field.
+func BillingModelNotIn(vs ...string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotIn(FieldBillingModel, vs...))
+}
+
+// BillingModelGT applies the GT predicate on the "billing_model" field.
+func BillingModelGT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGT(FieldBillingModel, v))
+}
+
+// BillingModelGTE applies the GTE predicate on the "billing_model" field.
+func BillingModelGTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldGTE(FieldBillingModel, v))
+}
+
+// BillingModelLT applies the LT predicate on the "billing_model" field.
+func BillingModelLT(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLT(FieldBillingModel, v))
+}
+
+// BillingModelLTE applies the LTE predicate on the "billing_model" field.
+func BillingModelLTE(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldLTE(FieldBillingModel, v))
+}
+
+// BillingModelContains applies the Contains predicate on the "billing_model" field.
+func BillingModelContains(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContains(FieldBillingModel, v))
+}
+
+// BillingModelHasPrefix applies the HasPrefix predicate on the "billing_model" field.
+func BillingModelHasPrefix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasPrefix(FieldBillingModel, v))
+}
+
+// BillingModelHasSuffix applies the HasSuffix predicate on the "billing_model" field.
+func BillingModelHasSuffix(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldHasSuffix(FieldBillingModel, v))
+}
+
+// BillingModelIsNil applies the IsNil predicate on the "billing_model" field.
+func BillingModelIsNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldIsNull(FieldBillingModel))
+}
+
+// BillingModelNotNil applies the NotNil predicate on the "billing_model" field.
+func BillingModelNotNil() predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldNotNull(FieldBillingModel))
+}
+
+// BillingModelEqualFold applies the EqualFold predicate on the "billing_model" field.
+func BillingModelEqualFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldEqualFold(FieldBillingModel, v))
+}
+
+// BillingModelContainsFold applies the ContainsFold predicate on the "billing_model" field.
+func BillingModelContainsFold(v string) predicate.UsageLog {
+	return predicate.UsageLog(sql.FieldContainsFold(FieldBillingModel, v))
 }
 
 // UpstreamModelEQ applies the EQ predicate on the "upstream_model" field.
