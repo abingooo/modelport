@@ -358,6 +358,7 @@ const baseSettingsResponse = {
   api_base_url: "",
   contact_info: "",
   doc_url: "",
+  image_site_url: "",
   home_content: "",
   hide_ccs_import_button: false,
   table_default_page_size: 20,
@@ -527,6 +528,12 @@ function mountView() {
   });
 }
 
+async function submitSettings(wrapper: ReturnType<typeof mountView>) {
+  await vi.waitFor(() => expect(wrapper.find("form").exists()).toBe(true));
+  await wrapper.get("form").trigger("submit.prevent");
+  await flushPromises();
+}
+
 async function openPaymentTab(wrapper: ReturnType<typeof mountView>) {
   const paymentTabButton = wrapper
     .findAll("button")
@@ -564,6 +571,16 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
 
   expect(usersTabButton).toBeDefined();
   await usersTabButton?.trigger("click");
+  await flushPromises();
+}
+
+async function openGeneralTab(wrapper: ReturnType<typeof mountView>) {
+  const generalTabButton = wrapper
+    .findAll("button")
+    .find((node) => node.text().includes("admin.settings.tabs.general"));
+
+  expect(generalTabButton).toBeDefined();
+  await generalTabButton?.trigger("click");
   await flushPromises();
 }
 
@@ -670,6 +687,40 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).not.toContain("支付来源");
   });
 
+  it("loads and saves the external image site URL", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      image_site_url: "https://images.modelport.link/create",
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openGeneralTab(wrapper);
+
+    const input = wrapper.get('input[placeholder="admin.settings.site.imageSiteUrlPlaceholder"]');
+    expect((input.element as HTMLInputElement).value).toBe("https://images.modelport.link/create");
+    await input.setValue("https://studio.modelport.link/generate");
+    await submitSettings(wrapper);
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      image_site_url: "https://studio.modelport.link/generate",
+    }));
+
+    wrapper.unmount();
+  });
+
+  it("rejects an unsafe external image site URL before saving", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openGeneralTab(wrapper);
+
+    const input = wrapper.get('input[placeholder="admin.settings.site.imageSiteUrlPlaceholder"]');
+    await input.setValue("javascript:alert(1)");
+    await submitSettings(wrapper);
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(showError).toHaveBeenCalledWith("admin.settings.site.imageSiteUrlInvalid");
+
+    wrapper.unmount();
+  });
+
   it("loads, edits, validates, and saves forwarded client-IP headers", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,
@@ -717,8 +768,7 @@ describe("admin SettingsView payment visible method controls", () => {
     await toggle.setValue(true);
     expect(card!.text()).toContain("X-Client-Ip");
 
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -757,8 +807,7 @@ describe("admin SettingsView payment visible method controls", () => {
 
     await flushPromises();
     await openPaymentTab(wrapper);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     const payload = updateSettings.mock.calls[0]?.[0];
@@ -778,8 +827,7 @@ describe("admin SettingsView payment visible method controls", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -798,8 +846,7 @@ describe("admin SettingsView payment visible method controls", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -818,8 +865,7 @@ describe("admin SettingsView payment visible method controls", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -840,8 +886,7 @@ describe("admin SettingsView payment visible method controls", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -874,8 +919,7 @@ describe("admin SettingsView payment visible method controls", () => {
     const wrapper = mountView();
 
     await flushPromises();
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -1042,8 +1086,7 @@ describe("admin SettingsView payment visible method controls", () => {
       '[data-testid="openai-oauth-scheduling-rate-multiplier"]',
     );
     await oauthRateInput.setValue("0.05");
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1324,8 +1367,7 @@ describe("admin SettingsView wechat connect controls", () => {
     await wrapper
       .get('[data-testid="wechat-connect-frontend-redirect-url"]')
       .setValue("/auth/wechat/callback");
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -1393,8 +1435,7 @@ describe("admin SettingsView wechat connect controls", () => {
 
     await flushPromises();
     await openSecurityTab(wrapper);
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalledTimes(1);
     expect(updateSettings).toHaveBeenCalledWith(
@@ -1472,8 +1513,7 @@ describe("admin SettingsView platform quota matrix", () => {
     await flushPromises();
     await openUsersTab(wrapper);
 
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     expect(updateSettings).toHaveBeenCalled();
     const lastCallArgs = updateSettings.mock.calls.at(-1);
@@ -1511,8 +1551,7 @@ describe("admin SettingsView platform quota matrix", () => {
     await flushPromises();
     await openUsersTab(wrapper);
 
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     const payload = updateSettings.mock.calls.at(-1)![0] as Record<string, unknown>;
     const quotas = payload["default_platform_quotas"] as Record<string, Record<string, unknown>>;
@@ -1554,8 +1593,7 @@ describe("admin SettingsView platform quota matrix", () => {
       await anthropicDailyInput.setValue("");
     }
 
-    await wrapper.find("form").trigger("submit.prevent");
-    await flushPromises();
+    await submitSettings(wrapper);
 
     const payload = updateSettings.mock.calls.at(-1)![0] as Record<string, unknown>;
     const quotas = payload["default_platform_quotas"] as Record<string, Record<string, unknown>>;

@@ -249,3 +249,79 @@ func TestAPIKeyRepository_CreateDuplicateKey(t *testing.T) {
 	err := repo.Create(ctx, second)
 	require.ErrorIs(t, err, service.ErrAPIKeyExists)
 }
+
+func TestAPIKeyRepositoryUpdateGroupIDByUserAndIDsIsAtomic(t *testing.T) {
+	repo, client := newAPIKeyRepoSQLite(t)
+	ctx := context.Background()
+	owner := mustCreateAPIKeyRepoUser(t, ctx, client, "bulk-group-owner@test.com")
+	other := mustCreateAPIKeyRepoUser(t, ctx, client, "bulk-group-other@test.com")
+
+	oldGroup, err := client.Group.Create().SetName("bulk-old").Save(ctx)
+	require.NoError(t, err)
+	targetGroup, err := client.Group.Create().SetName("bulk-target").Save(ctx)
+	require.NoError(t, err)
+
+	ownerKeyOne := &service.APIKey{UserID: owner.ID, Key: "sk-bulk-owner-one", Name: "one", Status: service.StatusActive, GroupID: &oldGroup.ID}
+	ownerKeyTwo := &service.APIKey{UserID: owner.ID, Key: "sk-bulk-owner-two", Name: "two", Status: service.StatusActive, GroupID: &oldGroup.ID}
+	otherKey := &service.APIKey{UserID: other.ID, Key: "sk-bulk-other", Name: "other", Status: service.StatusActive, GroupID: &oldGroup.ID}
+	require.NoError(t, repo.Create(ctx, ownerKeyOne))
+	require.NoError(t, repo.Create(ctx, ownerKeyTwo))
+	require.NoError(t, repo.Create(ctx, otherKey))
+
+	keys, updated, err := repo.UpdateGroupIDByUserAndIDs(
+		ctx,
+		owner.ID,
+		[]int64{ownerKeyOne.ID, ownerKeyTwo.ID},
+		targetGroup.ID,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), updated)
+	require.ElementsMatch(t, []string{ownerKeyOne.Key, ownerKeyTwo.Key}, keys)
+
+	firstAfterSuccess, err := repo.GetByID(ctx, ownerKeyOne.ID)
+	require.NoError(t, err)
+	require.Equal(t, targetGroup.ID, *firstAfterSuccess.GroupID)
+
+	_, _, err = repo.UpdateGroupIDByUserAndIDs(
+		ctx,
+		owner.ID,
+		[]int64{ownerKeyOne.ID, otherKey.ID},
+		oldGroup.ID,
+	)
+	require.ErrorIs(t, err, service.ErrInsufficientPerms)
+
+	firstAfterFailure, err := repo.GetByID(ctx, ownerKeyOne.ID)
+	require.NoError(t, err)
+	require.Equal(t, targetGroup.ID, *firstAfterFailure.GroupID)
+	otherAfterFailure, err := repo.GetByID(ctx, otherKey.ID)
+	require.NoError(t, err)
+	require.Equal(t, oldGroup.ID, *otherAfterFailure.GroupID)
+}
+
+func TestAPIKeyRepositoryUpdateGroupIDByUserAndIDsRejectsDeletedKey(t *testing.T) {
+	repo, client := newAPIKeyRepoSQLite(t)
+	ctx := context.Background()
+	owner := mustCreateAPIKeyRepoUser(t, ctx, client, "bulk-group-deleted@test.com")
+	oldGroup, err := client.Group.Create().SetName("bulk-deleted-old").Save(ctx)
+	require.NoError(t, err)
+	targetGroup, err := client.Group.Create().SetName("bulk-deleted-target").Save(ctx)
+	require.NoError(t, err)
+
+	activeKey := &service.APIKey{UserID: owner.ID, Key: "sk-bulk-active", Name: "active", Status: service.StatusActive, GroupID: &oldGroup.ID}
+	deletedKey := &service.APIKey{UserID: owner.ID, Key: "sk-bulk-deleted", Name: "deleted", Status: service.StatusActive, GroupID: &oldGroup.ID}
+	require.NoError(t, repo.Create(ctx, activeKey))
+	require.NoError(t, repo.Create(ctx, deletedKey))
+	require.NoError(t, repo.Delete(ctx, deletedKey.ID))
+
+	_, _, err = repo.UpdateGroupIDByUserAndIDs(
+		ctx,
+		owner.ID,
+		[]int64{activeKey.ID, deletedKey.ID},
+		targetGroup.ID,
+	)
+	require.ErrorIs(t, err, service.ErrInsufficientPerms)
+
+	activeAfter, err := repo.GetByID(ctx, activeKey.ID)
+	require.NoError(t, err)
+	require.Equal(t, oldGroup.ID, *activeAfter.GroupID)
+}

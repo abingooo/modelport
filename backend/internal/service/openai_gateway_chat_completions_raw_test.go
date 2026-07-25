@@ -134,7 +134,11 @@ func TestDedicatedOpenAICompatibleProvidersUsePresetTransportContracts(t *testin
 			if model == "" {
 				model = "configured-model"
 			}
-			body := []byte(`{"model":"` + model + `","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]},{"role":"assistant","content":null,"reasoning_content":"check","tool_calls":[{"id":"call_previous","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}}]},{"role":"tool","tool_call_id":"call_previous","content":"done"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"parallel_tool_calls":true,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object"}}},"stream":true}`)
+			userContent := `[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]`
+			if platform == PlatformDeepSeek {
+				userContent = `"inspect"`
+			}
+			body := []byte(`{"model":"` + model + `","messages":[{"role":"user","content":` + userContent + `},{"role":"assistant","content":null,"reasoning_content":"check","tool_calls":[{"id":"call_previous","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}}]},{"role":"tool","tool_call_id":"call_previous","content":"done"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"parallel_tool_calls":true,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object"}}},"stream":true}`)
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
@@ -191,7 +195,11 @@ func TestDedicatedOpenAICompatibleProvidersUsePresetTransportContracts(t *testin
 			}
 			require.Equal(t, expectedUpstreamModel, gjson.GetBytes(upstream.lastBody, "model").String())
 			require.True(t, gjson.GetBytes(upstream.lastBody, "stream_options.include_usage").Bool())
-			require.Equal(t, "image_url", gjson.GetBytes(upstream.lastBody, "messages.0.content.1.type").String())
+			if platform == PlatformDeepSeek {
+				require.Equal(t, "inspect", gjson.GetBytes(upstream.lastBody, "messages.0.content").String())
+			} else {
+				require.Equal(t, "image_url", gjson.GetBytes(upstream.lastBody, "messages.0.content.1.type").String())
+			}
 			require.Equal(t, "call_previous", gjson.GetBytes(upstream.lastBody, "messages.2.tool_call_id").String())
 			require.True(t, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
 			require.Equal(t, "json_schema", gjson.GetBytes(upstream.lastBody, "response_format.type").String())

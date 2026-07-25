@@ -162,7 +162,7 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
   it.each([
     ['通义千问'],
-    ['智谱 GLM'],
+    ['智谱AI'],
     ['Kimi'],
     ['ByteDance'],
     ['SiliconFlow'],

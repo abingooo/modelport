@@ -56,6 +56,12 @@ func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo Acco
 	return svc
 }
 
+func ProvideLotteryService(repo LotteryRepository, billingCache *BillingCacheService, authCacheInvalidator APIKeyAuthCacheInvalidator) *LotteryService {
+	svc := NewLotteryService(repo, billingCache, authCacheInvalidator)
+	svc.Start()
+	return svc
+}
+
 // ProvideOpenAIOAuthService creates OpenAIOAuthService with privacy/account enrichment support.
 func ProvideOpenAIOAuthService(
 	proxyRepo ProxyRepository,
@@ -776,6 +782,8 @@ var ProviderSet = wire.NewSet(
 	ProvideScheduledTestRunnerService,
 	NewGroupCapacityService,
 	NewChannelService,
+	NewModelCatalogService,
+	ProvideLotteryService,
 	NewModelPricingResolver,
 	NewContentModerationService,
 	NewAffiliateService,

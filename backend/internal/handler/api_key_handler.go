@@ -62,6 +62,12 @@ type UpdateAPIKeyRequest struct {
 	ResetRateLimitUsage *bool    `json:"reset_rate_limit_usage"` // 重置限速用量
 }
 
+// BulkUpdateAPIKeyGroupRequest represents a bulk group assignment request.
+type BulkUpdateAPIKeyGroupRequest struct {
+	KeyIDs  []int64 `json:"key_ids"`
+	GroupID int64   `json:"group_id"`
+}
+
 // List handles listing user's API keys with pagination
 // GET /api/v1/api-keys
 func (h *APIKeyHandler) List(c *gin.Context) {
@@ -244,6 +250,35 @@ func (h *APIKeyHandler) Update(c *gin.Context) {
 	}
 
 	response.Success(c, dto.APIKeyFromService(key))
+}
+
+// BulkUpdateGroup updates the group for multiple API keys owned by the current user.
+// PUT /api/v1/keys/bulk/group
+func (h *APIKeyHandler) BulkUpdateGroup(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	var req BulkUpdateAPIKeyGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	updated, err := h.apiKeyService.BulkUpdateGroup(
+		c.Request.Context(),
+		subject.UserID,
+		req.KeyIDs,
+		req.GroupID,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"updated_count": updated})
 }
 
 // Delete handles deleting an API key

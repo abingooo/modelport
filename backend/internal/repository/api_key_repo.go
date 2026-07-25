@@ -680,6 +680,51 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 	return int64(n), err
 }
 
+// UpdateGroupIDByUserAndIDs atomically updates explicitly selected API keys.
+func (r *apiKeyRepository) UpdateGroupIDByUserAndIDs(ctx context.Context, userID int64, apiKeyIDs []int64, groupID int64) ([]string, int64, error) {
+	if len(apiKeyIDs) == 0 {
+		return []string{}, 0, nil
+	}
+
+	tx, err := r.client.Tx(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	rollback := func() {
+		_ = tx.Rollback()
+	}
+
+	keys, err := tx.APIKey.Query().
+		Where(apikey.UserIDEQ(userID), apikey.IDIn(apiKeyIDs...), apikey.DeletedAtIsNil()).
+		Select(apikey.FieldKey).
+		Strings(ctx)
+	if err != nil {
+		rollback()
+		return nil, 0, err
+	}
+	if len(keys) != len(apiKeyIDs) {
+		rollback()
+		return nil, 0, service.ErrInsufficientPerms
+	}
+
+	updated, err := tx.APIKey.Update().
+		Where(apikey.UserIDEQ(userID), apikey.IDIn(apiKeyIDs...), apikey.DeletedAtIsNil()).
+		SetGroupID(groupID).
+		Save(ctx)
+	if err != nil {
+		rollback()
+		return nil, 0, err
+	}
+	if updated != len(apiKeyIDs) {
+		rollback()
+		return nil, 0, service.ErrInsufficientPerms
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return keys, int64(updated), nil
+}
+
 // CountByGroupID 获取分组的 API Key 数量
 func (r *apiKeyRepository) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
 	count, err := r.activeQuery().Where(apikey.GroupIDEQ(groupID)).Count(ctx)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   platformAccentBarClass,
+  platformAccentDotClass,
   platformBadgeClass,
   platformBadgeLightClass,
   platformBorderClass,
@@ -11,6 +12,7 @@ import {
   platformGradientSubtextClass,
   platformGradientTextClass,
   platformIconClass,
+  platformLabel,
   platformTextClass
 } from '../platformColors'
 
@@ -34,6 +36,7 @@ const platforms = [
 
 const colorResolvers = [
   platformAccentBarClass,
+  platformAccentDotClass,
   platformBadgeClass,
   platformBadgeLightClass,
   platformBorderClass,
@@ -56,5 +59,9 @@ describe('platform colors', () => {
   it('keeps every group badge palette distinct', () => {
     const badgeClasses = platforms.map(([platform]) => platformBadgeLightClass(platform))
     expect(new Set(badgeClasses)).toHaveLength(platforms.length)
+  })
+
+  it('uses the approved Zhipu AI product name', () => {
+    expect(platformLabel('glm')).toBe('智谱AI')
   })
 })

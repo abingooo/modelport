@@ -111,6 +111,17 @@ export async function update(id: number, updates: UpdateApiKeyRequest): Promise<
   return data
 }
 
+export async function bulkUpdateGroup(
+  keyIds: number[],
+  groupId: number
+): Promise<{ updated_count: number }> {
+  const { data } = await apiClient.put<{ updated_count: number }>('/keys/bulk/group', {
+    key_ids: keyIds,
+    group_id: groupId
+  })
+  return data
+}
+
 /**
  * Delete API key
  * @param id - API key ID
@@ -136,6 +147,7 @@ export const keysAPI = {
   getById,
   create,
   update,
+  bulkUpdateGroup,
   delete: deleteKey,
   toggleStatus
 }

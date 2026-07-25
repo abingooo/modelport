@@ -26,7 +26,7 @@ export const OPENAI_COMPATIBLE_PROVIDER_PRESETS: readonly OpenAICompatibleProvid
     supportsModelList: true, modelReferenceMode: 'model_id'
   },
   {
-    id: 'glm', name: '智谱 GLM', shortName: 'GLM', defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    id: 'glm', name: '智谱AI', shortName: 'GLM', defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
     defaultModel: 'glm-5.2', modelSuggestions: ['glm-5.2', 'glm-5.1', 'glm-5-turbo', 'glm-4.7', 'glm-4.6v'],
     apiKeyPlaceholder: 'Enter API key',
     supportsModelList: true, modelReferenceMode: 'model_id'
