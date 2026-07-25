@@ -79,8 +79,11 @@ jobs:
         with:
           name: ModelPort ${{ steps.meta.outputs.app_version }}
           make_latest: false
+          generate_release_notes: true
           body: |
-            ModelPort custom build based on Sub2API ${{ steps.meta.outputs.app_version }}.
+            ModelPort 正式版本 `${{ steps.meta.outputs.app_version }}`。
+
+            ### Docker 镜像
 
             ```bash
             docker pull ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
