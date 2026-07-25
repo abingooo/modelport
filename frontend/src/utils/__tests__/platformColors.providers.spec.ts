@@ -14,15 +14,22 @@ import {
   platformTextClass
 } from '../platformColors'
 
-const providers = [
+const platforms = [
+  ['anthropic', 'amber'],
+  ['openai', 'emerald'],
+  ['antigravity', 'purple'],
+  ['gemini', 'blue'],
+  ['grok', 'zinc'],
+  ['deepseek', 'indigo'],
   ['qwen', 'violet'],
-  ['glm', 'blue'],
-  ['kimi', 'zinc'],
-  ['doubao', 'blue'],
-  ['siliconflow', 'purple'],
-  ['openrouter', 'indigo'],
+  ['glm', 'cyan'],
+  ['kimi', 'teal'],
+  ['doubao', 'sky'],
+  ['siliconflow', 'fuchsia'],
+  ['openrouter', 'slate'],
   ['minimax', 'rose'],
-  ['mimo', 'orange']
+  ['mimo', 'orange'],
+  ['composite', 'lime']
 ] as const
 
 const colorResolvers = [
@@ -39,15 +46,15 @@ const colorResolvers = [
   platformTextClass
 ]
 
-describe('OpenAI-compatible provider colors', () => {
-  it.each(providers)('%s uses its dedicated %s palette across platform styles', (platform, color) => {
+describe('platform colors', () => {
+  it.each(platforms)('%s uses its dedicated %s palette across platform styles', (platform, color) => {
     for (const resolveColor of colorResolvers) {
       expect(resolveColor(platform)).toContain(color)
     }
   })
 
-  it('keeps all eight provider badge palettes distinct', () => {
-    const badgeClasses = providers.map(([platform]) => platformBadgeClass(platform))
-    expect(new Set(badgeClasses)).toHaveLength(providers.length)
+  it('keeps every group badge palette distinct', () => {
+    const badgeClasses = platforms.map(([platform]) => platformBadgeLightClass(platform))
+    expect(new Set(badgeClasses)).toHaveLength(platforms.length)
   })
 })
