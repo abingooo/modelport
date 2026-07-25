@@ -64,6 +64,7 @@ func RegisterUserRoutes(
 		keys := authenticated.Group("/keys")
 		{
 			keys.GET("", h.APIKey.List)
+			keys.PUT("/bulk/group", h.APIKey.BulkUpdateGroup)
 			keys.GET("/:id", h.APIKey.GetByID)
 			keys.POST("", h.APIKey.Create)
 			keys.PUT("/:id", h.APIKey.Update)
@@ -81,6 +82,17 @@ func RegisterUserRoutes(
 		channels := authenticated.Group("/channels")
 		{
 			channels.GET("/available", h.AvailableChannel.List)
+		}
+
+		// 模型广场（仅返回用户有权访问且存在可用渠道的模型）
+		authenticated.GET("/model-catalog", h.ModelCatalog.List)
+
+		lottery := authenticated.Group("/lottery")
+		{
+			lottery.GET("", h.Lottery.List)
+			lottery.GET("/history", h.Lottery.History)
+			lottery.GET("/:id", h.Lottery.Get)
+			lottery.POST("/:id/participate", h.Lottery.Participate)
 		}
 
 		// 使用记录

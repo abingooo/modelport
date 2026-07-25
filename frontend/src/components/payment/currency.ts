@@ -1,20 +1,20 @@
 export const DEFAULT_PAYMENT_CURRENCY = 'CNY'
 
 const PAYMENT_CURRENCY_SYMBOLS: Record<string, string> = {
-  USD: '$',
-  CNY: '¥',
-  RMB: '¥',
+  USD: '￥',
+  CNY: '￥',
+  RMB: '￥',
   EUR: '€',
   GBP: '£',
   JPY: '¥',
-  HKD: 'HK$',
-  TWD: 'NT$',
+  HKD: '￥',
+  TWD: '￥',
   KRW: '₩',
-  AUD: 'A$',
-  CAD: 'C$',
-  SGD: 'S$',
-  NZD: 'NZ$',
-  MOP: 'MOP$',
+  AUD: '￥',
+  CAD: '￥',
+  SGD: '￥',
+  NZD: '￥',
+  MOP: '￥',
   MYR: 'RM',
   THB: '฿',
   PHP: '₱',
@@ -45,6 +45,14 @@ function paymentCurrencyFractionDigits(currency: string): number {
 export function formatPaymentAmount(amount: number, currency?: string | null, locale?: string): string {
   const normalized = normalizePaymentCurrency(currency)
   const fractionDigits = paymentCurrencyFractionDigits(normalized)
+  const value = Number.isFinite(amount) ? amount : 0
+  if (currencySymbol(normalized) === '￥') {
+    const formatted = new Intl.NumberFormat(locale || undefined, {
+      minimumFractionDigits: fractionDigits,
+      maximumFractionDigits: fractionDigits,
+    }).format(value)
+    return `￥${formatted}`
+  }
   try {
     return new Intl.NumberFormat(locale || undefined, {
       style: 'currency',
@@ -52,8 +60,8 @@ export function formatPaymentAmount(amount: number, currency?: string | null, lo
       currencyDisplay: 'narrowSymbol',
       minimumFractionDigits: fractionDigits,
       maximumFractionDigits: fractionDigits,
-    }).format(Number.isFinite(amount) ? amount : 0)
+    }).format(value)
   } catch {
-    return `${normalized} ${(Number.isFinite(amount) ? amount : 0).toFixed(fractionDigits)}`
+    return `${normalized} ${value.toFixed(fractionDigits)}`
   }
 }

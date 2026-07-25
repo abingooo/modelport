@@ -305,7 +305,7 @@ export default {
         grok: 'Grok',
         deepseek: 'DeepSeek',
         qwen: '通义千问',
-        glm: '智谱 GLM',
+        glm: '智谱AI',
         kimi: 'Kimi',
         doubao: 'ByteDance',
         siliconflow: 'SiliconFlow',

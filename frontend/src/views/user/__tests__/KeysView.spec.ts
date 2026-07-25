@@ -11,6 +11,7 @@ const {
   getDashboardApiKeysUsage,
   getAvailableGroups,
   getUserGroupRates,
+  bulkUpdateGroup,
   showError,
   showSuccess,
   copyToClipboard,
@@ -22,6 +23,7 @@ const {
   getDashboardApiKeysUsage: vi.fn(),
   getAvailableGroups: vi.fn(),
   getUserGroupRates: vi.fn(),
+  bulkUpdateGroup: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   copyToClipboard: vi.fn(),
@@ -31,10 +33,16 @@ const {
 
 const messages: Record<string, string> = {
   'common.actions': 'Actions',
+  'common.cancel': 'Cancel',
   'common.name': 'Name',
   'common.refresh': 'Refresh',
   'common.status': 'Status',
+  'common.update': 'Update',
   'keys.apiKey': 'API Key',
+  'keys.bulkGroupAction': 'Change selected group',
+  'keys.bulkGroupDescription': 'Move selected API keys',
+  'keys.bulkGroupSuccess': 'API keys updated',
+  'keys.bulkGroupTitle': 'Change group',
   'keys.allGroups': 'All Groups',
   'keys.allStatus': 'All Status',
   'keys.columnSettings': 'Column Settings',
@@ -42,12 +50,14 @@ const messages: Record<string, string> = {
   'keys.created': 'Created',
   'keys.expiresAt': 'Expires',
   'keys.group': 'Group',
+  'keys.groupLabel': 'Group',
   'keys.id': 'ID',
   'keys.currentConcurrency': 'Current Concurrency',
   'keys.lastUsedAt': 'Last Used',
   'keys.lastUsedIP': 'Last Used IP',
   'keys.rateLimitColumn': 'Rate Limit',
   'keys.searchPlaceholder': 'Search name or key...',
+  'keys.selectGroup': 'Select group',
   'keys.status.active': 'Active',
   'keys.status.expired': 'Expired',
   'keys.status.inactive': 'Inactive',
@@ -62,6 +72,7 @@ vi.mock('@/api', () => ({
     update: vi.fn(),
     delete: vi.fn(),
     toggleStatus: vi.fn(),
+    bulkUpdateGroup,
   },
   authAPI: {
     getPublicSettings,
@@ -153,14 +164,26 @@ const TablePageLayoutStub = {
 
 const DataTableStub = {
   name: 'DataTable',
-  props: ['columns', 'data'],
-  emits: ['sort'],
+  props: {
+    columns: { type: Array, default: () => [] },
+    data: { type: Array, default: () => [] },
+    selectable: Boolean,
+    selectedKeys: { type: Array, default: () => [] },
+  },
+  emits: ['sort', 'update:selectedKeys'],
   template: `
     <div>
       <div data-test="columns">{{ columns.map((col) => col.key).join(',') }}</div>
       <div data-test="columns-meta">{{ JSON.stringify(columns.map((col) => ({ key: col.key, sortable: !!col.sortable }))) }}</div>
       <button data-test="sort-current-concurrency" @click="$emit('sort', 'current_concurrency', 'asc')">
         Sort Current Concurrency
+      </button>
+      <button
+        v-if="selectable"
+        data-test="select-cross-page"
+        @click="$emit('update:selectedKeys', [99, ...data.map((row) => row.id)])"
+      >
+        Select across pages
       </button>
       <div v-for="row in data" :key="row.id">
         <div
@@ -183,6 +206,13 @@ const DataTableStub = {
       <slot name="empty" />
     </div>
   `,
+}
+
+const BaseDialogStub = {
+  name: 'BaseDialog',
+  props: ['show'],
+  emits: ['close'],
+  template: '<div v-if="show" data-test="base-dialog"><slot /><slot name="footer" /></div>',
 }
 
 const SelectStub = {
@@ -223,7 +253,7 @@ const mountView = async () => {
         TablePageLayout: TablePageLayoutStub,
         DataTable: DataTableStub,
         Pagination: PaginationStub,
-        BaseDialog: true,
+        BaseDialog: BaseDialogStub,
         ConfirmDialog: true,
         EmptyState: true,
         Select: SelectStub,
@@ -265,6 +295,7 @@ describe('user KeysView column settings', () => {
     getDashboardApiKeysUsage.mockReset()
     getAvailableGroups.mockReset()
     getUserGroupRates.mockReset()
+    bulkUpdateGroup.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
     copyToClipboard.mockReset()
@@ -282,6 +313,7 @@ describe('user KeysView column settings', () => {
     getDashboardApiKeysUsage.mockResolvedValue({ stats: {} })
     getAvailableGroups.mockResolvedValue([])
     getUserGroupRates.mockResolvedValue({})
+    bulkUpdateGroup.mockResolvedValue({ updated_count: 2 })
     isCurrentStep.mockReturnValue(false)
   })
 
@@ -437,5 +469,25 @@ describe('user KeysView column settings', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
+  })
+
+  it('submits selected API keys from multiple pages as one bulk group update', async () => {
+    getAvailableGroups.mockResolvedValue([{ id: 7, name: 'DeepSeek', platform: 'deepseek' }])
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-test="select-cross-page"]').trigger('click')
+    await nextTick()
+    await getButtonByText(wrapper, 'Change selected group').trigger('click')
+    await nextTick()
+
+    const dialog = wrapper.get('[data-test="base-dialog"]')
+    await dialog.findComponent({ name: 'Select' }).vm.$emit('update:modelValue', 7)
+    await getButtonByText(dialog, 'Update').trigger('click')
+    await flushPromises()
+
+    expect(bulkUpdateGroup).toHaveBeenCalledWith([99, 1], 7)
+    expect(showSuccess).toHaveBeenCalledWith('API keys updated')
+    expect(wrapper.find('[data-test="base-dialog"]').exists()).toBe(false)
+    expect(wrapper.findAll('button').some((button) => button.text().includes('Change selected group'))).toBe(false)
   })
 })

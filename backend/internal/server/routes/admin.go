@@ -102,6 +102,11 @@ func RegisterAdminRoutes(
 		// 渠道管理
 		registerChannelRoutes(admin, h)
 
+		// 模型广场展示元数据
+		registerModelCatalogRoutes(admin, h)
+
+		registerLotteryRoutes(admin, h)
+
 		// 渠道监控
 		registerChannelMonitorRoutes(admin, h)
 
@@ -116,6 +121,29 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerModelCatalogRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	modelCatalog := admin.Group("/model-catalog")
+	{
+		modelCatalog.GET("", h.Admin.ModelCatalog.List)
+		modelCatalog.PUT("", h.Admin.ModelCatalog.Upsert)
+		modelCatalog.DELETE("/:id", h.Admin.ModelCatalog.Delete)
+	}
+}
+
+func registerLotteryRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	lottery := admin.Group("/lottery")
+	{
+		lottery.GET("", h.Admin.Lottery.List)
+		lottery.POST("", h.Admin.Lottery.Create)
+		lottery.GET("/:id", h.Admin.Lottery.Get)
+		lottery.PUT("/:id", h.Admin.Lottery.Update)
+		lottery.PUT("/:id/status", h.Admin.Lottery.SetStatus)
+		lottery.DELETE("/:id", h.Admin.Lottery.Delete)
+		lottery.GET("/:id/entries", h.Admin.Lottery.Entries)
+		lottery.POST("/:id/draw", h.Admin.Lottery.Draw)
 	}
 }
 

@@ -23,14 +23,17 @@ import (
 )
 
 var (
-	ErrAPIKeyNotFound       = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
-	ErrGroupNotAllowed      = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
-	ErrAPIKeyExists         = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
-	ErrAPIKeyTooShort       = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
-	ErrAPIKeyInvalidChars   = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
-	ErrAPIKeyRateLimited    = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
-	ErrAPIKeyAuthOverloaded = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
-	ErrInvalidIPPattern     = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyNotFound        = infraerrors.NotFound("API_KEY_NOT_FOUND", "api key not found")
+	ErrGroupNotAllowed       = infraerrors.Forbidden("GROUP_NOT_ALLOWED", "user is not allowed to bind this group")
+	ErrAPIKeyExists          = infraerrors.Conflict("API_KEY_EXISTS", "api key already exists")
+	ErrAPIKeyTooShort        = infraerrors.BadRequest("API_KEY_TOO_SHORT", "api key must be at least 16 characters")
+	ErrAPIKeyInvalidChars    = infraerrors.BadRequest("API_KEY_INVALID_CHARS", "api key can only contain letters, numbers, underscores, and hyphens")
+	ErrAPIKeyRateLimited     = infraerrors.TooManyRequests("API_KEY_RATE_LIMITED", "too many failed attempts, please try again later")
+	ErrAPIKeyAuthOverloaded  = infraerrors.ServiceUnavailable("API_KEY_AUTH_OVERLOADED", "api key authentication is temporarily overloaded")
+	ErrInvalidIPPattern      = infraerrors.BadRequest("INVALID_IP_PATTERN", "invalid IP or CIDR pattern")
+	ErrAPIKeyBulkEmpty       = infraerrors.BadRequest("API_KEY_BULK_EMPTY", "at least one api key is required")
+	ErrAPIKeyBulkTooLarge    = infraerrors.BadRequest("API_KEY_BULK_TOO_LARGE", "cannot update more than 500 api keys at once")
+	ErrAPIKeyBulkUnsupported = infraerrors.InternalServer("API_KEY_BULK_UNSUPPORTED", "bulk api key update is unavailable")
 	// ErrAPIKeyExpired        = infraerrors.Forbidden("API_KEY_EXPIRED", "api key has expired")
 	ErrAPIKeyExpired = infraerrors.Forbidden("API_KEY_EXPIRED", "api key 已过期")
 	// ErrAPIKeyQuotaExhausted = infraerrors.TooManyRequests("API_KEY_QUOTA_EXHAUSTED", "api key quota exhausted")
@@ -41,6 +44,8 @@ var (
 	ErrAPIKeyRateLimit1dExceeded = infraerrors.TooManyRequests("API_KEY_RATE_1D_EXCEEDED", "api key 日限额已用完")
 	ErrAPIKeyRateLimit7dExceeded = infraerrors.TooManyRequests("API_KEY_RATE_7D_EXCEEDED", "api key 7天限额已用完")
 )
+
+const MaxBulkAPIKeyGroupUpdates = 500
 
 const (
 	MaxAPIKeyCredentialBytes     = 128
@@ -93,6 +98,10 @@ type APIKeyRepository interface {
 
 type apiKeyAllByUserIDLister interface {
 	ListAllByUserID(ctx context.Context, userID int64, filters APIKeyListFilters) ([]APIKey, error)
+}
+
+type apiKeyBulkGroupRepository interface {
+	UpdateGroupIDByUserAndIDs(ctx context.Context, userID int64, apiKeyIDs []int64, groupID int64) ([]string, int64, error)
 }
 
 // APIKeyRateLimitData holds rate limit usage and window state for an API key.
@@ -622,6 +631,56 @@ func (s *APIKeyService) VerifyOwnership(ctx context.Context, userID int64, apiKe
 		return nil, fmt.Errorf("verify api key ownership: %w", err)
 	}
 	return validIDs, nil
+}
+
+// BulkUpdateGroup atomically assigns a group to API keys owned by one user.
+func (s *APIKeyService) BulkUpdateGroup(ctx context.Context, userID int64, apiKeyIDs []int64, groupID int64) (int64, error) {
+	uniqueIDs := make([]int64, 0, len(apiKeyIDs))
+	seen := make(map[int64]struct{}, len(apiKeyIDs))
+	for _, id := range apiKeyIDs {
+		if id <= 0 {
+			return 0, ErrAPIKeyNotFound
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueIDs = append(uniqueIDs, id)
+	}
+	if len(uniqueIDs) == 0 {
+		return 0, ErrAPIKeyBulkEmpty
+	}
+	if len(uniqueIDs) > MaxBulkAPIKeyGroupUpdates {
+		return 0, ErrAPIKeyBulkTooLarge
+	}
+	if groupID <= 0 {
+		return 0, ErrGroupNotFound
+	}
+
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("get user: %w", err)
+	}
+	group, err := s.groupRepo.GetByID(ctx, groupID)
+	if err != nil {
+		return 0, fmt.Errorf("get group: %w", err)
+	}
+	if !s.canUserBindGroup(ctx, user, group) {
+		return 0, ErrGroupNotAllowed
+	}
+
+	bulkRepo, ok := s.apiKeyRepo.(apiKeyBulkGroupRepository)
+	if !ok {
+		return 0, ErrAPIKeyBulkUnsupported
+	}
+	keys, updated, err := bulkRepo.UpdateGroupIDByUserAndIDs(ctx, userID, uniqueIDs, groupID)
+	if err != nil {
+		return 0, fmt.Errorf("bulk update api key groups: %w", err)
+	}
+	for _, key := range keys {
+		s.InvalidateAuthCacheByKey(ctx, key)
+	}
+	return updated, nil
 }
 
 // GetByID 根据ID获取API Key

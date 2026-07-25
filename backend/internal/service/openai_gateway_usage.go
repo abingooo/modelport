@@ -194,8 +194,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		}
 	}
 	longContextBillingEnabled := billingAccount.IsOpenAILongContextBillingEnabled()
-	resolvedBillingModel := billingModel
-	cost, resolvedBillingModel, err = s.calculateOpenAIRecordUsageCostWithModel(
+	cost, resolvedBillingModel, err := s.calculateOpenAIRecordUsageCostWithModel(
 		ctx,
 		result,
 		apiKey,
@@ -386,26 +385,6 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 
 	return nil
-}
-
-func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
-	ctx context.Context,
-	result *OpenAIForwardResult,
-	apiKey *APIKey,
-	billingModels []string,
-	multiplier float64,
-	imageMultiplier float64,
-	videoMultiplier float64,
-	webSearchMultiplier float64,
-	tokens UsageTokens,
-	serviceTier string,
-	longContextBillingEnabled bool,
-) (*CostBreakdown, error) {
-	cost, _, err := s.calculateOpenAIRecordUsageCostWithModel(
-		ctx, result, apiKey, billingModels, multiplier, imageMultiplier, videoMultiplier,
-		webSearchMultiplier, tokens, serviceTier, longContextBillingEnabled,
-	)
-	return cost, err
 }
 
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCostWithModel(

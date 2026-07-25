@@ -101,6 +101,26 @@ const ACCENT_BAR: Record<Platform, string> = {
 }
 const ACCENT_BAR_DEFAULT = 'bg-gradient-to-r from-primary-400 to-primary-500'
 
+// ── Accent dot ─────────────────────────────────────────────────────
+const ACCENT_DOT: Record<Platform, string> = {
+  anthropic: 'bg-amber-500',
+  openai: 'bg-emerald-500',
+  antigravity: 'bg-purple-500',
+  gemini: 'bg-blue-500',
+  grok: 'bg-zinc-800 dark:bg-zinc-300',
+  deepseek: 'bg-indigo-600 dark:bg-indigo-400',
+  qwen: 'bg-violet-600 dark:bg-violet-400',
+  glm: 'bg-cyan-600 dark:bg-cyan-400',
+  kimi: 'bg-teal-600 dark:bg-teal-400',
+  doubao: 'bg-sky-600 dark:bg-sky-400',
+  siliconflow: 'bg-fuchsia-600 dark:bg-fuchsia-400',
+  openrouter: 'bg-slate-600 dark:bg-slate-400',
+  minimax: 'bg-rose-600 dark:bg-rose-400',
+  mimo: 'bg-orange-600 dark:bg-orange-400',
+  composite: 'bg-lime-600 dark:bg-lime-400',
+}
+const ACCENT_DOT_DEFAULT = 'bg-primary-500 dark:bg-primary-400'
+
 // ── Text (price, icon) ─────────────────────────────────────────────
 const TEXT: Record<Platform, string> = {
   anthropic: 'text-amber-700 dark:text-amber-300',
@@ -265,6 +285,10 @@ export function platformAccentBarClass(p: string): string {
   return isPlatform(p) ? ACCENT_BAR[p] : ACCENT_BAR_DEFAULT
 }
 
+export function platformAccentDotClass(p: string): string {
+  return isPlatform(p) ? ACCENT_DOT[p] : ACCENT_DOT_DEFAULT
+}
+
 export function platformTextClass(p: string): string {
   return isPlatform(p) ? TEXT[p] : TEXT_DEFAULT
 }
@@ -302,7 +326,7 @@ export function platformLabel(p: string): string {
     case 'grok': return 'Grok'
     case 'deepseek': return 'DeepSeek'
     case 'qwen': return 'Qwen'
-    case 'glm': return 'GLM'
+    case 'glm': return '智谱AI'
     case 'kimi': return 'Kimi'
     case 'doubao': return 'ByteDance'
     case 'siliconflow': return 'SiliconFlow'

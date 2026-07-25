@@ -106,7 +106,7 @@ export default {
         grok: 'Grok',
         deepseek: 'DeepSeek',
         qwen: 'Qwen',
-        glm: 'GLM',
+        glm: 'Zhipu AI',
         kimi: 'Kimi',
         doubao: 'ByteDance',
         siliconflow: 'SiliconFlow',

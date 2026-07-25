@@ -53,6 +53,15 @@ jobs:
             echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "${GITHUB_OUTPUT}"
 
+      - name: Verify release notes
+        shell: bash
+        run: |
+          notes="docs/releases/${{ steps.meta.outputs.app_version }}.md"
+          if [[ ! -s "${notes}" ]]; then
+            echo "Missing release notes: ${notes}" >&2
+            exit 1
+          fi
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -80,11 +89,4 @@ jobs:
           name: ModelPort ${{ steps.meta.outputs.app_version }}
           make_latest: false
           generate_release_notes: true
-          body: |
-            ModelPort 正式版本 `${{ steps.meta.outputs.app_version }}`。
-
-            ### Docker 镜像
-
-            ```bash
-            docker pull ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
-            ```
+          body_path: docs/releases/${{ steps.meta.outputs.app_version }}.md
