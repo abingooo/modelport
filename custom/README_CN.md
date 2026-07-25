@@ -64,7 +64,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml down
 
 ```text
 正式版    0.1.164.4
-开发版    0.1.164.4-dev.5
+开发版    0.1.164.4-dev.6
 测试版    0.1.164.4-beta.1
 候选版    0.1.164.4-rc.1
 ```
@@ -100,11 +100,11 @@ git push origin develop
 
 ## 开发镜像
 
-推送 `develop` 后，GitHub Actions 读取 `custom/VERSION` 并构建多架构镜像，不创建
+推送 `develop` 后，GitHub Actions 读取 `custom/VERSION` 并构建 `linux/amd64` 镜像，不创建
 GitHub Release：
 
 ```text
-ghcr.io/abingooo/modelport:0.1.164.4-dev.5
+ghcr.io/abingooo/modelport:0.1.164.4-dev.6
 ghcr.io/abingooo/modelport:develop
 ghcr.io/abingooo/modelport:dev-sha-<commit>
 ```
@@ -132,7 +132,7 @@ git push origin custom-v0.1.164.4
 `0.1.164.4`。前三位对应官方版本，第四位是 ModelPort 二开迭代号。镜像构建成功后
 工作流会创建同名 GitHub Release，前端“查看发布”会打开该自定义发布页。
 
-GitHub Actions 会构建多架构镜像：
+GitHub Actions 只构建 `linux/amd64` 镜像：
 
 ```text
 ghcr.io/abingooo/modelport:custom-v0.1.164.4
