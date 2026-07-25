@@ -31,8 +31,14 @@ jobs:
         shell: bash
         run: |
           repository="${GITHUB_REPOSITORY,,}"
+          app_version="${GITHUB_REF_NAME#custom-v}"
+          if [[ ! "${app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid custom version tag: ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
           echo "image=ghcr.io/${repository}" >> "${GITHUB_OUTPUT}"
           echo "version=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "app_version=${app_version}" >> "${GITHUB_OUTPUT}"
           echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "${GITHUB_OUTPUT}"
 
       - name: Build and push
@@ -43,6 +49,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
+            VERSION=${{ steps.meta.outputs.app_version }}
             COMMIT=${{ github.sha }}
             DATE=${{ steps.meta.outputs.date }}
           tags: |

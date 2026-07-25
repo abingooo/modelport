@@ -77,8 +77,8 @@ git push origin main production
 
 ```bash
 git push -u origin production
-git tag -a custom-v0.1.164.1 -m "ModelPort custom-v0.1.164.1"
-git push origin custom-v0.1.164.1
+git tag -a custom-v0.1.164.2 -m "ModelPort custom-v0.1.164.2"
+git push origin custom-v0.1.164.2
 ```
 
 只使用指向 `production` 提交的 `custom-v*` 标签，不要使用 `v*`，避免触发 Fork
@@ -86,10 +86,13 @@ git push origin custom-v0.1.164.1
 分支，因此发布入口只有标签推送，不使用 Actions 手动触发。Fork 首次运行工作流前，
 需要先在 GitHub 仓库的 Actions 页面启用工作流。
 
+标签中的 `custom-v` 前缀用于区分发布流程，镜像内应用版本会显示为
+`0.1.164.2`。前三位对应官方版本，第四位是 ModelPort 二开迭代号。
+
 GitHub Actions 会构建多架构镜像：
 
 ```text
-ghcr.io/abingooo/modelport:custom-v0.1.164.1
+ghcr.io/abingooo/modelport:custom-v0.1.164.2
 ghcr.io/abingooo/modelport:sha-<commit>
 ```
 
@@ -98,7 +101,7 @@ ghcr.io/abingooo/modelport:sha-<commit>
 服务器继续使用官方 Compose，并叠加镜像覆盖文件：
 
 ```bash
-export SUB2API_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.164.1
+export SUB2API_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.164.2
 docker compose -f deploy/docker-compose.yml -f custom/server-compose.override.yml pull
 docker compose -f deploy/docker-compose.yml -f custom/server-compose.override.yml up -d
 docker compose -f deploy/docker-compose.yml -f custom/server-compose.override.yml ps
