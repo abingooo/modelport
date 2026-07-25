@@ -9,6 +9,14 @@ health_url="${MODELPORT_HEALTH_URL:-http://127.0.0.1:8080/health}"
 image_repository="ghcr.io/abingooo/modelport"
 service_name="modelport"
 
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
 [ -f "${request_file}" ] || exit 0
 [ -f "${env_file}" ] || { echo "ModelPort env file not found: ${env_file}" >&2; exit 1; }
 [ -f "${compose_file}" ] || { echo "ModelPort compose file not found: ${compose_file}" >&2; exit 1; }
@@ -55,13 +63,13 @@ mv "${temporary_env}" "${env_file}"
 rollback() {
   echo "ModelPort ${version} failed; restoring the previous image" >&2
   mv "${env_backup}" "${env_file}"
-  docker compose --env-file "${env_file}" -f "${compose_file}" up -d --no-deps "${service_name}" || true
+  compose --env-file "${env_file}" -f "${compose_file}" up -d --no-deps "${service_name}" || true
   mv "${processing_file}" "${failed_file}" 2>/dev/null || true
 }
 trap rollback HUP INT TERM EXIT
 
-docker compose --env-file "${env_file}" -f "${compose_file}" pull "${service_name}"
-docker compose --env-file "${env_file}" -f "${compose_file}" up -d --no-deps "${service_name}"
+compose --env-file "${env_file}" -f "${compose_file}" pull "${service_name}"
+compose --env-file "${env_file}" -f "${compose_file}" up -d --no-deps "${service_name}"
 
 healthy=false
 attempt=0
