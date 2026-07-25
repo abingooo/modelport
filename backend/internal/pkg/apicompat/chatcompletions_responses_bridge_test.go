@@ -147,7 +147,7 @@ func TestResponsesToChatCompletionsRequest_ParallelToolCalls(t *testing.T) {
 	assert.Contains(t, string(payload), `"parallel_tool_calls":false`)
 }
 
-func TestResponsesToChatCompletionsRequest_PromptCacheKeyReturnsExplicitError(t *testing.T) {
+func TestResponsesToChatCompletionsRequest_IgnoresPromptCacheKey(t *testing.T) {
 	req := &ResponsesRequest{
 		Model:          "gpt-4o",
 		Input:          json.RawMessage(`"Hello"`),
@@ -155,8 +155,11 @@ func TestResponsesToChatCompletionsRequest_PromptCacheKeyReturnsExplicitError(t 
 	}
 
 	out, err := ResponsesToChatCompletionsRequest(req)
-	require.Nil(t, out)
-	require.EqualError(t, err, "prompt_cache_key is not supported when converting a Responses request to Chat Completions: no reliable equivalent field exists")
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, "user", out.Messages[0].Role)
+	assert.JSONEq(t, `"Hello"`, string(out.Messages[0].Content))
 }
 
 func chatMessageRoles(messages []ChatMessage) []string {

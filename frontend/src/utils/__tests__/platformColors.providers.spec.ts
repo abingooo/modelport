@@ -15,14 +15,14 @@ import {
 } from '../platformColors'
 
 const providers = [
-  ['qwen', 'cyan'],
-  ['glm', 'sky'],
-  ['kimi', 'pink'],
-  ['doubao', 'red'],
-  ['siliconflow', 'teal'],
-  ['openrouter', 'amber'],
-  ['minimax', 'violet'],
-  ['mimo', 'lime']
+  ['qwen', 'violet'],
+  ['glm', 'blue'],
+  ['kimi', 'zinc'],
+  ['doubao', 'blue'],
+  ['siliconflow', 'purple'],
+  ['openrouter', 'indigo'],
+  ['minimax', 'rose'],
+  ['mimo', 'orange']
 ] as const
 
 const colorResolvers = [
