@@ -5,6 +5,7 @@ import OidcCallbackView from '../OidcCallbackView.vue'
 
 const replace = vi.fn()
 const showSuccess = vi.fn()
+const showInfo = vi.fn()
 const showError = vi.fn()
 const setToken = vi.fn()
 const setPendingAuthSession = vi.fn()
@@ -52,6 +53,7 @@ vi.mock('@/stores', () => ({
   }),
   useAppStore: () => ({
     showSuccess,
+    showInfo,
     showError
   })
 }))
@@ -79,6 +81,7 @@ describe('OidcCallbackView', () => {
   beforeEach(() => {
     replace.mockReset()
     showSuccess.mockReset()
+    showInfo.mockReset()
     showError.mockReset()
     setToken.mockReset()
     setPendingAuthSession.mockReset()
@@ -122,7 +125,7 @@ describe('OidcCallbackView', () => {
     expect(setToken).toHaveBeenCalledWith('legacy-access-token')
     expect(localStorage.getItem('refresh_token')).toBe('legacy-refresh-token')
     expect(localStorage.getItem('token_expires_at')).not.toBeNull()
-    expect(showSuccess).toHaveBeenCalledWith('auth.loginSuccess')
+    expect(showInfo).toHaveBeenCalledWith('auth.loginSuccess')
     expect(replace).toHaveBeenCalledWith('/legacy-dashboard')
   })
 

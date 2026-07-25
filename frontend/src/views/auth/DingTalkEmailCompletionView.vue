@@ -92,7 +92,7 @@ async function handleCreateAccount(payload: PendingOAuthCreateAccountPayload) {
       persistOAuthTokenContext(data)
       await authStore.setToken(data.access_token)
       clearAllAffiliateReferralCodes()
-      appStore.showSuccess(t('auth.loginSuccess'))
+      appStore.showInfo(t('auth.loginSuccess'))
       await router.replace(redirect)
       return
     }
