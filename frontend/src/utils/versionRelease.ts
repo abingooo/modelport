@@ -13,7 +13,7 @@ export function resolveCurrentReleaseUrl(
   }
 
   if (CUSTOM_PRERELEASE_VERSION_PATTERN.test(version)) {
-    return ''
+    return `https://github.com/${MODELPORT_REPOSITORY}/releases/tag/dev-v${version}`
   }
 
   return officialReleaseUrl && officialReleaseUrl !== '#' ? officialReleaseUrl : ''

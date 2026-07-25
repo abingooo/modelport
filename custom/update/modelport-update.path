@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch for ModelPort Docker update requests
+
+[Path]
+PathExists=/opt/modelport/data/update-request
+Unit=modelport-update.service
+
+[Install]
+WantedBy=multi-user.target

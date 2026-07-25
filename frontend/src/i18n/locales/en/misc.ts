@@ -31,9 +31,13 @@ export default {
     refresh: 'Refresh',
     sourceMode: 'Source Build',
     sourceModeHint: 'Source build, use git pull to update',
+    manualModeHint:
+      'Online updates are disabled for this deployment. Update the Docker image from the ModelPort release page.',
     updateNow: 'Update Now',
     updating: 'Updating...',
     updateComplete: 'Update Complete',
+    updateQueued: 'Update queued',
+    containerRecreating: 'Pulling the ModelPort image and recreating the container',
     updateFailed: 'Update Failed',
     restartRequired: 'Please restart the service to apply the update',
     restartNow: 'Restart Now',
@@ -43,7 +47,7 @@ export default {
     rollbackSelectVersion: 'Select a version to roll back to (last 3 versions)',
     rollbackConfirm: 'Roll back to {version}',
     rollbackWarning:
-      'Rollback downloads the selected version and replaces the current binary. A service restart is required afterwards.',
+      'Rollback switches to the selected ModelPort image and recreates the container. Confirm that your data is backed up first.',
     rollingBack: 'Rolling back...',
     rollbackComplete: 'Rollback Complete',
     rollbackFailed: 'Rollback Failed',

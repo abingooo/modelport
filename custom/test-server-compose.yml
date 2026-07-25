@@ -28,6 +28,8 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       JWT_SECRET: ${JWT_SECRET}
       TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY}
+      MODELPORT_UPDATE_MODE: docker
+      MODELPORT_UPDATE_REQUEST_FILE: /app/data/update-request
       TZ: Asia/Shanghai
     depends_on:
       postgres:

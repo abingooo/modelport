@@ -46,6 +46,7 @@ func systemUpdateContext(ctx context.Context) (context.Context, context.CancelFu
 type systemUpdateService interface {
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
 	PerformUpdate(ctx context.Context) error
+	UpdateMode() string
 	Rollback() error
 	ListRollbackVersions(ctx context.Context) ([]service.RollbackVersion, error)
 	RollbackToVersion(ctx context.Context, version string) error
@@ -119,11 +120,17 @@ func (h *SystemHandler) PerformUpdate(c *gin.Context) {
 			return nil, err
 		}
 		succeeded = true
+		dockerUpdate := h.updateSvc.UpdateMode() == "docker"
+		message := "Update completed. Please restart the service."
+		if dockerUpdate {
+			message = "Docker update queued"
+		}
 
 		return gin.H{
-			"message":      "Update completed. Please restart the service.",
-			"need_restart": true,
-			"operation_id": lock.OperationID(),
+			"message":       message,
+			"need_restart":  !dockerUpdate,
+			"update_queued": dockerUpdate,
+			"operation_id":  lock.OperationID(),
 		}, nil
 	})
 }
@@ -188,12 +195,18 @@ func (h *SystemHandler) Rollback(c *gin.Context) {
 			return nil, err
 		}
 		succeeded = true
+		dockerUpdate := h.updateSvc.UpdateMode() == "docker"
+		message := "Rollback completed. Please restart the service."
+		if dockerUpdate {
+			message = "Docker rollback queued"
+		}
 
 		return gin.H{
-			"message":      "Rollback completed. Please restart the service.",
-			"need_restart": true,
-			"version":      targetVersion,
-			"operation_id": lock.OperationID(),
+			"message":       message,
+			"need_restart":  !dockerUpdate,
+			"update_queued": dockerUpdate,
+			"version":       targetVersion,
+			"operation_id":  lock.OperationID(),
 		}, nil
 	})
 }

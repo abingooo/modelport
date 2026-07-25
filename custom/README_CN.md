@@ -64,7 +64,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml down
 
 ```text
 正式版    0.1.164.4
-开发版    0.1.164.4-dev.12
+开发版    0.1.164.4-dev.13
 测试版    0.1.164.4-beta.1
 候选版    0.1.164.4-rc.1
 ```
@@ -100,16 +100,17 @@ git push origin develop
 
 ## 开发镜像
 
-推送 `develop` 后，GitHub Actions 读取 `custom/VERSION` 并构建 `linux/amd64` 镜像，不创建
-GitHub Release：
+推送 `develop` 后，GitHub Actions 读取 `custom/VERSION`，构建 `linux/amd64` 镜像，并创建
+`dev-v<版本>` GitHub prerelease。应用的开发更新通道只识别这种标签：
 
 ```text
-ghcr.io/abingooo/modelport:0.1.164.4-dev.12
+ghcr.io/abingooo/modelport:0.1.164.4-dev.13
 ghcr.io/abingooo/modelport:develop
 ghcr.io/abingooo/modelport:dev-sha-<commit>
 ```
 
 开发环境优先使用固定版本或 `dev-sha-*`，不要依赖会移动的 `develop` 标签。
+同一开发版本不能重复发布；再次推送前必须递增 `custom/VERSION` 的 `dev.N`。
 
 ## 正式镜像
 
@@ -158,3 +159,25 @@ echo "${GHCR_PAT}" | docker login ghcr.io -u abingooo --password-stdin
 ```
 
 生产环境只使用固定标签，不使用 `latest`。升级前先备份 PostgreSQL，并保留上一个镜像标签。
+
+## 测试服务器在线更新
+
+应用只从 `abingooo/modelport` 获取版本，开发版只接受 `dev-v*-dev.*` prerelease，正式版只
+接受 `custom-v*` release。原作者仓库的标签、Release 和旧缓存都不会成为更新候选。
+
+Docker 在线更新不向主容器挂载 Docker Socket。主容器只向持久化目录写入经过通道校验的
+版本号，宿主机的 systemd path unit 再拉取固定的 `ghcr.io/abingooo/modelport` 镜像并重建
+`modelport` 服务：
+
+```bash
+sudo install -m 0755 custom/update/modelport-docker-updater /usr/local/sbin/
+sudo install -m 0644 custom/update/modelport-update.service /etc/systemd/system/
+sudo install -m 0644 custom/update/modelport-update.path /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now modelport-update.path
+```
+
+默认部署目录为 `/opt/modelport`，其中需要包含 `.env`、`test-server-compose.yml` 和 `data/`。
+如目录不同，可在 `modelport-update.service` 中覆盖 `MODELPORT_DEPLOY_DIR`、
+`MODELPORT_ENV_FILE` 或 `MODELPORT_COMPOSE_FILE`。更新器只接受 ModelPort 版本格式，并将镜像
+仓库固定为 `ghcr.io/abingooo/modelport`；更新后健康检查失败时会自动恢复之前的镜像。

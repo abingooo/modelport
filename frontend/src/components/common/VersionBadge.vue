@@ -149,6 +149,39 @@
                 </button>
               </div>
 
+              <div
+                v-else-if="updateQueued"
+                class="flex items-center gap-3 rounded-lg border border-primary-200 bg-primary-50 p-3 dark:border-primary-800/50 dark:bg-primary-900/20"
+              >
+                <svg
+                  class="h-5 w-5 flex-shrink-0 animate-spin text-primary-500"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    class="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    stroke-width="4"
+                  ></circle>
+                  <path
+                    class="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  ></path>
+                </svg>
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-primary-700 dark:text-primary-300">
+                    {{ t('version.updateQueued') }}
+                  </p>
+                  <p class="text-xs text-primary-600/70 dark:text-primary-400/70">
+                    {{ t('version.containerRecreating') }}
+                  </p>
+                </div>
+              </div>
+
               <!-- Priority 2: Update success - need restart -->
               <div v-else-if="updateSuccess && needRestart" class="space-y-2">
                 <div
@@ -232,7 +265,10 @@
               </div>
 
               <!-- Priority 3: Update available for source build - show git pull hint -->
-              <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
+              <div
+                v-else-if="hasUpdate && (!isReleaseBuild || !onlineUpdateEnabled)"
+                class="space-y-2"
+              >
                 <a
                   v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
                   :href="releaseInfo.html_url"
@@ -286,13 +322,16 @@
                     />
                   </svg>
                   <p class="text-xs text-blue-600 dark:text-blue-400">
-                    {{ t('version.sourceModeHint') }}
+                    {{ isReleaseBuild ? t('version.manualModeHint') : t('version.sourceModeHint') }}
                   </p>
                 </div>
               </div>
 
               <!-- Priority 4: Update available for release build - show update button -->
-              <div v-else-if="hasUpdate && isReleaseBuild" class="space-y-2">
+              <div
+                v-else-if="hasUpdate && isReleaseBuild && onlineUpdateEnabled"
+                class="space-y-2"
+              >
                 <!-- Update info card -->
                 <div
                   class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
@@ -643,6 +682,7 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
   performUpdate,
+  getVersion,
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
@@ -652,9 +692,7 @@ import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
 import { resolveCurrentReleaseUrl } from '@/utils/versionRelease'
 
-const GITHUB_REPO = 'Wei-Shaw/sub2api'
-// Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
-const DOCKER_IMAGE = 'weishaw/sub2api'
+const DOCKER_IMAGE = 'ghcr.io/abingooo/modelport'
 
 const { t } = useI18n()
 
@@ -680,6 +718,10 @@ const currentReleaseUrl = computed(() =>
   resolveCurrentReleaseUrl(currentVersion.value, releaseInfo.value?.html_url)
 )
 const buildType = computed(() => appStore.buildType)
+const updateMode = computed(() => appStore.updateMode)
+const onlineUpdateEnabled = computed(
+  () => updateMode.value === 'docker' || updateMode.value === 'binary'
+)
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -687,6 +729,7 @@ const restarting = ref(false)
 const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
+const updateQueued = ref(false)
 const restartCountdown = ref(0)
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<'update' | 'rollback'>('update')
@@ -704,33 +747,27 @@ const { copied, copyToClipboard } = useClipboard()
 
 // Manual rollback methods differ by deployment: script installs use install.sh,
 // docker deployments pin the image tag instead
-const manualTab = ref<'script' | 'docker'>('script')
+const manualTab = ref<'docker'>('docker')
 
 const manualTabs = computed(() => [
-  { key: 'script' as const, label: t('version.deployScript') },
   { key: 'docker' as const, label: t('version.deployDocker') }
 ])
 
-const scriptRollbackCommand = computed(() => {
-  if (!selectedRollbackVersion.value) return ''
-  const tag = `v${selectedRollbackVersion.value}`
-  return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
-})
-
 const dockerRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
+  const tag = selectedRollbackVersion.value.includes('-dev.')
+    ? selectedRollbackVersion.value
+    : `custom-v${selectedRollbackVersion.value}`
   return [
     `# ${t('version.dockerEditCompose')}`,
-    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value}`,
+    `image: ${DOCKER_IMAGE}:${tag}`,
     '',
     `# ${t('version.dockerRecreate')}`,
     'docker compose up -d'
   ].join('\n')
 })
 
-const activeManualCommand = computed(() =>
-  manualTab.value === 'docker' ? dockerRollbackCommand.value : scriptRollbackCommand.value
-)
+const activeManualCommand = computed(() => dockerRollbackCommand.value)
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
@@ -749,6 +786,7 @@ async function refreshVersion(force = true) {
   // Reset update states when refreshing
   updateError.value = ''
   updateSuccess.value = false
+  updateQueued.value = false
   needRestart.value = false
   resetRollbackState()
 
@@ -761,14 +799,20 @@ async function handleUpdate() {
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
+  updateQueued.value = false
 
   try {
+    const targetVersion = latestVersion.value
     const result = await performUpdate()
     successKind.value = 'update'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    updateQueued.value = result.update_queued === true
     // Clear version cache to reflect update completed
     appStore.clearVersionCache()
+    if (updateQueued.value) {
+      void waitForContainerUpdate(targetVersion)
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
@@ -777,13 +821,30 @@ async function handleUpdate() {
   }
 }
 
+async function waitForContainerUpdate(targetVersion: string) {
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+  for (let attempt = 0; attempt < 90; attempt++) {
+    try {
+      const current = await getVersion()
+      if (current.version === targetVersion) {
+        window.location.reload()
+        return
+      }
+    } catch {
+      // The API is expected to be temporarily unavailable while the container is recreated.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+  }
+  window.location.reload()
+}
+
 function resetRollbackState() {
   rollbackPanelOpen.value = false
   rollbackVersions.value = []
   rollbackVersionsError.value = ''
   selectedRollbackVersion.value = ''
   rollbackError.value = ''
-  manualTab.value = 'script'
+  manualTab.value = 'docker'
 }
 
 async function toggleRollbackPanel() {
@@ -837,13 +898,18 @@ async function handleRollback() {
   rollbackError.value = ''
 
   try {
+    const targetVersion = selectedRollbackVersion.value
     const result = await rollbackAPI(selectedRollbackVersion.value)
     successKind.value = 'rollback'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    updateQueued.value = result.update_queued === true
     rollbackPanelOpen.value = false
     // Clear version cache so the next check reflects the rolled-back version
     appStore.clearVersionCache()
+    if (updateQueued.value) {
+      void waitForContainerUpdate(targetVersion)
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
