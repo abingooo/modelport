@@ -1,5 +1,8 @@
 # Sub2API 二次开发工作流
 
+完整的分支、版本、发布、服务器人工更新和回滚流程见
+[`docs/MODELPORT_WORKFLOW_CN.md`](../docs/MODELPORT_WORKFLOW_CN.md)。
+
 ## 本地工具链
 
 每次进入新终端后加载项目工具链：
