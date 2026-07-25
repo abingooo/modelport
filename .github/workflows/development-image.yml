@@ -1,31 +1,23 @@
-name: Custom Image
+name: Development Image
 
 on:
   push:
-    tags:
-      - "custom-v*"
+    branches:
+      - "develop"
 
 permissions:
-  contents: write
+  contents: read
   packages: write
+
+concurrency:
+  group: development-image-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   image:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Verify production release
-        shell: bash
-        run: |
-          git fetch --no-tags origin production
-          production_sha="$(git rev-parse origin/production)"
-          if [[ "${GITHUB_SHA}" != "${production_sha}" ]]; then
-            echo "Stable tags must point to the current production commit." >&2
-            exit 1
-          fi
 
       - uses: docker/setup-qemu-action@v3
 
@@ -43,14 +35,13 @@ jobs:
         shell: bash
         run: |
           repository="${GITHUB_REPOSITORY,,}"
-          app_version="${GITHUB_REF_NAME#custom-v}"
-          if [[ ! "${app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Invalid custom version tag: ${GITHUB_REF_NAME}" >&2
+          app_version="$(tr -d '[:space:]' < custom/VERSION)"
+          if [[ ! "${app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "Invalid development version: ${app_version}" >&2
             exit 1
           fi
           {
             echo "image=ghcr.io/${repository}"
-            echo "version=${GITHUB_REF_NAME}"
             echo "app_version=${app_version}"
             echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           } >> "${GITHUB_OUTPUT}"
@@ -67,23 +58,12 @@ jobs:
             COMMIT=${{ github.sha }}
             DATE=${{ steps.meta.outputs.date }}
           tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
-            ${{ steps.meta.outputs.image }}:sha-${{ github.sha }}
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.app_version }}
+            ${{ steps.meta.outputs.image }}:develop
+            ${{ steps.meta.outputs.image }}:dev-sha-${{ github.sha }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.app_version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: ModelPort ${{ steps.meta.outputs.app_version }}
-          make_latest: false
-          body: |
-            ModelPort custom build based on Sub2API ${{ steps.meta.outputs.app_version }}.
-
-            ```bash
-            docker pull ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
-            ```
