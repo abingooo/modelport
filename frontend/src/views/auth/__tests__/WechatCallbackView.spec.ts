@@ -17,6 +17,7 @@ const {
   setPendingAuthSessionMock,
   clearPendingAuthSessionMock,
   showSuccessMock,
+  showInfoMock,
   showErrorMock,
   fetchPublicSettingsMock,
   routeState,
@@ -37,6 +38,7 @@ const {
   setPendingAuthSessionMock: vi.fn(),
   clearPendingAuthSessionMock: vi.fn(),
   showSuccessMock: vi.fn(),
+  showInfoMock: vi.fn(),
   showErrorMock: vi.fn(),
   fetchPublicSettingsMock: vi.fn(),
   routeState: {
@@ -124,6 +126,7 @@ vi.mock('@/stores', () => ({
   useAppStore: () => ({
     ...appStoreState,
     showSuccess: showSuccessMock,
+    showInfo: showInfoMock,
     showError: showErrorMock,
     fetchPublicSettings: fetchPublicSettingsMock,
   }),
@@ -164,6 +167,7 @@ describe('WechatCallbackView', () => {
     setPendingAuthSessionMock.mockReset()
     clearPendingAuthSessionMock.mockReset()
     showSuccessMock.mockReset()
+    showInfoMock.mockReset()
     showErrorMock.mockReset()
     prepareOAuthBindAccessTokenCookieMock.mockReset()
     getAuthTokenMock.mockReset()
@@ -307,7 +311,7 @@ describe('WechatCallbackView', () => {
     expect(setTokenMock).toHaveBeenCalledWith('legacy-access-token')
     expect(localStorage.getItem('refresh_token')).toBe('legacy-refresh-token')
     expect(localStorage.getItem('token_expires_at')).not.toBeNull()
-    expect(showSuccessMock).toHaveBeenCalledWith('Login success')
+    expect(showInfoMock).toHaveBeenCalledWith('Login success')
     expect(replaceMock).toHaveBeenCalledWith('/legacy-dashboard')
   })
 
