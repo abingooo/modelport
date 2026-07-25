@@ -9,7 +9,7 @@ deploy_dir="${temporary_dir}/deploy"
 bin_dir="${temporary_dir}/bin"
 mkdir -p "${deploy_dir}/data" "${bin_dir}"
 printf '%s\n' 'MODELPORT_IMAGE=ghcr.io/abingooo/modelport:old' 'SECRET=preserved' > "${deploy_dir}/.env"
-printf '%s\n' 'services:' '  modelport:' '    image: ${MODELPORT_IMAGE}' > "${deploy_dir}/test-server-compose.yml"
+printf '%s\n' 'services:' '  modelport:' '    image: ${MODELPORT_IMAGE}' > "${deploy_dir}/docker-compose.yml"
 
 printf '%s\n' '#!/bin/sh' 'printf '\''%s\n'\'' "$*" >> "${MODELPORT_TEST_DOCKER_LOG}"' > "${bin_dir}/docker"
 printf '%s\n' '#!/bin/sh' 'exit 0' > "${bin_dir}/curl"

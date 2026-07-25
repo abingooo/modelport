@@ -64,7 +64,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml down
 
 ```text
 正式版    0.1.164.4
-开发版    0.1.164.4-dev.14
+开发版    0.1.164.4-dev.15
 测试版    0.1.164.4-beta.1
 候选版    0.1.164.4-rc.1
 ```
@@ -104,7 +104,7 @@ git push origin develop
 `dev-v<版本>` GitHub prerelease。应用的开发更新通道只识别这种标签：
 
 ```text
-ghcr.io/abingooo/modelport:0.1.164.4-dev.14
+ghcr.io/abingooo/modelport:0.1.164.4-dev.15
 ghcr.io/abingooo/modelport:develop
 ghcr.io/abingooo/modelport:dev-sha-<commit>
 ```
@@ -177,7 +177,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now modelport-update.path
 ```
 
-默认部署目录为 `/opt/modelport`，其中需要包含 `.env`、`test-server-compose.yml` 和 `data/`。
+默认部署目录为 `/opt/modelport`，其中需要包含 `.env`、`docker-compose.yml` 和 `data/`。
 如目录不同，可在 `modelport-update.service` 中覆盖 `MODELPORT_DEPLOY_DIR`、
 `MODELPORT_ENV_FILE` 或 `MODELPORT_COMPOSE_FILE`。更新器只接受 ModelPort 版本格式，并将镜像
 仓库固定为 `ghcr.io/abingooo/modelport`；更新后健康检查失败时会自动恢复之前的镜像。

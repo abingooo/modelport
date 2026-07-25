@@ -4,7 +4,7 @@ set -eu
 deploy_dir="${MODELPORT_DEPLOY_DIR:-/opt/modelport}"
 request_file="${MODELPORT_UPDATE_REQUEST_FILE:-${deploy_dir}/data/update-request}"
 env_file="${MODELPORT_ENV_FILE:-${deploy_dir}/.env}"
-compose_file="${MODELPORT_COMPOSE_FILE:-${deploy_dir}/test-server-compose.yml}"
+compose_file="${MODELPORT_COMPOSE_FILE:-${deploy_dir}/docker-compose.yml}"
 health_url="${MODELPORT_HEALTH_URL:-http://127.0.0.1:8080/health}"
 image_repository="ghcr.io/abingooo/modelport"
 service_name="modelport"
