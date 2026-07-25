@@ -19,12 +19,19 @@ describe('BrandLogo', () => {
 
   it('renders the ModelPort wordmark variant', () => {
     const wrapper = mount(BrandLogo, {
-      props: { siteName: 'ModelPort', variant: 'wordmark' },
+      props: {
+        siteName: 'ModelPort',
+        siteLogo: '/branding/modelport-mark-light.png',
+        variant: 'wordmark',
+      },
     })
 
-    expect(wrapper.findAll('img')[0].attributes('src')).toBe(
+    const images = wrapper.findAll('img')
+    expect(images).toHaveLength(2)
+    expect(images[0].attributes('src')).toBe(
       '/branding/modelport-wordmark-light.png'
     )
+    expect(images[1].attributes('src')).toBe('/branding/modelport-wordmark-dark.png')
   })
 
   it('keeps a custom site logo for other brands', () => {
