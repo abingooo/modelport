@@ -493,9 +493,9 @@ async function handleLogin(): Promise<void> {
       return
     }
 
-    // Show success toast
+    // Show login confirmation
     clearAllAffiliateReferralCodes()
-    appStore.showSuccess(t('auth.loginSuccess'))
+    appStore.showInfo(t('auth.loginSuccess'))
 
     // Redirect to dashboard or intended route
     const redirectTo = (router.currentRoute.value.query.redirect as string) || '/dashboard'
@@ -526,10 +526,10 @@ async function handle2FAVerify(code: string): Promise<void> {
   try {
     await authStore.login2FA(totpTempToken.value, code)
 
-    // Close modal and show success
+    // Close modal and show login confirmation
     show2FAModal.value = false
     clearAllAffiliateReferralCodes()
-    appStore.showSuccess(t('auth.loginSuccess'))
+    appStore.showInfo(t('auth.loginSuccess'))
 
     // Redirect to dashboard or intended route
     const redirectTo = (router.currentRoute.value.query.redirect as string) || '/dashboard'

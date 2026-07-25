@@ -278,7 +278,7 @@ async function finalizeTokenResponse(tokenResponse: OAuthTokenResponse, redirect
     window.sessionStorage.removeItem(EMAIL_OAUTH_PENDING_PROVIDER_KEY)
   }
   clearAllAffiliateReferralCodes()
-  appStore.showSuccess(t('auth.loginSuccess'))
+  appStore.showInfo(t('auth.loginSuccess'))
   await router.replace(sanitizeRedirectPath(redirect))
 }
 
