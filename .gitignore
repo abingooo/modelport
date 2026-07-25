@@ -138,6 +138,8 @@ docs/*
 !docs/ASYNC_IMAGE_TASKS.md
 !docs/MODELPORT_OPENAI_COMPATIBLE_PROVIDERS.md
 !docs/MODELPORT_WORKFLOW_CN.md
+!docs/releases/
+!docs/releases/*.md
 !docs/legal/
 !docs/legal/*.md
 .serena/
