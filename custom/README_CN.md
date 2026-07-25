@@ -64,7 +64,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml down
 
 ```text
 正式版    0.1.164.4
-开发版    0.1.164.4-dev.1
+开发版    0.1.164.4-dev.2
 测试版    0.1.164.4-beta.1
 候选版    0.1.164.4-rc.1
 ```
@@ -104,7 +104,7 @@ git push origin develop
 GitHub Release：
 
 ```text
-ghcr.io/abingooo/modelport:0.1.164.4-dev.1
+ghcr.io/abingooo/modelport:0.1.164.4-dev.2
 ghcr.io/abingooo/modelport:develop
 ghcr.io/abingooo/modelport:dev-sha-<commit>
 ```

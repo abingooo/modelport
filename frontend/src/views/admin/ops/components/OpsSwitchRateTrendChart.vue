@@ -33,8 +33,8 @@ const { t } = useI18n()
 
 const isDarkMode = computed(() => document.documentElement.classList.contains('dark'))
 const colors = computed(() => ({
-  teal: '#14b8a6',
-  tealAlpha: '#14b8a620',
+  primary: '#0d6ef2',
+  primaryAlpha: '#0d6ef220',
   grid: isDarkMode.value ? '#374151' : '#f3f4f6',
   text: isDarkMode.value ? '#9ca3af' : '#6b7280'
 }))
@@ -54,8 +54,8 @@ const chartData = computed(() => {
           if (requests <= 0) return 0
           return switches / requests
         }),
-        borderColor: colors.value.teal,
-        backgroundColor: colors.value.tealAlpha,
+        borderColor: colors.value.primary,
+        backgroundColor: colors.value.primaryAlpha,
         fill: true,
         tension: 0.35,
         pointRadius: 0,
