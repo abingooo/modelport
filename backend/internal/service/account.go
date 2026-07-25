@@ -252,12 +252,20 @@ func (a *Account) IsGrok() bool {
 	return a.Platform == PlatformGrok
 }
 
+func (a *Account) IsDeepSeek() bool {
+	return a != nil && a.Platform == PlatformDeepSeek
+}
+
+func (a *Account) IsDedicatedOpenAICompatibleProvider() bool {
+	return a != nil && IsDedicatedOpenAICompatiblePlatform(a.Platform)
+}
+
 func (a *Account) IsGrokOAuth() bool {
 	return a.IsGrok() && a.Type == AccountTypeOAuth
 }
 
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
+	return a != nil && IsOpenAICompatiblePlatform(a.Platform)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1264,6 +1272,27 @@ func (a *Account) GetOpenAIBaseURL() string {
 	return "https://api.openai.com"
 }
 
+func (a *Account) GetOpenAICompatibleBaseURL() string {
+	if a == nil {
+		return ""
+	}
+	switch a.Platform {
+	case PlatformOpenAI:
+		return a.GetOpenAIBaseURL()
+	case PlatformGrok:
+		return a.GetGrokBaseURL()
+	default:
+		preset, ok := openai_compat.LookupProvider(a.Platform)
+		if !ok {
+			return ""
+		}
+		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
+			return baseURL
+		}
+		return preset.DefaultBaseURL
+	}
+}
+
 func (a *Account) GetOpenAIAccessToken() string {
 	if !a.IsOpenAI() {
 		return ""
@@ -1352,6 +1381,13 @@ func (a *Account) GetOpenAIApiKey() string {
 	return a.GetCredential("api_key")
 }
 
+func (a *Account) GetOpenAICompatibleAPIKey() string {
+	if a == nil || a.Type != AccountTypeAPIKey || !a.IsOpenAICompatible() {
+		return ""
+	}
+	return strings.TrimSpace(a.GetCredential("api_key"))
+}
+
 func (a *Account) GetOpenAIUserAgent() string {
 	if !a.IsOpenAI() {
 		return ""
@@ -1432,6 +1468,9 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 		default:
 			return false
 		}
+	}
+	if a.IsDedicatedOpenAICompatibleProvider() {
+		return capability == OpenAIEndpointCapabilityChatCompletions
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:

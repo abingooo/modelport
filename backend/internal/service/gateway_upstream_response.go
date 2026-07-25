@@ -297,6 +297,11 @@ func extractUpstreamErrorMessage(body []byte) string {
 		}
 		return m
 	}
+	for _, path := range []string{"error.detail", "error.msg", "base_resp.status_msg", "error_msg", "msg"} {
+		if message := strings.TrimSpace(gjson.GetBytes(body, path).String()); message != "" {
+			return message
+		}
+	}
 
 	// ChatGPT 内部 API 风格：{"detail":"..."}
 	if d := gjson.GetBytes(body, "detail").String(); strings.TrimSpace(d) != "" {

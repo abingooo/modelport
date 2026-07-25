@@ -496,6 +496,9 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 		// Grok OAuth credentials are validated via token exchange/refresh and request-path probes.
 		return nil
 	default:
+		if IsDedicatedOpenAICompatiblePlatform(account.Platform) {
+			return nil
+		}
 		return fmt.Errorf("unsupported platform: %s", account.Platform)
 	}
 }

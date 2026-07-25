@@ -1,0 +1,94 @@
+name: Development Image
+
+on:
+  push:
+    branches:
+      - "develop"
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: development-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image metadata
+        id: meta
+        shell: bash
+        run: |
+          repository="${GITHUB_REPOSITORY,,}"
+          app_version="$(tr -d '[:space:]' < custom/VERSION)"
+          if [[ ! "${app_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$ ]]; then
+            echo "Invalid development version: ${app_version}" >&2
+            exit 1
+          fi
+          {
+            echo "image=ghcr.io/${repository}"
+            echo "app_version=${app_version}"
+            echo "release_tag=dev-v${app_version}"
+            echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Require a unique development version
+        shell: bash
+        run: |
+          tag="${{ steps.meta.outputs.release_tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            echo "Development release ${tag} already exists. Increment custom/VERSION." >&2
+            exit 1
+          fi
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ steps.meta.outputs.app_version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.meta.outputs.date }}
+          tags: |
+            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.app_version }}
+            ${{ steps.meta.outputs.image }}:develop
+            ${{ steps.meta.outputs.image }}:dev-sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.meta.outputs.app_version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Publish development release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: ModelPort ${{ steps.meta.outputs.app_version }}
+          prerelease: true
+          make_latest: false
+          body: |
+            ModelPort development build for the `develop` update channel.
+
+            - Image: `${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.app_version }}`
+            - Platform: `linux/amd64`
+            - Commit: `${{ github.sha }}`
+            - Digest: `${{ steps.build.outputs.digest }}`

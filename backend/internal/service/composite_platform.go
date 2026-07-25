@@ -106,6 +106,24 @@ func DetectModelPlatform(model string) (string, bool) {
 			return PlatformGemini, true
 		case "xai", "x-ai", "grok":
 			return PlatformGrok, true
+		case "deepseek":
+			return PlatformDeepSeek, true
+		case "qwen", "dashscope", "alibaba":
+			return PlatformQwen, true
+		case "glm", "zhipu", "bigmodel":
+			return PlatformGLM, true
+		case "kimi", "moonshot":
+			return PlatformKimi, true
+		case "doubao", "ark", "volcengine":
+			return PlatformDoubao, true
+		case "siliconflow":
+			return PlatformSiliconFlow, true
+		case "openrouter":
+			return PlatformOpenRouter, true
+		case "minimax":
+			return PlatformMiniMax, true
+		case "mimo", "xiaomi":
+			return PlatformMiMo, true
 		}
 		if rest != "" {
 			normalized = strings.TrimPrefix(rest, "models/")
@@ -133,6 +151,20 @@ func DetectModelPlatform(model string) (string, bool) {
 		return PlatformGemini, true
 	case normalized == "grok" || strings.HasPrefix(normalized, "grok-"):
 		return PlatformGrok, true
+	case normalized == "deepseek" || strings.HasPrefix(normalized, "deepseek-"):
+		return PlatformDeepSeek, true
+	case strings.HasPrefix(normalized, "qwen"), strings.HasPrefix(normalized, "qwq-"):
+		return PlatformQwen, true
+	case normalized == "glm" || strings.HasPrefix(normalized, "glm-"):
+		return PlatformGLM, true
+	case normalized == "kimi" || strings.HasPrefix(normalized, "kimi-"), strings.HasPrefix(normalized, "moonshot-"):
+		return PlatformKimi, true
+	case normalized == "doubao" || strings.HasPrefix(normalized, "doubao-"), strings.HasPrefix(normalized, "seed-"):
+		return PlatformDoubao, true
+	case normalized == "minimax" || strings.HasPrefix(normalized, "minimax-"):
+		return PlatformMiniMax, true
+	case normalized == "mimo" || strings.HasPrefix(normalized, "mimo-"):
+		return PlatformMiMo, true
 	default:
 		return "", false
 	}
@@ -178,10 +210,10 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 }
 
 func isConcreteRequestPlatform(platform string) bool {
-	switch platform {
-	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok:
-		return true
-	default:
-		return false
+	for _, concrete := range ConcretePlatforms {
+		if platform == concrete {
+			return true
+		}
 	}
+	return false
 }

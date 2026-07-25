@@ -119,13 +119,13 @@ func wrapUsageRecordTaskContext(parent context.Context, task service.UsageRecord
 
 func openAICompatibleRequestPlatform(ctx context.Context, apiKey *service.APIKey) string {
 	if platform, ok := service.ResolvedTargetPlatformFromContext(ctx); ok {
-		if platform == service.PlatformGrok {
-			return service.PlatformGrok
+		if service.IsOpenAICompatiblePlatform(platform) && platform != service.PlatformOpenAI {
+			return platform
 		}
 		return service.PlatformOpenAI
 	}
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
-		return service.PlatformGrok
+	if apiKey != nil && apiKey.Group != nil && service.IsOpenAICompatiblePlatform(apiKey.Group.Platform) && apiKey.Group.Platform != service.PlatformOpenAI {
+		return apiKey.Group.Platform
 	}
 	return service.PlatformOpenAI
 }
@@ -148,7 +148,7 @@ func allowOpenAICompatibleMessagesDispatch(apiKey *service.APIKey) bool {
 }
 
 func openAICompatibleTextTargetAllowed(c *gin.Context, apiKey *service.APIKey, model string) bool {
-	return compositeTargetPlatformAllowed(c, apiKey, model, service.PlatformOpenAI, service.PlatformGrok)
+	return compositeTargetPlatformAllowed(c, apiKey, model, service.OpenAICompatibleTextPlatforms()...)
 }
 
 // NewOpenAIGatewayHandler creates a new OpenAIGatewayHandler
@@ -264,7 +264,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	reqModel := modelResult.String()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
-	if !compositeTargetPlatformAllowed(c, apiKey, reqModel, service.PlatformOpenAI, service.PlatformGrok) {
+	if !compositeTargetPlatformAllowed(c, apiKey, reqModel, service.OpenAICompatibleTextPlatforms()...) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
 		return
 	}
@@ -1393,6 +1393,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		return
+	}
+	if apiKey.Group != nil && service.IsDedicatedOpenAICompatiblePlatform(apiKey.Group.Platform) {
+		service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Responses WebSocket API is not supported for this OpenAI-compatible provider")
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)

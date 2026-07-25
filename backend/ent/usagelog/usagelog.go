@@ -26,6 +26,8 @@ const (
 	FieldModel = "model"
 	// FieldRequestedModel holds the string denoting the requested_model field in the database.
 	FieldRequestedModel = "requested_model"
+	// FieldBillingModel holds the string denoting the billing_model field in the database.
+	FieldBillingModel = "billing_model"
 	// FieldUpstreamModel holds the string denoting the upstream_model field in the database.
 	FieldUpstreamModel = "upstream_model"
 	// FieldChannelID holds the string denoting the channel_id field in the database.
@@ -162,6 +164,7 @@ var Columns = []string{
 	FieldRequestID,
 	FieldModel,
 	FieldRequestedModel,
+	FieldBillingModel,
 	FieldUpstreamModel,
 	FieldChannelID,
 	FieldModelMappingChain,
@@ -220,6 +223,8 @@ var (
 	ModelValidator func(string) error
 	// RequestedModelValidator is a validator for the "requested_model" field. It is called by the builders before save.
 	RequestedModelValidator func(string) error
+	// BillingModelValidator is a validator for the "billing_model" field. It is called by the builders before save.
+	BillingModelValidator func(string) error
 	// UpstreamModelValidator is a validator for the "upstream_model" field. It is called by the builders before save.
 	UpstreamModelValidator func(string) error
 	// ModelMappingChainValidator is a validator for the "model_mapping_chain" field. It is called by the builders before save.
@@ -320,6 +325,11 @@ func ByModel(opts ...sql.OrderTermOption) OrderOption {
 // ByRequestedModel orders the results by the requested_model field.
 func ByRequestedModel(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRequestedModel, opts...).ToFunc()
+}
+
+// ByBillingModel orders the results by the billing_model field.
+func ByBillingModel(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBillingModel, opts...).ToFunc()
 }
 
 // ByUpstreamModel orders the results by the upstream_model field.

@@ -147,6 +147,21 @@ func TestResponsesToChatCompletionsRequest_ParallelToolCalls(t *testing.T) {
 	assert.Contains(t, string(payload), `"parallel_tool_calls":false`)
 }
 
+func TestResponsesToChatCompletionsRequest_IgnoresPromptCacheKey(t *testing.T) {
+	req := &ResponsesRequest{
+		Model:          "gpt-4o",
+		Input:          json.RawMessage(`"Hello"`),
+		PromptCacheKey: "conversation-123",
+	}
+
+	out, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.Len(t, out.Messages, 1)
+	assert.Equal(t, "user", out.Messages[0].Role)
+	assert.JSONEq(t, `"Hello"`, string(out.Messages[0].Content))
+}
+
 func chatMessageRoles(messages []ChatMessage) []string {
 	roles := make([]string, 0, len(messages))
 	for _, message := range messages {

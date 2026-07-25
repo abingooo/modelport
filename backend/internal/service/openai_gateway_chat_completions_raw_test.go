@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -120,6 +121,109 @@ func TestForwardAsRawChatCompletions_ForcesStreamUsageUpstreamAndPassesUsageDown
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream_options.include_usage").Bool())
 	require.Contains(t, rec.Body.String(), `"usage"`)
 	require.Contains(t, rec.Body.String(), "data: [DONE]")
+}
+
+func TestDedicatedOpenAICompatibleProvidersUsePresetTransportContracts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, platform := range openai_compat.ProviderIDs() {
+		t.Run(platform, func(t *testing.T) {
+			preset, ok := openai_compat.LookupProvider(platform)
+			require.True(t, ok)
+			model := preset.DefaultTestModel
+			if model == "" {
+				model = "configured-model"
+			}
+			body := []byte(`{"model":"` + model + `","messages":[{"role":"user","content":[{"type":"text","text":"inspect"},{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]},{"role":"assistant","content":null,"reasoning_content":"check","tool_calls":[{"id":"call_previous","type":"function","function":{"name":"lookup","arguments":"{\"id\":1}"}}]},{"role":"tool","tool_call_id":"call_previous","content":"done"}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],"parallel_tool_calls":true,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object"}}},"stream":true}`)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+
+			upstreamBody := strings.Join([]string{
+				`data: {"id":"chatcmpl_provider","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":"think"}}]}`,
+				"",
+				`data: {"id":"chatcmpl_provider","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"ok"}}]}`,
+				"",
+				`data: {"id":"chatcmpl_provider","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_next","type":"function","function":{"name":"lookup","arguments":"{\"id\":2}"}}]},"finish_reason":"tool_calls"}]}`,
+				"",
+				`data: {"id":"chatcmpl_provider","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}`,
+				"",
+				"data: [DONE]",
+				"",
+			}, "\n")
+			requestIDHeader := "x-request-id"
+			if platform == PlatformDoubao {
+				requestIDHeader = "x-tt-logid"
+			} else if platform == PlatformMiniMax {
+				requestIDHeader = "trace-id"
+			}
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}, requestIDHeader: []string{"rid_" + platform}},
+				Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+			}}
+			account := &Account{
+				ID: 101, Name: platform, Platform: platform, Type: AccountTypeAPIKey, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-provider-test"},
+			}
+			if platform == PlatformDoubao {
+				account.Credentials["endpoint_id"] = "ep-provider-test"
+			}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+
+			result, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.True(t, result.Stream)
+			require.NotNil(t, result.FirstTokenMs)
+			require.Equal(t, "rid_"+platform, result.RequestID)
+			require.Equal(t, 3, result.Usage.InputTokens)
+			require.Equal(t, 1, result.Usage.OutputTokens)
+			require.Equal(t, buildOpenAIChatCompletionsURL(preset.DefaultBaseURL), upstream.lastReq.URL.String())
+			require.Equal(t, "Bearer sk-provider-test", upstream.lastReq.Header.Get("Authorization"))
+			for key, value := range preset.DefaultHeaders {
+				require.Equal(t, value, upstream.lastReq.Header.Get(key), key)
+			}
+			expectedUpstreamModel := model
+			if platform == PlatformDoubao {
+				expectedUpstreamModel = "ep-provider-test"
+			}
+			require.Equal(t, expectedUpstreamModel, gjson.GetBytes(upstream.lastBody, "model").String())
+			require.True(t, gjson.GetBytes(upstream.lastBody, "stream_options.include_usage").Bool())
+			require.Equal(t, "image_url", gjson.GetBytes(upstream.lastBody, "messages.0.content.1.type").String())
+			require.Equal(t, "call_previous", gjson.GetBytes(upstream.lastBody, "messages.2.tool_call_id").String())
+			require.True(t, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
+			require.Equal(t, "json_schema", gjson.GetBytes(upstream.lastBody, "response_format.type").String())
+			require.Contains(t, rec.Body.String(), `"reasoning_content":"think"`)
+			require.Contains(t, rec.Body.String(), `"id":"call_next"`)
+			require.Contains(t, rec.Body.String(), `"content":"ok"`)
+		})
+	}
+}
+
+func TestMiniMaxRejectsUnsupportedChoiceCount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"MiniMax-M3","messages":[{"role":"user","content":"hello"}],"n":2}`)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(body))
+
+	upstream := &httpUpstreamRecorder{}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig(), httpUpstream: upstream}
+	account := &Account{
+		Platform: PlatformMiniMax,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "sk-provider-test",
+		},
+	}
+
+	_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+	require.Error(t, err)
+	require.Nil(t, upstream.lastReq)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "MiniMax only supports n=1")
 }
 
 func TestForwardAsRawChatCompletions_PreservesMappedGPT56MaxEffort(t *testing.T) {
@@ -612,6 +716,96 @@ func TestIsOpenAIChatUsageOnlyStreamChunk(t *testing.T) {
 	require.False(t, isOpenAIChatUsageOnlyStreamChunk(``))
 }
 
+func TestChatCompletionsPayloadStartsOutput(t *testing.T) {
+	t.Parallel()
+
+	require.False(t, chatCompletionsPayloadStartsOutput(`{"choices":[{"delta":{"role":"assistant","content":null,"reasoning_content":""}}]}`))
+	require.False(t, chatCompletionsPayloadStartsOutput(`{"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2}}`))
+	require.True(t, chatCompletionsPayloadStartsOutput(`{"choices":[{"delta":{"reasoning_content":"think"}}]}`))
+	require.True(t, chatCompletionsPayloadStartsOutput(`{"choices":[{"delta":{"content":"answer"}}]}`))
+	require.True(t, chatCompletionsPayloadStartsOutput(`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"lookup"}}]}}]}`))
+}
+
+func TestNormalizeProviderChatCompletionsRequestMiniMax(t *testing.T) {
+	t.Parallel()
+
+	account := &Account{Platform: PlatformMiniMax}
+	body := []byte(`{"model":"MiniMax-M3","n":1,"presence_penalty":0.2,"frequency_penalty":0.1,"logit_bias":{"1":2},"temperature":0.7}`)
+
+	normalized, err := normalizeProviderChatCompletionsRequest(account, body)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), gjson.GetBytes(normalized, "n").Int())
+	require.False(t, gjson.GetBytes(normalized, "presence_penalty").Exists())
+	require.False(t, gjson.GetBytes(normalized, "frequency_penalty").Exists())
+	require.False(t, gjson.GetBytes(normalized, "logit_bias").Exists())
+	require.Equal(t, 0.7, gjson.GetBytes(normalized, "temperature").Float())
+}
+
+func TestNormalizeProviderRequestWithPresetRejectsUnsupportedParameter(t *testing.T) {
+	t.Parallel()
+	preset := openai_compat.ProviderPreset{
+		DisplayName: "Strict Provider",
+		RequestParameterRules: map[string]openai_compat.ParameterAction{
+			"unsupported_option": openai_compat.ParameterReject,
+		},
+	}
+	_, err := normalizeProviderRequestWithPreset(preset, []byte(`{"unsupported_option":true}`))
+	require.ErrorContains(t, err, "Strict Provider does not support request parameter unsupported_option")
+}
+
+func TestNormalizeProviderRequestWithPresetRejectsUnsupportedCapabilities(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		body       string
+		capability func(*openai_compat.ProviderCapabilities)
+		want       string
+	}{
+		{"streaming", `{"stream":true}`, func(c *openai_compat.ProviderCapabilities) { c.Streaming = false }, "streaming requests"},
+		{"reasoning", `{"reasoning_effort":"high"}`, func(c *openai_compat.ProviderCapabilities) { c.Reasoning = openai_compat.CapabilityUnsupported }, "reasoning parameters"},
+		{"tools", `{"tools":[{"type":"function"}]}`, func(c *openai_compat.ProviderCapabilities) { c.Tools = openai_compat.CapabilityUnsupported }, "tool calls"},
+		{"vision", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}`, func(c *openai_compat.ProviderCapabilities) { c.Vision = openai_compat.CapabilityUnsupported }, "vision input"},
+		{"json schema", `{"response_format":{"type":"json_schema","json_schema":{"name":"answer"}}}`, func(c *openai_compat.ProviderCapabilities) { c.JSONSchema = openai_compat.CapabilityUnsupported }, "JSON Schema output"},
+		{"prompt cache", `{"messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}]}`, func(c *openai_compat.ProviderCapabilities) { c.PromptCache = openai_compat.CapabilityUnsupported }, "prompt cache controls"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			preset := openai_compat.ProviderPreset{DisplayName: "Strict Provider"}
+			preset.Capabilities = openai_compat.ProviderCapabilities{
+				Streaming:   true,
+				Reasoning:   openai_compat.CapabilitySupported,
+				Tools:       openai_compat.CapabilitySupported,
+				Vision:      openai_compat.CapabilitySupported,
+				JSONSchema:  openai_compat.CapabilitySupported,
+				PromptCache: openai_compat.CapabilitySupported,
+			}
+			tt.capability(&preset.Capabilities)
+
+			_, err := normalizeProviderRequestWithPreset(preset, []byte(tt.body))
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
+func TestNormalizeProviderChatCompletionsRequestDeepSeekRejectsVision(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"deepseek-chat","messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,AA=="}}]}]}`)
+	_, err := normalizeProviderChatCompletionsRequest(&Account{Platform: PlatformDeepSeek}, body)
+	require.ErrorContains(t, err, "DeepSeek does not support vision input")
+}
+
+func TestNormalizeProviderChatCompletionsRequestLeavesOtherProvidersUntouched(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"deepseek-chat","n":3,"presence_penalty":0.2}`)
+	normalized, err := normalizeProviderChatCompletionsRequest(&Account{Platform: PlatformDeepSeek}, body)
+	require.NoError(t, err)
+	require.JSONEq(t, string(body), string(normalized))
+}
+
 func TestEnsureOpenAIChatStreamUsage(t *testing.T) {
 	t.Parallel()
 
@@ -638,10 +832,44 @@ func TestBufferRawChatCompletions_RejectsOversizedResponse(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
 	svc.cfg.Gateway.UpstreamResponseReadMaxBytes = 3
 
-	result, err := svc.bufferRawChatCompletions(c, resp, "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
+	result, err := svc.bufferRawChatCompletions(c, resp, &Account{Platform: PlatformOpenAI}, "gpt-5.4", "gpt-5.4", "gpt-5.4", nil, nil, time.Now())
 	require.ErrorIs(t, err, ErrUpstreamResponseBodyTooLarge)
 	require.Nil(t, result)
 	require.Equal(t, http.StatusBadGateway, rec.Code)
+}
+
+func TestStreamRawChatCompletions_ReadFailureDoesNotReturnBillableResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	readErr := errors.New("upstream stream interrupted")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(io.MultiReader(
+			strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n"),
+			&rawChatErrorReader{err: readErr},
+		)),
+	}
+	svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
+
+	result, err := svc.streamRawChatCompletions(
+		c, resp, &Account{Platform: PlatformOpenAI}, "gpt-5.4", "gpt-5.4", "gpt-5.4",
+		nil, nil, time.Now(), 10,
+	)
+
+	require.ErrorIs(t, err, readErr)
+	require.Nil(t, result)
+}
+
+type rawChatErrorReader struct {
+	err error
+}
+
+func (r *rawChatErrorReader) Read([]byte) (int, error) {
+	return 0, r.err
 }
 
 func rawChatCompletionsTestConfig() *config.Config {

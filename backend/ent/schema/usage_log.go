@@ -47,6 +47,10 @@ func (UsageLog) Fields() []ent.Field {
 			MaxLen(100).
 			Optional().
 			Nillable(),
+		field.String("billing_model").
+			MaxLen(100).
+			Optional().
+			Nillable(),
 		// UpstreamModel stores the actual upstream model name when model mapping
 		// is applied. NULL means no mapping — the requested model was used as-is.
 		field.String("upstream_model").

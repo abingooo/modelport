@@ -8,12 +8,15 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestApplyErrorPassthroughRule_NoBoundService(t *testing.T) {
@@ -197,6 +200,32 @@ func TestOpenAIHandleErrorResponse_AppliesRuleFor422(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "upstream_error", errField["type"])
 	assert.Equal(t, "OpenAI上游失败", errField["message"])
+}
+
+func TestOpenAIHandleErrorResponseMatchesDedicatedProviderPlatform(t *testing.T) {
+	for _, platform := range openai_compat.ProviderIDs() {
+		t.Run(platform, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			rule := newNonFailoverPassthroughRule(http.StatusUnprocessableEntity, "invalid schema", http.StatusTeapot, platform+" matched")
+			rule.Platforms = []string{platform}
+			ruleSvc := &ErrorPassthroughService{}
+			ruleSvc.setLocalCache([]*model.ErrorPassthroughRule{rule})
+			BindErrorPassthroughService(c, ruleSvc)
+
+			resp := &http.Response{
+				StatusCode: http.StatusUnprocessableEntity,
+				Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"Invalid schema for field messages"}}`)),
+				Header:     http.Header{},
+			}
+			account := &Account{ID: 2, Platform: platform, Type: AccountTypeAPIKey}
+			_, err := (&OpenAIGatewayService{}).handleErrorResponse(context.Background(), resp, c, account, nil)
+			require.Error(t, err)
+			require.Equal(t, http.StatusTeapot, rec.Code)
+			require.Equal(t, platform+" matched", gjson.Get(rec.Body.String(), "error.message").String())
+		})
+	}
 }
 
 func TestGeminiWriteGeminiMappedError_AppliesRuleFor422(t *testing.T) {

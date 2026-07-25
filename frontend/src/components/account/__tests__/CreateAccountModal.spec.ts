@@ -160,6 +160,25 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
   })
 
+  it.each([
+    ['通义千问'],
+    ['智谱 GLM'],
+    ['Kimi'],
+    ['ByteDance'],
+    ['SiliconFlow'],
+    ['OpenRouter'],
+    ['MiniMax'],
+    ['小米 MiMo']
+  ])('uses a neutral API key placeholder when creating a %s account', async (platformLabel) => {
+    const wrapper = mountModal()
+
+    await selectButtonByText(wrapper, platformLabel)
+    await flushPromises()
+
+    expect(wrapper.get('input[type="password"][placeholder="Enter API key"]').exists()).toBe(true)
+    wrapper.unmount()
+  })
+
   it('sends false explicitly for normal OpenAI account creation by default', async () => {
     await submitApiKeyAccount('openai')
 

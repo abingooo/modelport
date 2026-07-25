@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
+import {
+  apiKeyPlaceholderForPlatform,
+  defaultBaseUrlForPlatform
+} from '@/utils/providerPresets'
+
 const source = readFileSync(
   resolve(process.cwd(), 'src/components/account/CreateAccountModal.vue'),
   'utf8'
@@ -12,9 +17,11 @@ describe('CreateAccountModal Grok account types', () => {
     expect(source).toContain('data-testid="grok-account-type-api-key"')
     expect(source).toContain("@click=\"accountCategory = 'apikey'\"")
     expect(source).toContain("newPlatform === 'grok'")
-    expect(source).toContain("? 'https://api.x.ai/v1'")
+    expect(source).toContain('defaultBaseUrlForPlatform(form.platform)')
+    expect(defaultBaseUrlForPlatform('grok')).toBe('https://api.x.ai/v1')
     expect(source).toContain("form.platform === 'grok'")
-    expect(source).toContain("? 'xai-...'")
+    expect(source).toContain('apiKeyPlaceholderForPlatform(form.platform)')
+    expect(apiKeyPlaceholderForPlatform('grok')).toBe('xai-...')
   })
 
   it('exposes custom upstream URL and header override for the OAuth create flow', () => {

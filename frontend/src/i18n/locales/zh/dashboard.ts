@@ -155,7 +155,10 @@ export default {
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
-        opencode: 'OpenCode'
+        opencode: 'OpenCode',
+        continue: 'Continue',
+        openaiSdk: 'OpenAI SDK',
+        httpApi: 'HTTP API'
       },
       antigravity: {
         description: '为 Antigravity 分组配置 API 访问。请根据您使用的客户端选择对应的配置方式。',
@@ -183,6 +186,28 @@ export default {
         claudeNote: '二选一即可：终端命令仅在当前会话生效；保存 settings.json 可作为用户级持久配置。',
         codexNote: '将 config.toml 保存到 ~/.codex，并在启动 Codex 前设置 SUB2API_API_KEY。',
         codexNoteWindows: '将 config.toml 保存到 %USERPROFILE%\\.codex，并在 PowerShell 中设置 SUB2API_API_KEY 后启动 Codex。'
+      },
+      deepseek: {
+        description: '配置 OpenCode，通过当前 ModelPort DeepSeek 分组调用 deepseek-chat 或 deepseek-reasoner。',
+        claudeDescription: '配置 Claude Code，通过 ModelPort Messages 兼容入口使用 DeepSeek。',
+        codexDescription: '配置 Codex CLI，通过 ModelPort Responses 兼容入口使用 DeepSeek。',
+        continueDescription: '为 Continue 配置 DeepSeek Chat 和 DeepSeek Reasoner 模型。',
+        sdkDescription: '使用 OpenAI 官方 SDK，通过 Chat Completions 接口调用当前 DeepSeek 分组。',
+        httpDescription: '使用当前系统的命令行工具直接调用 DeepSeek Chat Completions 接口。',
+        codexConfigTomlHint: '如已有 config.toml，请先备份并合并此服务商配置；DeepSeek 不启用 Responses WebSocket。',
+        continueConfigHint: '如已有 config.yaml，请将 models 条目合并到现有配置中。',
+        claudeNote: '二选一即可：终端命令用于当前会话，settings.json 用于用户级持久配置。',
+        codexNote: '将 config.toml 保存到 ~/.codex，并在启动 Codex 前设置 MODELPORT_API_KEY。',
+        codexNoteWindows: '将 config.toml 保存到 %USERPROFILE%\\.codex，并在 PowerShell 中设置 MODELPORT_API_KEY 后启动 Codex。',
+        continueNote: '保存配置后，在 Continue 的模型选择器中选择 DeepSeek Chat 或 DeepSeek Reasoner。',
+        sdkNote: '示例使用 OpenAI 兼容的 /v1/chat/completions 接口。',
+        httpNote: '命令会发送一次非流式 deepseek-chat 请求，可直接用于连通性验证。'
+      },
+      compatible: {
+        description: '配置 OpenCode、Claude Code、Codex、Continue、OpenAI SDK 或 HTTP，通过 ModelPort 的 {provider} 分组调用模型。',
+        note: '示例使用 ModelPort 兼容接口；如果账号绑定了其他上游部署，请替换模型名或方舟 Endpoint ID。',
+        codexConfigHint: '如已有 config.toml，请先备份并合并此服务商配置。',
+        continueConfigHint: '如已有 Continue config.yaml，请合并其中的模型条目。'
       },
       opencode: {
         title: 'OpenCode 配置示例',
@@ -421,7 +446,8 @@ export default {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
       gemini: 'Gemini',
-      grok: 'Grok'
+      grok: 'Grok',
+      deepseek: 'DeepSeek'
     },
     extraModelsHeader: '附加模型',
     extraModelsEmpty: '无附加模型',

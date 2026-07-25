@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+
+deploy_dir="${MODELPORT_DEPLOY_DIR:-/opt/modelport}"
+request_file="${MODELPORT_UPDATE_REQUEST_FILE:-${deploy_dir}/data/update-request}"
+env_file="${MODELPORT_ENV_FILE:-${deploy_dir}/.env}"
+compose_file="${MODELPORT_COMPOSE_FILE:-${deploy_dir}/docker-compose.yml}"
+health_url="${MODELPORT_HEALTH_URL:-http://127.0.0.1:8080/health}"
+image_repository="ghcr.io/abingooo/modelport"
+service_name="modelport"
+
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
+[ -f "${request_file}" ] || exit 0
+[ -f "${env_file}" ] || { echo "ModelPort env file not found: ${env_file}" >&2; exit 1; }
+[ -f "${compose_file}" ] || { echo "ModelPort compose file not found: ${compose_file}" >&2; exit 1; }
+
+mkdir -p "${deploy_dir}/run"
+exec 9>"${deploy_dir}/run/update.lock"
+flock -n 9 || exit 0
+
+processing_file="${request_file}.processing"
+failed_file="${request_file}.failed"
+env_backup="${env_file}.before-update"
+mv "${request_file}" "${processing_file}"
+
+version="$(sed -n '1p' "${processing_file}")"
+line_count="$(wc -l < "${processing_file}" | tr -d ' ')"
+if [ "${line_count}" != "1" ]; then
+  mv "${processing_file}" "${failed_file}"
+  echo "Invalid ModelPort update request" >&2
+  exit 1
+fi
+
+if printf '%s\n' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-dev\.[0-9]+$'; then
+  image_tag="${version}"
+elif printf '%s\n' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+  image_tag="custom-v${version}"
+else
+  mv "${processing_file}" "${failed_file}"
+  echo "Rejected ModelPort version: ${version}" >&2
+  exit 1
+fi
+
+image="${image_repository}:${image_tag}"
+cp -p "${env_file}" "${env_backup}"
+temporary_env="${env_file}.tmp.$$"
+awk -v image="${image}" '
+  BEGIN { found = 0 }
+  /^MODELPORT_IMAGE=/ { print "MODELPORT_IMAGE=" image; found = 1; next }
+  { print }
+  END { if (!found) print "MODELPORT_IMAGE=" image }
+' "${env_file}" > "${temporary_env}"
+chmod --reference="${env_file}" "${temporary_env}"
+mv "${temporary_env}" "${env_file}"
+
+rollback() {
+  echo "ModelPort ${version} failed; restoring the previous image" >&2
+  mv "${env_backup}" "${env_file}"
+  compose --env-file "${env_file}" -f "${compose_file}" up -d --no-deps "${service_name}" || true
+  mv "${processing_file}" "${failed_file}" 2>/dev/null || true
+}
+trap rollback HUP INT TERM EXIT
+
+compose --env-file "${env_file}" -f "${compose_file}" pull "${service_name}"
+compose --env-file "${env_file}" -f "${compose_file}" up -d --no-deps "${service_name}"
+
+healthy=false
+attempt=0
+while [ "${attempt}" -lt 60 ]; do
+  if curl --fail --silent --show-error --max-time 3 "${health_url}" >/dev/null 2>&1; then
+    healthy=true
+    break
+  fi
+  attempt=$((attempt + 1))
+  sleep 2
+done
+[ "${healthy}" = "true" ] || { echo "Updated container did not become healthy" >&2; exit 1; }
+
+rm -f "${processing_file}" "${env_backup}" "${failed_file}"
+trap - HUP INT TERM EXIT
+echo "ModelPort updated to ${version}"

@@ -10,6 +10,7 @@ import { opsAPI, type OpsDashboardOverview, type OpsMetricThresholds, type OpsRe
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
 import { useAdminSettingsStore } from '@/stores'
 import { formatNumber } from '@/utils/format'
+import { CONCRETE_PLATFORM_ORDER, platformDisplayName } from '@/utils/providerPresets'
 
 type RealtimeWindow = '1min' | '5min' | '30min' | '1h'
 
@@ -108,11 +109,7 @@ const groups = ref<Array<{ id: number; name: string; platform: string }>>([])
 
 const platformOptions = computed(() => [
   { value: '', label: t('common.all') },
-  { value: 'openai', label: 'OpenAI' },
-  { value: 'anthropic', label: 'Anthropic' },
-  { value: 'gemini', label: 'Gemini' },
-  { value: 'antigravity', label: 'Antigravity' },
-  { value: 'grok', label: 'Grok' }
+  ...CONCRETE_PLATFORM_ORDER.map(value => ({ value, label: platformDisplayName(value) }))
 ])
 
 const timeRangeOptions = computed(() => [

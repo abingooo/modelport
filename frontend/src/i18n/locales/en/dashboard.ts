@@ -155,6 +155,9 @@ export default {
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
         opencode: 'OpenCode',
+        continue: 'Continue',
+        openaiSdk: 'OpenAI SDK',
+        httpApi: 'HTTP API',
       },
       antigravity: {
         description: 'Configure API access for Antigravity group. Select the configuration method based on your client.',
@@ -179,6 +182,28 @@ export default {
         claudeNote: 'Choose one method: run the terminal commands for the current session, or save settings.json for user-level persistent configuration.',
         codexNote: 'Save config.toml under ~/.codex and set SUB2API_API_KEY before starting Codex.',
         codexNoteWindows: 'Save config.toml under %USERPROFILE%\\.codex and set SUB2API_API_KEY in PowerShell before starting Codex.',
+      },
+      deepseek: {
+        description: 'Configure OpenCode to call deepseek-chat or deepseek-reasoner through your ModelPort DeepSeek group.',
+        claudeDescription: 'Configure Claude Code to use DeepSeek through the ModelPort Messages compatibility endpoint.',
+        codexDescription: 'Configure Codex CLI to use DeepSeek through the ModelPort Responses compatibility endpoint.',
+        continueDescription: 'Configure DeepSeek Chat and DeepSeek Reasoner models for Continue.',
+        sdkDescription: 'Use the official OpenAI SDK to call your DeepSeek group through Chat Completions.',
+        httpDescription: 'Call the DeepSeek Chat Completions endpoint directly with your operating system command-line tools.',
+        codexConfigTomlHint: 'Back up and merge an existing config.toml before adding this provider. Responses WebSocket is not enabled for DeepSeek.',
+        continueConfigHint: 'Merge these model entries into your existing config.yaml when one already exists.',
+        claudeNote: 'Choose one method: terminal commands apply to the current session, while settings.json provides user-level persistent configuration.',
+        codexNote: 'Save config.toml under ~/.codex and set MODELPORT_API_KEY before starting Codex.',
+        codexNoteWindows: 'Save config.toml under %USERPROFILE%\\.codex and set MODELPORT_API_KEY in PowerShell before starting Codex.',
+        continueNote: 'After saving, select DeepSeek Chat or DeepSeek Reasoner from the Continue model picker.',
+        sdkNote: 'The examples use the OpenAI-compatible /v1/chat/completions endpoint.',
+        httpNote: 'The command sends one non-streaming deepseek-chat request and can be used as a direct connectivity check.',
+      },
+      compatible: {
+        description: 'Configure OpenCode, Claude Code, Codex, Continue, an OpenAI SDK, or HTTP to use the ModelPort {provider} group.',
+        note: 'These examples use ModelPort compatibility endpoints. Replace the model or Ark endpoint ID when your account uses a different upstream deployment.',
+        codexConfigHint: 'Back up and merge an existing config.toml before adding this provider.',
+        continueConfigHint: 'Merge these model entries into an existing Continue config.yaml.',
       },
       opencode: {
         title: 'OpenCode Example',
@@ -416,7 +441,8 @@ export default {
       openai: 'OpenAI',
       anthropic: 'Anthropic',
       gemini: 'Gemini',
-      grok: 'Grok'
+      grok: 'Grok',
+      deepseek: 'DeepSeek'
     },
     extraModelsHeader: 'Extra Models',
     extraModelsEmpty: 'No extra models',

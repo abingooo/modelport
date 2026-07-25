@@ -3999,6 +3999,11 @@ import { extractApiErrorMessage } from "@/utils/apiError";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
 import {
+  CONCRETE_PLATFORM_ORDER,
+  GROUP_PLATFORM_ORDER,
+  platformDisplayName,
+} from "@/utils/providerPresets";
+import {
   createDefaultMessagesDispatchFormState,
   messagesDispatchConfigToFormState,
   messagesDispatchFormStateToConfig,
@@ -4211,30 +4216,16 @@ const exclusiveOptions = computed(() => [
 ]);
 
 const platformOptions = computed(() => [
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "antigravity", label: "Antigravity" },
-  { value: "grok", label: "Grok" },
-  { value: "composite", label: "Composite" },
+  ...GROUP_PLATFORM_ORDER.map((value) => ({ value, label: platformDisplayName(value) })),
 ]);
 
 const platformFilterOptions = computed(() => [
   { value: "", label: t("admin.groups.allPlatforms") },
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "antigravity", label: "Antigravity" },
-  { value: "grok", label: "Grok" },
-  { value: "composite", label: "Composite" },
+  ...GROUP_PLATFORM_ORDER.map((value) => ({ value, label: platformDisplayName(value) })),
 ]);
 
 const compositeRoutePlatformOptions = computed(() => [
-  { value: "anthropic", label: "Anthropic" },
-  { value: "openai", label: "OpenAI" },
-  { value: "gemini", label: "Gemini" },
-  { value: "antigravity", label: "Antigravity" },
-  { value: "grok", label: "Grok" },
+  ...CONCRETE_PLATFORM_ORDER.map((value) => ({ value, label: platformDisplayName(value) })),
 ]);
 
 const compositeRouteEndpointOptions = computed(() => [

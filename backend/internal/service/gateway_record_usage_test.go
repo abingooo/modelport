@@ -190,6 +190,8 @@ func TestGatewayServiceRecordUsage_PreservesRequestedAndUpstreamModels(t *testin
 	require.NotNil(t, usageRepo.lastLog)
 	require.Equal(t, "claude-sonnet-4", usageRepo.lastLog.Model)
 	require.Equal(t, "claude-sonnet-4", usageRepo.lastLog.RequestedModel)
+	require.NotNil(t, usageRepo.lastLog.BillingModel)
+	require.Equal(t, "claude-sonnet-4", *usageRepo.lastLog.BillingModel)
 	require.NotNil(t, usageRepo.lastLog.UpstreamModel)
 	require.Equal(t, mappedModel, *usageRepo.lastLog.UpstreamModel)
 }

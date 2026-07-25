@@ -586,7 +586,7 @@ async function finalizeCompletion(completion: PendingOAuthExchangeResponse, redi
   persistOAuthTokenContext(completion)
   await authStore.setToken(completion.access_token)
   clearAllAffiliateReferralCodes()
-  appStore.showSuccess(t('auth.loginSuccess'))
+  appStore.showInfo(t('auth.loginSuccess'))
   await router.replace(redirect)
 }
 
@@ -731,7 +731,7 @@ async function handleSubmitTotpChallenge() {
     })
     await authStore.setToken(completion.access_token)
     clearAllAffiliateReferralCodes()
-    appStore.showSuccess(t('auth.loginSuccess'))
+    appStore.showInfo(t('auth.loginSuccess'))
     await router.replace(redirectTo.value)
   } catch (e: unknown) {
     totpError.value = getRequestErrorMessage(e, t('auth.loginFailed'))
@@ -755,7 +755,7 @@ onMounted(async () => {
       persistOAuthTokenContext(legacyLogin)
       await authStore.setToken(legacyLogin.access_token)
       clearAllAffiliateReferralCodes()
-      appStore.showSuccess(t('auth.loginSuccess'))
+      appStore.showInfo(t('auth.loginSuccess'))
       await router.replace(redirect)
       return
     }

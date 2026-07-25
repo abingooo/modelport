@@ -16,7 +16,6 @@ func ResponsesToChatCompletionsRequest(req *ResponsesRequest) (*ChatCompletionsR
 	if req == nil {
 		return nil, fmt.Errorf("responses request is nil")
 	}
-
 	messages, err := responsesInputToChatMessages(req.Instructions, req.Input)
 	if err != nil {
 		return nil, err

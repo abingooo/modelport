@@ -24,6 +24,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -2500,6 +2501,28 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 				Object:      "model",
 				OwnedBy:     "xai",
 				DisplayName: requestedModel,
+			})
+		}
+		response.Success(c, models)
+		return
+	}
+
+	if account.IsDedicatedOpenAICompatibleProvider() {
+		modelIDs := openai_compat.DefaultModelIDs(account.Platform)
+		if mapping := account.GetModelMapping(); len(mapping) > 0 {
+			modelIDs = modelIDs[:0]
+			for requestedModel := range mapping {
+				modelIDs = append(modelIDs, requestedModel)
+			}
+			sort.Strings(modelIDs)
+		}
+		models := make([]openai.Model, 0, len(modelIDs))
+		for _, modelID := range modelIDs {
+			models = append(models, openai.Model{
+				ID:          modelID,
+				Object:      "model",
+				Type:        "model",
+				DisplayName: modelID,
 			})
 		}
 		response.Success(c, models)

@@ -34,6 +34,7 @@ type systemHandlerUpdateServiceStub struct {
 	rollbackVersions      []service.RollbackVersion
 	rollbackVersionsErr   error
 	rollbackVersionsCall  int
+	updateMode            string
 }
 
 func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bool) (*service.UpdateInfo, error) {
@@ -46,6 +47,10 @@ func (s *systemHandlerUpdateServiceStub) PerformUpdate(ctx context.Context) erro
 	s.performCtxErr = ctx.Err()
 	_, s.performHasDeadline = ctx.Deadline()
 	return s.performErr
+}
+
+func (s *systemHandlerUpdateServiceStub) UpdateMode() string {
+	return s.updateMode
 }
 
 func (s *systemHandlerUpdateServiceStub) Rollback() error {
@@ -75,6 +80,8 @@ type systemUpdateResponseEnvelope struct {
 		CurrentVersion  string `json:"current_version"`
 		LatestVersion   string `json:"latest_version"`
 		OperationID     string `json:"operation_id"`
+		UpdateQueued    bool   `json:"update_queued"`
+		NeedRestart     bool   `json:"need_restart"`
 	} `json:"data"`
 }
 
@@ -171,6 +178,24 @@ func TestSystemHandlerPerformUpdateFailureStillReturnsInternalError(t *testing.T
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	require.Equal(t, http.StatusInternalServerError, body.Code)
 	require.Equal(t, "internal error", body.Message)
+}
+
+func TestSystemHandlerPerformDockerUpdateReturnsQueued(t *testing.T) {
+	updateSvc := &systemHandlerUpdateServiceStub{updateMode: "docker"}
+	repo := newMemoryIdempotencyRepoStub()
+	router := newSystemHandlerTestRouter(t, updateSvc, repo)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/admin/system/update", nil)
+	req.Header.Set("Idempotency-Key", "docker-update")
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var body systemUpdateResponseEnvelope
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	require.Equal(t, "Docker update queued", body.Data.Message)
+	require.True(t, body.Data.UpdateQueued)
+	require.False(t, body.Data.NeedRestart)
 }
 
 // TestSystemHandlerPerformUpdateSurvivesClientDisconnect reproduces #4504:

@@ -542,6 +542,7 @@ export default {
       allBillingModes: '全部计费模式',
       ipAddress: 'IP',
       clickToViewBalance: '点击查看充值记录',
+      billingModel: '计费模型',
       failedToLoadUser: '加载用户信息失败',
       userDeletedBadge: '已删除',
       tokenRanking: {

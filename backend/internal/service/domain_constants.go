@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 )
 
 // Status constants
@@ -43,6 +44,15 @@ const (
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
+	PlatformDeepSeek    = domain.PlatformDeepSeek
+	PlatformQwen        = domain.PlatformQwen
+	PlatformGLM         = domain.PlatformGLM
+	PlatformKimi        = domain.PlatformKimi
+	PlatformDoubao      = domain.PlatformDoubao
+	PlatformSiliconFlow = domain.PlatformSiliconFlow
+	PlatformOpenRouter  = domain.PlatformOpenRouter
+	PlatformMiniMax     = domain.PlatformMiniMax
+	PlatformMiMo        = domain.PlatformMiMo
 	PlatformComposite   = domain.PlatformComposite
 )
 
@@ -55,6 +65,46 @@ var AllowedQuotaPlatforms = []string{
 	PlatformGemini,
 	PlatformAntigravity,
 	PlatformGrok,
+	PlatformDeepSeek,
+	PlatformQwen,
+	PlatformGLM,
+	PlatformKimi,
+	PlatformDoubao,
+	PlatformSiliconFlow,
+	PlatformOpenRouter,
+	PlatformMiniMax,
+	PlatformMiMo,
+}
+
+var ConcretePlatforms = []string{
+	PlatformAnthropic,
+	PlatformGemini,
+	PlatformOpenAI,
+	PlatformAntigravity,
+	PlatformGrok,
+	PlatformDeepSeek,
+	PlatformQwen,
+	PlatformGLM,
+	PlatformKimi,
+	PlatformDoubao,
+	PlatformSiliconFlow,
+	PlatformOpenRouter,
+	PlatformMiniMax,
+	PlatformMiMo,
+}
+
+func IsDedicatedOpenAICompatiblePlatform(platform string) bool {
+	return openai_compat.IsProvider(platform)
+}
+
+func IsOpenAICompatiblePlatform(platform string) bool {
+	return platform == PlatformOpenAI || platform == PlatformGrok || IsDedicatedOpenAICompatiblePlatform(platform)
+}
+
+func OpenAICompatibleTextPlatforms() []string {
+	platforms := []string{PlatformOpenAI, PlatformGrok}
+	platforms = append(platforms, openai_compat.ProviderIDs()...)
+	return platforms
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。

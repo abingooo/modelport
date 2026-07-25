@@ -1,0 +1,19 @@
+[Unit]
+Description=Apply a queued ModelPort Docker update
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+Environment=MODELPORT_DEPLOY_DIR=/opt/modelport
+ExecStart=/usr/local/sbin/modelport-docker-updater
+User=root
+Group=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/modelport
+
+[Install]
+WantedBy=multi-user.target

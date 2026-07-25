@@ -202,6 +202,11 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import type { GroupPlatform } from '@/types'
+import {
+  getOpenAICompatibleProviderPreset,
+  isDedicatedOpenAICompatibleProvider,
+  type OpenAICompatibleProviderPreset
+} from '@/utils/providerPresets'
 
 interface Props {
   show: boolean
@@ -239,9 +244,11 @@ const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
 type CodexAuthMode = 'legacy' | 'api-key'
 const codexAuthMode = ref<CodexAuthMode>('legacy')
+const compatiblePreset = computed(() => getOpenAICompatibleProviderPreset(props.platform))
 
 // Reset tabs when platform changes
 const defaultClientTab = computed(() => {
+  if (isDedicatedOpenAICompatibleProvider(props.platform)) return 'opencode'
   switch (props.platform) {
     case 'openai':
       return 'codex'
@@ -269,8 +276,8 @@ watch(() => props.show, (show) => {
 })
 
 // Reset shell tab when client changes
-watch(activeClientTab, () => {
-  activeTab.value = 'unix'
+watch(activeClientTab, (client) => {
+  activeTab.value = client === 'sdk' ? 'python' : 'unix'
 })
 
 // Icon components
@@ -338,6 +345,16 @@ const SparkleIcon = {
 
 const clientTabs = computed((): TabConfig[] => {
   if (!props.platform) return []
+  if (compatiblePreset.value) {
+    return [
+      { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon },
+      { id: 'claude', label: t('keys.useKeyModal.cliTabs.claudeCode'), icon: TerminalIcon },
+      { id: 'codex', label: t('keys.useKeyModal.cliTabs.codexCli'), icon: TerminalIcon },
+      { id: 'continue', label: t('keys.useKeyModal.cliTabs.continue'), icon: TerminalIcon },
+      { id: 'sdk', label: t('keys.useKeyModal.cliTabs.openaiSdk'), icon: TerminalIcon },
+      { id: 'http', label: t('keys.useKeyModal.cliTabs.httpApi'), icon: TerminalIcon }
+    ]
+  }
   switch (props.platform) {
     case 'openai': {
       const tabs: TabConfig[] = [
@@ -389,7 +406,14 @@ const openaiTabs: TabConfig[] = [
   { id: 'windows', label: 'Windows', icon: WindowsIcon }
 ]
 
-const showShellTabs = computed(() => activeClientTab.value !== 'opencode')
+const sdkTabs: TabConfig[] = [
+  { id: 'python', label: 'Python', icon: TerminalIcon },
+  { id: 'node', label: 'Node.js', icon: TerminalIcon }
+]
+
+const showShellTabs = computed(() =>
+  activeClientTab.value !== 'opencode' || Boolean(compatiblePreset.value)
+)
 
 const showCodexAuthMode = computed(() =>
   props.platform === 'openai' &&
@@ -398,6 +422,12 @@ const showCodexAuthMode = computed(() =>
 
 const currentTabs = computed(() => {
   if (!showShellTabs.value) return []
+  if (activeClientTab.value === 'sdk') {
+    return sdkTabs
+  }
+  if (activeClientTab.value === 'opencode' || activeClientTab.value === 'continue') {
+    return openaiTabs
+  }
   if (activeClientTab.value === 'codex' || activeClientTab.value === 'codex-ws' || activeClientTab.value === 'grok') {
     return openaiTabs
   }
@@ -405,6 +435,9 @@ const currentTabs = computed(() => {
 })
 
 const platformDescription = computed(() => {
+  if (compatiblePreset.value) {
+    return t('keys.useKeyModal.compatible.description', { provider: compatiblePreset.value.name })
+  }
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -423,12 +456,30 @@ const platformDescription = computed(() => {
         return t('keys.useKeyModal.grok.codexDescription')
       }
       return t('keys.useKeyModal.grok.description')
+    case 'deepseek':
+      switch (activeClientTab.value) {
+        case 'claude':
+          return t('keys.useKeyModal.deepseek.claudeDescription')
+        case 'codex':
+          return t('keys.useKeyModal.deepseek.codexDescription')
+        case 'continue':
+          return t('keys.useKeyModal.deepseek.continueDescription')
+        case 'sdk':
+          return t('keys.useKeyModal.deepseek.sdkDescription')
+        case 'http':
+          return t('keys.useKeyModal.deepseek.httpDescription')
+        default:
+          return t('keys.useKeyModal.deepseek.description')
+      }
     default:
       return t('keys.useKeyModal.description')
   }
 })
 
 const platformNote = computed(() => {
+  if (compatiblePreset.value) {
+    return t('keys.useKeyModal.compatible.note', { provider: compatiblePreset.value.name })
+  }
   switch (props.platform) {
     case 'openai':
       if (activeClientTab.value === 'claude') {
@@ -455,12 +506,31 @@ const platformNote = computed(() => {
       return activeTab.value === 'windows'
         ? t('keys.useKeyModal.grok.noteWindows')
         : t('keys.useKeyModal.grok.note')
+    case 'deepseek':
+      switch (activeClientTab.value) {
+        case 'claude':
+          return t('keys.useKeyModal.deepseek.claudeNote')
+        case 'codex':
+          return activeTab.value === 'windows'
+            ? t('keys.useKeyModal.deepseek.codexNoteWindows')
+            : t('keys.useKeyModal.deepseek.codexNote')
+        case 'continue':
+          return t('keys.useKeyModal.deepseek.continueNote')
+        case 'sdk':
+          return t('keys.useKeyModal.deepseek.sdkNote')
+        case 'http':
+          return t('keys.useKeyModal.deepseek.httpNote')
+        default:
+          return ''
+      }
     default:
       return t('keys.useKeyModal.note')
   }
 })
 
-const showPlatformNote = computed(() => activeClientTab.value !== 'opencode')
+const showPlatformNote = computed(() =>
+  activeClientTab.value !== 'opencode' && Boolean(platformNote.value)
+)
 
 const escapeHtml = (value: string) => value
   .replace(/&/g, '&amp;')
@@ -498,6 +568,29 @@ const currentFiles = computed((): FileConfig[] => {
     const trimmed = baseRoot.replace(/\/+$/, '')
     return trimmed.endsWith('/v1beta') ? trimmed : `${trimmed}/v1beta`
   })()
+
+  if (compatiblePreset.value) {
+    const preset = compatiblePreset.value
+    const model = compatibleDefaultModel(preset)
+    switch (activeClientTab.value) {
+      case 'claude':
+        return generateOpenAICompatibleClaudeFiles(baseRoot, apiKey, model)
+      case 'codex':
+        return generateCompatibleCodexFiles(apiBase, apiKey, preset, model)
+      case 'continue':
+        return [generateCompatibleContinueConfig(apiBase, apiKey, preset)]
+      case 'sdk':
+        return [generateCompatibleSDKConfig(apiBase, apiKey, model)]
+      case 'http':
+        return [generateCompatibleHTTPConfig(apiBase, apiKey, model)]
+      case 'opencode': {
+        const path = activeTab.value === 'windows'
+          ? '%USERPROFILE%\\.config\\opencode\\opencode.json'
+          : '~/.config/opencode/opencode.json'
+        return [generateOpenCodeConfig(preset.id, apiBase, apiKey, path)]
+      }
+    }
+  }
 
   if (activeClientTab.value === 'opencode') {
     switch (props.platform) {
@@ -537,7 +630,7 @@ const currentFiles = computed((): FileConfig[] => {
       return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
     case 'grok':
       if (activeClientTab.value === 'claude') {
-        return generateGrokClaudeFiles(baseRoot, apiKey)
+        return generateOpenAICompatibleClaudeFiles(baseRoot, apiKey, 'grok-4.5')
       }
       if (activeClientTab.value === 'codex') {
         return generateGrokCodexFiles(apiBase, apiKey)
@@ -603,16 +696,16 @@ $env:CLAUDE_CODE_ATTRIBUTION_HEADER=0`
   ]
 }
 
-function generateGrokClaudeFiles(baseUrl: string, apiKey: string): FileConfig[] {
+function generateOpenAICompatibleClaudeFiles(baseUrl: string, apiKey: string, model: string): FileConfig[] {
   const environment = {
     ANTHROPIC_BASE_URL: baseUrl,
     ANTHROPIC_AUTH_TOKEN: apiKey,
-    ANTHROPIC_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: 'grok-4.5',
-    ANTHROPIC_DEFAULT_FABLE_MODEL: 'grok-4.5',
-    CLAUDE_CODE_SUBAGENT_MODEL: 'grok-4.5',
+    ANTHROPIC_MODEL: model,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: model,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: model,
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: model,
+    ANTHROPIC_DEFAULT_FABLE_MODEL: model,
+    CLAUDE_CODE_SUBAGENT_MODEL: model,
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
     CLAUDE_CODE_ATTRIBUTION_HEADER: '0'
   }
@@ -812,6 +905,151 @@ responses_websockets_v2 = true`
       content: environmentContent
     }
   ]
+}
+
+function compatibleDefaultModel(preset: OpenAICompatibleProviderPreset): string {
+  if (preset.id === 'doubao') return 'YOUR_ARK_ENDPOINT_ID'
+  return preset.defaultModel || preset.modelSuggestions[0] || 'YOUR_MODEL_ID'
+}
+
+function generateCompatibleCodexFiles(
+  baseUrl: string,
+  apiKey: string,
+  preset: OpenAICompatibleProviderPreset,
+  model: string
+): FileConfig[] {
+  const isWindows = activeTab.value === 'windows'
+  const configPath = isWindows
+    ? '%USERPROFILE%\\.codex\\config.toml'
+    : '~/.codex/config.toml'
+  const providerID = `modelport_${preset.id}`
+  const configContent = `model_provider = "${providerID}"
+model = "${model}"
+review_model = "${model}"
+
+[model_providers.${providerID}]
+name = "ModelPort ${preset.name}"
+base_url = "${baseUrl}"
+env_key = "MODELPORT_API_KEY"
+wire_api = "responses"`
+  const environmentContent = isWindows
+    ? `$env:MODELPORT_API_KEY="${apiKey}"`
+    : `export MODELPORT_API_KEY="${apiKey}"`
+
+  return [
+    {
+      path: configPath,
+      content: configContent,
+      hint: t('keys.useKeyModal.compatible.codexConfigHint')
+    },
+    {
+      path: isWindows ? 'PowerShell' : 'Terminal',
+      content: environmentContent
+    }
+  ]
+}
+
+function generateCompatibleContinueConfig(
+  baseUrl: string,
+  apiKey: string,
+  preset: OpenAICompatibleProviderPreset
+): FileConfig {
+  const isWindows = activeTab.value === 'windows'
+  const path = isWindows
+    ? '%USERPROFILE%\\.continue\\config.yaml'
+    : '~/.continue/config.yaml'
+  const models = (preset.modelSuggestions.length
+    ? preset.modelSuggestions
+    : [compatibleDefaultModel(preset)]).slice(0, 3)
+  const modelEntries = models.map(model => `  - name: ${preset.name} ${model}
+    provider: openai
+    model: ${model}
+    apiBase: ${JSON.stringify(baseUrl)}
+    apiKey: ${JSON.stringify(apiKey)}`).join('\n')
+  const content = `name: ModelPort ${preset.name}
+version: 1.0.0
+schema: v1
+models:
+${modelEntries}`
+
+  return {
+    path,
+    content,
+    hint: t('keys.useKeyModal.compatible.continueConfigHint')
+  }
+}
+
+function generateCompatibleSDKConfig(baseUrl: string, apiKey: string, model: string): FileConfig {
+  if (activeTab.value === 'node') {
+    return {
+      path: 'example.mjs',
+      content: `import OpenAI from "openai";
+
+const client = new OpenAI({
+  apiKey: "${apiKey}",
+  baseURL: "${baseUrl}",
+});
+
+const stream = await client.chat.completions.create({
+  model: ${JSON.stringify(model)},
+  messages: [{ role: "user", content: "Hello" }],
+  stream: true,
+});
+
+for await (const chunk of stream) {
+  process.stdout.write(chunk.choices[0]?.delta?.content ?? "");
+}`
+    }
+  }
+
+  return {
+    path: 'example.py',
+    content: `from openai import OpenAI
+
+client = OpenAI(
+    api_key="${apiKey}",
+    base_url="${baseUrl}",
+)
+
+response = client.chat.completions.create(
+    model=${JSON.stringify(model)},
+    messages=[{"role": "user", "content": "Hello"}],
+    stream=True,
+)
+
+for chunk in response:
+    print(chunk.choices[0].delta.content or "", end="", flush=True)`
+  }
+}
+
+function generateCompatibleHTTPConfig(baseUrl: string, apiKey: string, model: string): FileConfig {
+  const endpoint = `${baseUrl}/chat/completions`
+  const payload = JSON.stringify({ model, messages: [{ role: 'user', content: 'Hello' }], stream: true })
+
+  if (activeTab.value === 'cmd') {
+    return {
+      path: 'Command Prompt',
+      content: `curl -N --request POST "${endpoint}" ^
+  --header "Authorization: Bearer ${apiKey}" ^
+  --header "Content-Type: application/json" ^
+  --data "${payload.replace(/"/g, '\\"')}"`
+    }
+  }
+
+  if (activeTab.value === 'powershell') {
+    return {
+      path: 'PowerShell',
+      content: `curl.exe -N --request POST "${endpoint}" --header "Authorization: Bearer ${apiKey}" --header "Content-Type: application/json" --data-raw '${payload}'`
+    }
+  }
+
+  return {
+    path: 'Terminal',
+    content: `curl -N --request POST "${endpoint}" \\
+  --header "Authorization: Bearer ${apiKey}" \\
+  --header "Content-Type: application/json" \\
+  --data '${payload}'`
+  }
 }
 
 function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
@@ -1336,7 +1574,6 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
       limit: { context: 500000, output: 128000 }
     }
   }
-
   if (platform === 'gemini') {
     provider[platform].npm = '@ai-sdk/google'
     provider[platform].models = geminiModels
@@ -1356,6 +1593,17 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     provider[platform].npm = '@ai-sdk/openai'
     provider[platform].name = 'Grok'
     provider[platform].models = grokModels
+  } else if (isDedicatedOpenAICompatibleProvider(platform)) {
+    const preset = getOpenAICompatibleProviderPreset(platform)!
+    const models = Object.fromEntries(
+      (preset.modelSuggestions.length ? preset.modelSuggestions : [compatibleDefaultModel(preset)]).map(model => [
+        model,
+        { name: model }
+      ])
+    )
+    provider[platform].npm = '@ai-sdk/openai-compatible'
+    provider[platform].name = preset.name
+    provider[platform].models = models
   }
 
   const agent =

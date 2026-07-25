@@ -132,6 +132,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
+import { OPENAI_COMPATIBLE_PROVIDER_PRESETS } from '@/utils/providerPresets'
 import { accountsAPI } from '@/api/admin/accounts'
 import type { SyncUpstreamPreviewParams } from '@/api/admin/accounts'
 import ModelIcon from '@/components/common/ModelIcon.vue'
@@ -181,7 +182,12 @@ const normalizedPlatforms = computed(() => {
   )
 })
 
-const upstreamSyncPlatforms = new Set(['anthropic', 'openai', 'gemini', 'antigravity', 'grok'])
+const upstreamSyncPlatforms = new Set([
+  'anthropic', 'openai', 'gemini', 'antigravity', 'grok',
+  ...OPENAI_COMPATIBLE_PROVIDER_PRESETS
+    .filter(preset => preset.supportsModelList)
+    .map(preset => preset.id)
+])
 const canSyncUpstream = computed(() => {
   if (props.accountId) {
     if (normalizedPlatforms.value.length === 0) return true

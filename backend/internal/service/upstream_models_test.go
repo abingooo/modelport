@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,6 +101,45 @@ func TestBuildOpenAIModelsURL(t *testing.T) {
 			t.Parallel()
 
 			require.Equal(t, tt.want, buildOpenAIModelsURL(tt.base))
+		})
+	}
+}
+
+func TestBuildUpstreamModelsRequestDedicatedProviderCapabilityMatrix(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{cfg: upstreamModelSyncTestConfig()}
+	for _, platform := range openai_compat.ProviderIDs() {
+		platform := platform
+		t.Run(platform, func(t *testing.T) {
+			t.Parallel()
+			preset, ok := openai_compat.LookupProvider(platform)
+			require.True(t, ok)
+			account := &Account{
+				Platform: platform,
+				Type:     AccountTypeAPIKey,
+				Credentials: map[string]any{
+					"api_key":  "sk-model-list-test",
+					"base_url": preset.DefaultBaseURL,
+				},
+			}
+
+			req, err := svc.buildUpstreamModelsRequest(context.Background(), account)
+			if !preset.Capabilities.ModelList {
+				require.Error(t, err)
+				require.Nil(t, req)
+				var syncErr *UpstreamModelSyncError
+				require.ErrorAs(t, err, &syncErr)
+				require.Equal(t, UpstreamModelSyncErrorUnsupported, syncErr.Kind)
+				return
+			}
+
+			require.NoError(t, err)
+			require.Equal(t, buildOpenAIModelsURL(preset.DefaultBaseURL), req.URL.String())
+			require.Equal(t, "Bearer sk-model-list-test", req.Header.Get("Authorization"))
+			for key, value := range preset.DefaultHeaders {
+				require.Equal(t, value, req.Header.Get(key))
+			}
 		})
 	}
 }
@@ -340,6 +380,37 @@ func TestFetchUpstreamSupportedModelsParsesOpenAIResponse(t *testing.T) {
 	require.Equal(t, []string{"gpt-5", "o3"}, models)
 	require.Equal(t, "https://openai.example.com/v1/models", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer openai-key", upstream.lastReq.Header.Get("Authorization"))
+}
+
+func TestFetchUpstreamSupportedModelsDedicatedProvidersStrictMock(t *testing.T) {
+	for _, platform := range openai_compat.ProviderIDs() {
+		preset, ok := openai_compat.LookupProvider(platform)
+		require.True(t, ok)
+		if !preset.Capabilities.ModelList {
+			continue
+		}
+		t.Run(platform, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"provider-model-b"},{"id":"provider-model-a"},{"id":"provider-model-a"}]}`)),
+			}}
+			svc := &AccountTestService{httpUpstream: upstream, cfg: upstreamModelSyncTestConfig()}
+			account := &Account{
+				ID: 7, Platform: platform, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"api_key": "provider-key"},
+			}
+
+			models, err := svc.FetchUpstreamSupportedModels(context.Background(), account)
+			require.NoError(t, err)
+			require.Equal(t, []string{"provider-model-a", "provider-model-b"}, models)
+			require.Equal(t, buildOpenAICompatibleModelsURL(preset.DefaultBaseURL, preset.ModelListPath), upstream.lastReq.URL.String())
+			require.Equal(t, "Bearer provider-key", upstream.lastReq.Header.Get("Authorization"))
+			for key, value := range preset.DefaultHeaders {
+				require.Equal(t, value, upstream.lastReq.Header.Get(key), key)
+			}
+		})
+	}
 }
 
 func TestFetchUpstreamSupportedModelsParsesGrokAPIKeyResponse(t *testing.T) {

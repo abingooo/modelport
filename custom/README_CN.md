@@ -53,47 +53,90 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml down
 本地数据保存在 `deploy/data`、`deploy/postgres_data` 和
 `deploy/redis_data`，这些目录及 `deploy/.env` 均不会提交到 Git。
 
+## 分支与版本规范
+
+- `main`：只同步官方 `Wei-Shaw/sub2api`，不放二开提交。
+- `develop`：ModelPort 日常集成分支，始终使用开发版本。
+- `feature/*`、`fix/*`：从 `develop` 创建，完成后合并回 `develop` 并删除。
+- `production`：只保存验证通过、可以直接部署的正式版本。
+
+版本命名：
+
+```text
+正式版    0.1.164.4
+开发版    0.1.164.4-dev.15
+测试版    0.1.164.4-beta.1
+候选版    0.1.164.4-rc.1
+```
+
+开发版本记录在 `custom/VERSION`。每次准备新的开发镜像时递增末尾序号，禁止使用
+五段纯数字版本。只有正式版创建 `custom-v*` 标签和 GitHub Release。
+
 ## 同步官方维护
 
-`main` 只跟踪官方，`production` 保存二次开发：
+先更新只跟踪官方的 `main`，再将官方更新合并到 `develop`：
 
 ```bash
 git fetch upstream --tags
 git switch main
 git merge --ff-only upstream/main
-git switch production
+git push origin main
+git switch develop
 git merge main
+git push origin develop
 ```
 
-测试通过后同步自己的 Fork，不要在服务器上直接合并官方代码：
+不要在服务器或 `production` 上直接合并官方代码。功能开发示例：
 
 ```bash
-git push origin main production
+git switch develop
+git switch -c feature/example
+# 完成开发和测试
+git switch develop
+git merge --no-ff feature/example
+git branch -d feature/example
+git push origin develop
 ```
 
-## 构建自定义镜像
+## 开发镜像
 
-当前 Fork 为 `abingooo/modelport`，已配置为 `origin`。首次推送二开分支并发布固定版本标签：
+推送 `develop` 后，GitHub Actions 读取 `custom/VERSION`，构建 `linux/amd64` 镜像，并创建
+`dev-v<版本>` GitHub prerelease。应用的开发更新通道只识别这种标签：
+
+```text
+ghcr.io/abingooo/modelport:0.1.164.4-dev.15
+ghcr.io/abingooo/modelport:develop
+ghcr.io/abingooo/modelport:dev-sha-<commit>
+```
+
+开发环境优先使用固定版本或 `dev-sha-*`，不要依赖会移动的 `develop` 标签。
+同一开发版本不能重复发布；再次推送前必须递增 `custom/VERSION` 的 `dev.N`。
+
+## 正式镜像
+
+功能在 `develop` 验证完成后合并到 `production`，再创建正式标签：
 
 ```bash
+git switch production
+git merge --no-ff develop
 git push -u origin production
-git tag -a custom-v0.1.164.3 -m "ModelPort custom-v0.1.164.3"
-git push origin custom-v0.1.164.3
+git tag -a custom-v0.1.164.4 -m "ModelPort custom-v0.1.164.4"
+git push origin custom-v0.1.164.4
 ```
 
-只使用指向 `production` 提交的 `custom-v*` 标签，不要使用 `v*`，避免触发 Fork
+工作流会拒绝不指向当前 `production` 提交的 `custom-v*` 标签。不要使用 `v*`，避免触发 Fork
 中保留的官方完整发布流程。为了让 `main` 与官方完全一致，自定义工作流不放入默认
 分支，因此发布入口只有标签推送，不使用 Actions 手动触发。Fork 首次运行工作流前，
 需要先在 GitHub 仓库的 Actions 页面启用工作流。
 
 标签中的 `custom-v` 前缀用于区分发布流程，镜像内应用版本会显示为
-`0.1.164.3`。前三位对应官方版本，第四位是 ModelPort 二开迭代号。镜像构建成功后
+`0.1.164.4`。前三位对应官方版本，第四位是 ModelPort 二开迭代号。镜像构建成功后
 工作流会创建同名 GitHub Release，前端“查看发布”会打开该自定义发布页。
 
-GitHub Actions 会构建多架构镜像：
+GitHub Actions 只构建 `linux/amd64` 镜像：
 
 ```text
-ghcr.io/abingooo/modelport:custom-v0.1.164.3
+ghcr.io/abingooo/modelport:custom-v0.1.164.4
 ghcr.io/abingooo/modelport:sha-<commit>
 ```
 
@@ -102,7 +145,7 @@ ghcr.io/abingooo/modelport:sha-<commit>
 服务器继续使用官方 Compose，并叠加镜像覆盖文件：
 
 ```bash
-export SUB2API_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.164.3
+export SUB2API_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.164.4
 docker compose -f deploy/docker-compose.yml -f custom/server-compose.override.yml pull
 docker compose -f deploy/docker-compose.yml -f custom/server-compose.override.yml up -d
 docker compose -f deploy/docker-compose.yml -f custom/server-compose.override.yml ps
@@ -116,3 +159,25 @@ echo "${GHCR_PAT}" | docker login ghcr.io -u abingooo --password-stdin
 ```
 
 生产环境只使用固定标签，不使用 `latest`。升级前先备份 PostgreSQL，并保留上一个镜像标签。
+
+## 测试服务器在线更新
+
+应用只从 `abingooo/modelport` 获取版本，开发版只接受 `dev-v*-dev.*` prerelease，正式版只
+接受 `custom-v*` release。原作者仓库的标签、Release 和旧缓存都不会成为更新候选。
+
+Docker 在线更新不向主容器挂载 Docker Socket。主容器只向持久化目录写入经过通道校验的
+版本号，宿主机的 systemd path unit 再拉取固定的 `ghcr.io/abingooo/modelport` 镜像并重建
+`modelport` 服务：
+
+```bash
+sudo install -m 0755 custom/update/modelport-docker-updater /usr/local/sbin/
+sudo install -m 0644 custom/update/modelport-update.service /etc/systemd/system/
+sudo install -m 0644 custom/update/modelport-update.path /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now modelport-update.path
+```
+
+默认部署目录为 `/opt/modelport`，其中需要包含 `.env`、`docker-compose.yml` 和 `data/`。
+如目录不同，可在 `modelport-update.service` 中覆盖 `MODELPORT_DEPLOY_DIR`、
+`MODELPORT_ENV_FILE` 或 `MODELPORT_COMPOSE_FILE`。更新器只接受 ModelPort 版本格式，并将镜像
+仓库固定为 `ghcr.io/abingooo/modelport`；更新后健康检查失败时会自动恢复之前的镜像。

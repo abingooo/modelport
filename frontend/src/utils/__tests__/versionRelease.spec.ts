@@ -14,6 +14,15 @@ describe('resolveCurrentReleaseUrl', () => {
     expect(resolveCurrentReleaseUrl('0.1.164', officialUrl)).toBe(officialUrl)
   })
 
+  it('links development versions to the ModelPort prerelease', () => {
+    expect(
+      resolveCurrentReleaseUrl(
+        '0.1.164.4-dev.1',
+        'https://github.com/Wei-Shaw/sub2api/releases/tag/v0.1.164'
+      )
+    ).toBe('https://github.com/abingooo/modelport/releases/tag/dev-v0.1.164.4-dev.1')
+  })
+
   it('does not expose placeholder release links', () => {
     expect(resolveCurrentReleaseUrl('0.1.164', '#')).toBe('')
   })

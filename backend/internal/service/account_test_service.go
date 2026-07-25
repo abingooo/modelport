@@ -24,6 +24,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -189,6 +190,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	// Route to platform-specific test method
 	if account.IsOpenAI() {
 		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
+	}
+	if account.IsDedicatedOpenAICompatibleProvider() {
+		return s.testOpenAIAccountConnection(c, account, modelID, prompt, AccountTestModeDefault)
 	}
 
 	if account.IsGemini() {
@@ -505,10 +509,20 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 
-	// Default to openai.DefaultTestModel for OpenAI testing
+	// Default to the provider's canonical chat model.
 	testModelID := modelID
 	if testModelID == "" {
-		testModelID = openai.DefaultTestModel
+		if preset, ok := openai_compat.LookupProvider(account.Platform); ok {
+			testModelID = preset.DefaultTestModel
+			if testModelID == "" && preset.ModelReferenceMode == "endpoint_or_model" {
+				testModelID = strings.TrimSpace(account.GetCredential("endpoint_id"))
+			}
+		} else {
+			testModelID = openai.DefaultTestModel
+		}
+	}
+	if strings.TrimSpace(testModelID) == "" {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("A model or endpoint ID is required for %s accounts", account.Platform))
 	}
 
 	// Align test routing with gateway behavior: OpenAI accounts apply normal
@@ -559,12 +573,12 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		apiURL = chatgptCodexAPIURL
 	} else if credentialAccount.Type == "apikey" {
 		// API Key - use Platform API
-		authToken = credentialAccount.GetOpenAIApiKey()
+		authToken = credentialAccount.GetOpenAICompatibleAPIKey()
 		if authToken == "" {
 			return s.sendErrorAndEnd(c, "No API key available")
 		}
 
-		baseURL := credentialAccount.GetOpenAIBaseURL()
+		baseURL := credentialAccount.GetOpenAICompatibleBaseURL()
 		if baseURL == "" {
 			baseURL = "https://api.openai.com"
 		}
@@ -572,7 +586,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		if !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+		if account.IsDedicatedOpenAICompatibleProvider() || !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 			return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken)
 		}
 		apiURL = buildOpenAIResponsesURL(normalizedBaseURL)
@@ -755,7 +769,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	applyOpenAICompatibleAuthentication(account, req.Header, authToken)
 	if account.IsGrokOAuth() {
 		applyGrokCLIHeaders(req.Header)
 	}
@@ -812,6 +826,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 ) error {
 	ctx := c.Request.Context()
 	apiURL := buildOpenAIChatCompletionsURL(normalizedBaseURL)
+	upstreamModelID := normalizeOpenAIModelForUpstream(account, testModelID)
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -819,7 +834,7 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	payload := createOpenAIChatCompletionsTestPayload(testModelID, prompt)
+	payload := createOpenAIChatCompletionsTestPayload(upstreamModelID, prompt)
 	payloadBytes, _ := json.Marshal(payload)
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
@@ -833,6 +848,11 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+authToken)
+	if preset, ok := openai_compat.LookupProvider(account.Platform); ok {
+		for key, value := range preset.DefaultHeaders {
+			req.Header.Set(key, value)
+		}
+	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
 	account.ApplyHeaderOverrides(req.Header)
@@ -853,14 +873,30 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
+		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(body)))
+		upstreamMessage = redactKnownCredential(upstreamMessage, authToken)
+		if upstreamMessage == "" {
+			upstreamMessage = http.StatusText(resp.StatusCode)
+		}
+		if requestID := providerUpstreamRequestID(account, resp.Header); requestID != "" {
+			upstreamMessage = fmt.Sprintf("%s (request_id: %s)", upstreamMessage, requestID)
+		}
 		if resp.StatusCode == http.StatusUnauthorized && s.accountRepo != nil {
-			errMsg := fmt.Sprintf("Chat Completions authentication failed (401): %s", string(body))
+			errMsg := fmt.Sprintf("Chat Completions authentication failed (401): %s", upstreamMessage)
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Chat Completions API (/v1/chat/completions) returned %d: %s", resp.StatusCode, string(body)))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Chat Completions API (/v1/chat/completions) returned %d: %s", resp.StatusCode, upstreamMessage))
 	}
 
 	return s.processOpenAIChatCompletionsStream(c, resp.Body)
+}
+
+func redactKnownCredential(message string, credential string) string {
+	credential = strings.TrimSpace(credential)
+	if credential == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, credential, "[REDACTED]")
 }
 
 // testOpenAICompactConnection probes /responses/compact and persists the
@@ -1904,6 +1940,7 @@ func (s *AccountTestService) sendEvent(c *gin.Context, event TestEvent) {
 
 // sendErrorAndEnd sends an error event and ends the stream
 func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) error {
+	errorMsg = logredact.RedactText(errorMsg, "api_key", "apikey", "token", "secret", "key")
 	log.Printf("Account test error: %s", errorMsg)
 	s.sendEvent(c, TestEvent{Type: "error", Error: errorMsg})
 	return fmt.Errorf("%s", errorMsg)

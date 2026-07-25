@@ -202,6 +202,11 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 		}
 		return EndpointResponses
 
+	case service.PlatformDeepSeek, service.PlatformQwen, service.PlatformGLM, service.PlatformKimi,
+		service.PlatformDoubao, service.PlatformSiliconFlow, service.PlatformOpenRouter,
+		service.PlatformMiniMax, service.PlatformMiMo:
+		return EndpointChatCompletions
+
 	case service.PlatformAnthropic:
 		return EndpointMessages
 

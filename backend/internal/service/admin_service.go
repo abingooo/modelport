@@ -597,6 +597,14 @@ var proxyQualityTargets = []proxyQualityTarget{
 			http.StatusUnauthorized: {},
 		},
 	},
+	{
+		Target: "deepseek",
+		URL:    "https://api.deepseek.com/v1/models",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
+		},
+	},
 }
 
 const (

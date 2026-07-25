@@ -71,6 +71,20 @@ func (_c *UsageLogCreate) SetNillableRequestedModel(v *string) *UsageLogCreate {
 	return _c
 }
 
+// SetBillingModel sets the "billing_model" field.
+func (_c *UsageLogCreate) SetBillingModel(v string) *UsageLogCreate {
+	_c.mutation.SetBillingModel(v)
+	return _c
+}
+
+// SetNillableBillingModel sets the "billing_model" field if the given value is not nil.
+func (_c *UsageLogCreate) SetNillableBillingModel(v *string) *UsageLogCreate {
+	if v != nil {
+		_c.SetBillingModel(*v)
+	}
+	return _c
+}
+
 // SetUpstreamModel sets the "upstream_model" field.
 func (_c *UsageLogCreate) SetUpstreamModel(v string) *UsageLogCreate {
 	_c.mutation.SetUpstreamModel(v)
@@ -783,6 +797,11 @@ func (_c *UsageLogCreate) check() error {
 			return &ValidationError{Name: "requested_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.requested_model": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.BillingModel(); ok {
+		if err := usagelog.BillingModelValidator(v); err != nil {
+			return &ValidationError{Name: "billing_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.billing_model": %w`, err)}
+		}
+	}
 	if v, ok := _c.mutation.UpstreamModel(); ok {
 		if err := usagelog.UpstreamModelValidator(v); err != nil {
 			return &ValidationError{Name: "upstream_model", err: fmt.Errorf(`ent: validator failed for field "UsageLog.upstream_model": %w`, err)}
@@ -945,6 +964,10 @@ func (_c *UsageLogCreate) createSpec() (*UsageLog, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RequestedModel(); ok {
 		_spec.SetField(usagelog.FieldRequestedModel, field.TypeString, value)
 		_node.RequestedModel = &value
+	}
+	if value, ok := _c.mutation.BillingModel(); ok {
+		_spec.SetField(usagelog.FieldBillingModel, field.TypeString, value)
+		_node.BillingModel = &value
 	}
 	if value, ok := _c.mutation.UpstreamModel(); ok {
 		_spec.SetField(usagelog.FieldUpstreamModel, field.TypeString, value)
@@ -1306,6 +1329,24 @@ func (u *UsageLogUpsert) UpdateRequestedModel() *UsageLogUpsert {
 // ClearRequestedModel clears the value of the "requested_model" field.
 func (u *UsageLogUpsert) ClearRequestedModel() *UsageLogUpsert {
 	u.SetNull(usagelog.FieldRequestedModel)
+	return u
+}
+
+// SetBillingModel sets the "billing_model" field.
+func (u *UsageLogUpsert) SetBillingModel(v string) *UsageLogUpsert {
+	u.Set(usagelog.FieldBillingModel, v)
+	return u
+}
+
+// UpdateBillingModel sets the "billing_model" field to the value that was provided on create.
+func (u *UsageLogUpsert) UpdateBillingModel() *UsageLogUpsert {
+	u.SetExcluded(usagelog.FieldBillingModel)
+	return u
+}
+
+// ClearBillingModel clears the value of the "billing_model" field.
+func (u *UsageLogUpsert) ClearBillingModel() *UsageLogUpsert {
+	u.SetNull(usagelog.FieldBillingModel)
 	return u
 }
 
@@ -2138,6 +2179,27 @@ func (u *UsageLogUpsertOne) UpdateRequestedModel() *UsageLogUpsertOne {
 func (u *UsageLogUpsertOne) ClearRequestedModel() *UsageLogUpsertOne {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearRequestedModel()
+	})
+}
+
+// SetBillingModel sets the "billing_model" field.
+func (u *UsageLogUpsertOne) SetBillingModel(v string) *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBillingModel(v)
+	})
+}
+
+// UpdateBillingModel sets the "billing_model" field to the value that was provided on create.
+func (u *UsageLogUpsertOne) UpdateBillingModel() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBillingModel()
+	})
+}
+
+// ClearBillingModel clears the value of the "billing_model" field.
+func (u *UsageLogUpsertOne) ClearBillingModel() *UsageLogUpsertOne {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearBillingModel()
 	})
 }
 
@@ -3252,6 +3314,27 @@ func (u *UsageLogUpsertBulk) UpdateRequestedModel() *UsageLogUpsertBulk {
 func (u *UsageLogUpsertBulk) ClearRequestedModel() *UsageLogUpsertBulk {
 	return u.Update(func(s *UsageLogUpsert) {
 		s.ClearRequestedModel()
+	})
+}
+
+// SetBillingModel sets the "billing_model" field.
+func (u *UsageLogUpsertBulk) SetBillingModel(v string) *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.SetBillingModel(v)
+	})
+}
+
+// UpdateBillingModel sets the "billing_model" field to the value that was provided on create.
+func (u *UsageLogUpsertBulk) UpdateBillingModel() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.UpdateBillingModel()
+	})
+}
+
+// ClearBillingModel clears the value of the "billing_model" field.
+func (u *UsageLogUpsertBulk) ClearBillingModel() *UsageLogUpsertBulk {
+	return u.Update(func(s *UsageLogUpsert) {
+		s.ClearBillingModel()
 	})
 }
 
