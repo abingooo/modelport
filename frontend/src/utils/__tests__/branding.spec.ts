@@ -11,6 +11,7 @@ describe('updateFavicon', () => {
 
     const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
     expect(link?.href).toBe('https://example.com/custom-logo.png')
+    expect(link?.type).toBe('image/png')
   })
 
   it('ignores unsafe logo URLs', () => {

@@ -29,11 +29,13 @@ function updateDocumentTitle() {
 
 // Watch for site settings changes and update favicon/title
 watch(
-  () => appStore.siteLogo,
-  (newLogo) => {
-    if (newLogo) {
-      updateFavicon(newLogo)
-    }
+  [() => appStore.siteLogo, () => appStore.siteName],
+  ([newLogo, siteName]) => {
+    const fallbackLogo =
+      siteName.trim().toLowerCase() === 'modelport'
+        ? '/branding/modelport-mark-light.png'
+        : '/logo.svg'
+    updateFavicon(newLogo || fallbackLogo)
   },
   { immediate: true }
 )

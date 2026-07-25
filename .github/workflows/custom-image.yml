@@ -6,7 +6,7 @@ on:
       - "custom-v*"
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -36,10 +36,12 @@ jobs:
             echo "Invalid custom version tag: ${GITHUB_REF_NAME}" >&2
             exit 1
           fi
-          echo "image=ghcr.io/${repository}" >> "${GITHUB_OUTPUT}"
-          echo "version=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "app_version=${app_version}" >> "${GITHUB_OUTPUT}"
-          echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "${GITHUB_OUTPUT}"
+          {
+            echo "image=ghcr.io/${repository}"
+            echo "version=${GITHUB_REF_NAME}"
+            echo "app_version=${app_version}"
+            echo "date=$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -61,3 +63,15 @@ jobs:
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ModelPort ${{ steps.meta.outputs.app_version }}
+          make_latest: false
+          body: |
+            ModelPort custom build based on Sub2API ${{ steps.meta.outputs.app_version }}.
+
+            ```bash
+            docker pull ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.version }}
+            ```

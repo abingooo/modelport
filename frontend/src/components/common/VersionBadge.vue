@@ -358,8 +358,8 @@
               <!-- Priority 5: Up to date - GitHub link + version rollback -->
               <div v-else class="space-y-2">
                 <a
-                  v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
-                  :href="releaseInfo.html_url"
+                  v-if="currentReleaseUrl"
+                  :href="currentReleaseUrl"
                   target="_blank"
                   rel="noopener noreferrer"
                   class="flex items-center justify-center gap-2 py-2 text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-dark-200"
@@ -650,6 +650,7 @@ import {
 } from '@/api/admin/system'
 import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
+import { resolveCurrentReleaseUrl } from '@/utils/versionRelease'
 
 const GITHUB_REPO = 'Wei-Shaw/sub2api'
 // Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
@@ -675,6 +676,9 @@ const currentVersion = computed(() => appStore.currentVersion || props.version |
 const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
+const currentReleaseUrl = computed(() =>
+  resolveCurrentReleaseUrl(currentVersion.value, releaseInfo.value?.html_url)
+)
 const buildType = computed(() => appStore.buildType)
 
 // Update process states (local to this component)

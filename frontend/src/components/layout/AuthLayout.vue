@@ -33,9 +33,20 @@
           <div
             class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-primary-500/30"
           >
-            <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
+            <BrandLogo
+              :site-name="siteName"
+              :site-logo="siteLogo"
+              image-class="h-full w-full object-contain"
+            />
           </div>
-          <h1 class="text-gradient mb-2 text-3xl font-bold">
+          <BrandLogo
+            v-if="isModelPort"
+            variant="wordmark"
+            :site-name="siteName"
+            :site-logo="siteLogo"
+            image-class="mx-auto mb-3 h-10 w-auto max-w-[260px] object-contain"
+          />
+          <h1 v-else class="text-gradient mb-2 text-3xl font-bold">
             {{ siteName }}
           </h1>
           <p class="text-sm text-gray-500 dark:text-dark-400">
@@ -65,12 +76,14 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useAppStore } from '@/stores'
+import BrandLogo from '@/components/common/BrandLogo.vue'
 import { sanitizeUrl } from '@/utils/url'
 
 const appStore = useAppStore()
 
 const siteName = computed(() => appStore.siteName || 'Sub2API')
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
+const isModelPort = computed(() => siteName.value.trim().toLowerCase() === 'modelport')
 const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'Subscription to API Conversion Platform')
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
