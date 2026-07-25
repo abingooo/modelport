@@ -27,7 +27,14 @@
           class="sidebar-brand-title text-lg font-bold text-gray-900 transition-colors hover:text-primary-600 dark:text-white dark:hover:text-primary-400"
           @click="handleMenuItemClick(homePath)"
         >
-          {{ siteName }}
+          <BrandLogo
+            v-if="isModelPort"
+            variant="wordmark"
+            :site-name="siteName"
+            :site-logo="siteLogo"
+            image-class="h-6 w-auto max-w-full object-contain object-left"
+          />
+          <template v-else>{{ siteName }}</template>
         </router-link>
         <!-- Version Badge -->
         <VersionBadge :version="siteVersion" />
@@ -264,6 +271,7 @@ const expandedGroups = ref<Set<string>>(new Set())
 // Site settings from appStore (cached, no flicker)
 const siteName = computed(() => appStore.siteName)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
+const isModelPort = computed(() => siteName.value.trim().toLowerCase() === 'modelport')
 const siteVersion = computed(() => appStore.siteVersion)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
