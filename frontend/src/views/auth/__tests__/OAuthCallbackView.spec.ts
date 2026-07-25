@@ -8,6 +8,7 @@ const {
   routerReplaceMock,
   showErrorMock,
   showSuccessMock,
+  showInfoMock,
   setTokenMock,
   copyToClipboardMock,
   exchangePendingOAuthCompletionMock,
@@ -26,6 +27,7 @@ const {
   routerReplaceMock: vi.fn(),
   showErrorMock: vi.fn(),
   showSuccessMock: vi.fn(),
+  showInfoMock: vi.fn(),
   setTokenMock: vi.fn(),
   copyToClipboardMock: vi.fn(),
   exchangePendingOAuthCompletionMock: vi.fn(),
@@ -52,6 +54,7 @@ vi.mock('@/stores', () => ({
   useAppStore: () => ({
     showError: (...args: any[]) => showErrorMock(...args),
     showSuccess: (...args: any[]) => showSuccessMock(...args),
+    showInfo: (...args: any[]) => showInfoMock(...args),
   }),
 }))
 
@@ -91,6 +94,7 @@ describe('OAuthCallbackView', () => {
     routerReplaceMock.mockReset()
     showErrorMock.mockReset()
     showSuccessMock.mockReset()
+    showInfoMock.mockReset()
     setTokenMock.mockReset()
     copyToClipboardMock.mockReset()
     exchangePendingOAuthCompletionMock.mockReset()
