@@ -41,6 +41,7 @@ type AdminHandlers struct {
 	Affiliate              *admin.AffiliateHandler
 	Compliance             *admin.ComplianceHandler
 	AuditLog               *admin.AuditLogHandler
+	ModelCatalog           *admin.ModelCatalogHandler
 	Lottery                *admin.LotteryHandler
 }
 
@@ -64,6 +65,7 @@ type Handlers struct {
 	AvailableChannel *AvailableChannelHandler
 	AsyncImage       *AsyncImageHandler
 	BatchImage       *BatchImageHandler
+	ModelCatalog     *ModelCatalogHandler
 	Lottery          *LotteryHandler
 }
 

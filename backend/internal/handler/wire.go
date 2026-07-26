@@ -45,6 +45,7 @@ func ProvideAdminHandlers(
 	affiliateHandler *admin.AffiliateHandler,
 	complianceHandler *admin.ComplianceHandler,
 	auditLogHandler *admin.AuditLogHandler,
+	modelCatalogHandler *admin.ModelCatalogHandler,
 	lotteryHandler *admin.LotteryHandler,
 	upstreamBillingProbe *service.UpstreamBillingProbeService,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
@@ -86,6 +87,7 @@ func ProvideAdminHandlers(
 		Affiliate:              affiliateHandler,
 		Compliance:             complianceHandler,
 		AuditLog:               auditLogHandler,
+		ModelCatalog:           modelCatalogHandler,
 		Lottery:                lotteryHandler,
 	}
 }
@@ -186,6 +188,7 @@ func ProvideHandlers(
 	availableChannelHandler *AvailableChannelHandler,
 	asyncImageHandler *AsyncImageHandler,
 	batchImageHandler *BatchImageHandler,
+	modelCatalogHandler *ModelCatalogHandler,
 	lotteryHandler *LotteryHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
@@ -209,6 +212,7 @@ func ProvideHandlers(
 		AvailableChannel: availableChannelHandler,
 		AsyncImage:       asyncImageHandler,
 		BatchImage:       batchImageHandler,
+		ModelCatalog:     modelCatalogHandler,
 		Lottery:          lotteryHandler,
 	}
 }
@@ -231,6 +235,7 @@ var ProviderSet = wire.NewSet(
 	NewPaymentHandler,
 	NewPaymentWebhookHandler,
 	NewAvailableChannelHandler,
+	NewModelCatalogHandler,
 	NewLotteryHandler,
 	NewAsyncImageHandler,
 	ProvideBatchImageHandler,
@@ -269,6 +274,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewAffiliateHandler,
 	admin.NewComplianceHandler,
 	admin.NewAuditLogHandler,
+	admin.NewModelCatalogHandler,
 	admin.NewLotteryHandler,
 
 	// AdminHandlers and Handlers constructors

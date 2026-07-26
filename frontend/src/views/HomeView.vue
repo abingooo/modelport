@@ -20,8 +20,7 @@
         class="hero-image"
       />
       <div class="hero-overlay"></div>
-      <div class="route-signal route-signal-one" aria-hidden="true"><span></span></div>
-      <div class="route-signal route-signal-two" aria-hidden="true"><span></span></div>
+      <HarborScene :dark="isDark" :label="t('home.harborSceneLabel')" />
 
       <header class="hero-header">
         <nav class="hero-nav" :aria-label="t('home.primaryNavigation')">
@@ -43,8 +42,14 @@
           </router-link>
 
           <div class="desktop-navigation">
+            <router-link to="/model-catalog" class="nav-link">
+              {{ t('home.modelCatalog') }}
+            </router-link>
             <router-link to="/model-pricing" class="nav-link">
               {{ t('home.modelPricing') }}
+            </router-link>
+            <router-link to="/lottery" class="nav-link">
+              {{ t('home.lottery') }}
             </router-link>
             <a
               v-if="docUrl"
@@ -95,14 +100,14 @@
         <p class="hero-description">{{ t('home.heroDescription') }}</p>
         <div class="hero-actions">
           <router-link
-            :to="isAuthenticated ? dashboardPath : '/login'"
+            :to="isAuthenticated ? '/keys' : '/login'"
             class="primary-action"
           >
-            {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
+            {{ isAuthenticated ? t('home.manageKeys') : t('home.getStarted') }}
             <Icon name="arrowRight" size="sm" :stroke-width="2" />
           </router-link>
-          <router-link to="/model-pricing" class="secondary-action">
-            {{ t('home.viewModelPricing') }}
+          <router-link to="/model-catalog" class="secondary-action">
+            {{ t('home.exploreModels') }}
           </router-link>
         </div>
       </div>
@@ -133,7 +138,7 @@
               class="provider-stop"
               role="listitem"
             >
-              <span class="provider-icon" :class="`provider-${provider.platform}`">
+              <span class="provider-icon" :class="platformTextClass(provider.platform)">
                 <PlatformIcon :platform="provider.platform" size="lg" />
               </span>
               <span>{{ provider.name }}</span>
@@ -226,6 +231,7 @@
       <div class="footer-inner">
         <p>&copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}</p>
         <div>
+          <router-link to="/model-catalog">{{ t('home.modelCatalog') }}</router-link>
           <router-link to="/model-pricing">{{ t('home.modelPricing') }}</router-link>
           <a v-if="docUrl" :href="docUrl" target="_blank" rel="noopener noreferrer">
             {{ t('home.docs') }}
@@ -241,11 +247,13 @@
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BrandLogo from '@/components/common/BrandLogo.vue'
+import HarborScene from '@/components/home/HarborScene.vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore, useAuthStore } from '@/stores'
 import type { GroupPlatform } from '@/types'
+import { platformTextClass } from '@/utils/platformColors'
 import { sanitizeUrl } from '@/utils/url'
 
 type ProtocolId = 'openai' | 'anthropic' | 'google'
@@ -649,52 +657,6 @@ onMounted(() => {
   box-shadow: 0 0 0 4px rgba(49, 196, 141, 0.14);
 }
 
-.route-signal {
-  position: absolute;
-  z-index: 2;
-  height: 1px;
-  overflow: visible;
-  background: rgba(105, 172, 255, 0.38);
-  transform-origin: left center;
-}
-
-.route-signal span {
-  position: absolute;
-  top: -3px;
-  left: 0;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #79b5ff;
-  box-shadow: 0 0 14px rgba(121, 181, 255, 0.9);
-  animation: route-pulse 5.5s linear infinite;
-}
-
-.route-signal-one {
-  right: 2%;
-  bottom: 34%;
-  width: 38%;
-  transform: rotate(-14deg);
-}
-
-.route-signal-two {
-  right: 7%;
-  bottom: 23%;
-  width: 29%;
-  transform: rotate(9deg);
-}
-
-.route-signal-two span {
-  animation-delay: -2.8s;
-}
-
-@keyframes route-pulse {
-  from { left: 0; opacity: 0; }
-  8% { opacity: 1; }
-  92% { opacity: 1; }
-  to { left: 100%; opacity: 0; }
-}
-
 .fleet-section,
 .protocol-section,
 .closing-section {
@@ -782,15 +744,6 @@ onMounted(() => {
   background: #fff;
   box-shadow: 0 6px 18px rgba(26, 50, 82, 0.08);
 }
-
-.provider-openai { color: #111827; }
-.provider-anthropic { color: #c5673e; }
-.provider-gemini { color: #4285f4; }
-.provider-deepseek { color: #4d6bfe; }
-.provider-qwen { color: #6b55dd; }
-.provider-kimi { color: #111827; }
-.provider-glm { color: #246bfd; }
-.provider-doubao { color: #325dff; }
 
 .gateway-destination {
   display: flex;
@@ -993,49 +946,44 @@ onMounted(() => {
   color: #0d6ef2;
 }
 
-:global(.dark) .home-shell,
-:global(.dark) .fleet-section,
-:global(.dark) .home-footer {
+:global(.dark .home-shell),
+:global(.dark .fleet-section),
+:global(.dark .home-footer) {
   color: #d8e3f0;
   background: #07111f;
 }
 
-:global(.dark) .section-heading h2,
-:global(.dark) .destination-copy strong {
+:global(.dark .section-heading h2),
+:global(.dark .destination-copy strong) {
   color: #f2f6fb;
 }
 
-:global(.dark) .section-heading > p,
-:global(.dark) .provider-stop,
-:global(.dark) .destination-copy small,
-:global(.dark) .home-footer {
+:global(.dark .section-heading > p),
+:global(.dark .provider-stop),
+:global(.dark .destination-copy small),
+:global(.dark .home-footer) {
   color: #8fa0b5;
 }
 
-:global(.dark) .provider-route::before {
+:global(.dark .provider-route::before) {
   background: #26384f;
 }
 
-:global(.dark) .provider-icon,
-:global(.dark) .destination-mark {
+:global(.dark .provider-icon),
+:global(.dark .destination-mark) {
   border-color: #2b405a;
   background: #0e1d30;
 }
 
-:global(.dark) .provider-openai,
-:global(.dark) .provider-kimi {
-  color: #f2f6fb;
-}
-
-:global(.dark) .closing-section {
+:global(.dark .closing-section) {
   background: #0d1b2d;
 }
 
-:global(.dark) .closing-inner h2 {
+:global(.dark .closing-inner h2) {
   color: #f2f6fb;
 }
 
-:global(.dark) .home-footer {
+:global(.dark .home-footer) {
   border-color: #1a2c42;
 }
 
@@ -1172,14 +1120,6 @@ onMounted(() => {
     display: none;
   }
 
-  .route-signal-one {
-    width: 54%;
-  }
-
-  .route-signal-two {
-    display: none;
-  }
-
   .fleet-section,
   .protocol-section {
     padding: 72px 18px;
@@ -1249,10 +1189,6 @@ onMounted(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .route-signal span {
-    animation: none;
-  }
-
   .primary-action,
   .secondary-action {
     transition: none;
