@@ -177,7 +177,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyAPIBaseURL,
 		SettingKeyContactInfo,
 		SettingKeyDocURL,
-		SettingKeyImageSiteURL,
 		SettingKeyHomeContent,
 		SettingKeyHideCcsImportButton,
 		SettingKeyPurchaseSubscriptionEnabled,
@@ -303,7 +302,6 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
 		ContactInfo:                      settings[SettingKeyContactInfo],
 		DocURL:                           settings[SettingKeyDocURL],
-		ImageSiteURL:                     validExternalHTTPURLOrEmpty(settings[SettingKeyImageSiteURL]),
 		HomeContent:                      settings[SettingKeyHomeContent],
 		HideCcsImportButton:              settings[SettingKeyHideCcsImportButton] == "true",
 		PurchaseSubscriptionEnabled:      settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
@@ -461,7 +459,6 @@ type PublicSettingsInjectionPayload struct {
 	APIBaseURL                       string                   `json:"api_base_url"`
 	ContactInfo                      string                   `json:"contact_info"`
 	DocURL                           string                   `json:"doc_url"`
-	ImageSiteURL                     string                   `json:"image_site_url"`
 	HomeContent                      string                   `json:"home_content"`
 	HideCcsImportButton              bool                     `json:"hide_ccs_import_button"`
 	PurchaseSubscriptionEnabled      bool                     `json:"purchase_subscription_enabled"`
@@ -531,7 +528,6 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		APIBaseURL:                       settings.APIBaseURL,
 		ContactInfo:                      settings.ContactInfo,
 		DocURL:                           settings.DocURL,
-		ImageSiteURL:                     settings.ImageSiteURL,
 		HomeContent:                      settings.HomeContent,
 		HideCcsImportButton:              settings.HideCcsImportButton,
 		PurchaseSubscriptionEnabled:      settings.PurchaseSubscriptionEnabled,
@@ -668,35 +664,6 @@ func extractOriginFromURL(rawURL string) string {
 		return ""
 	}
 	return u.Scheme + "://" + u.Host
-}
-
-func normalizeExternalHTTPURL(rawURL string) (string, error) {
-	rawURL = strings.TrimSpace(rawURL)
-	if rawURL == "" {
-		return "", nil
-	}
-	if len(rawURL) > 2048 {
-		return "", fmt.Errorf("URL exceeds 2048 characters")
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Host == "" || !parsed.IsAbs() {
-		return "", fmt.Errorf("URL must be an absolute http or https URL")
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("URL must use http or https")
-	}
-	if parsed.User != nil {
-		return "", fmt.Errorf("URL must not contain credentials")
-	}
-	return parsed.String(), nil
-}
-
-func validExternalHTTPURLOrEmpty(rawURL string) string {
-	normalized, err := normalizeExternalHTTPURL(rawURL)
-	if err != nil {
-		return ""
-	}
-	return normalized
 }
 
 // parseCustomMenuItemURLs extracts URLs from a raw JSON array of custom menu items.

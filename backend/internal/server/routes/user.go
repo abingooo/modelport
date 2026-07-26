@@ -84,9 +84,6 @@ func RegisterUserRoutes(
 			channels.GET("/available", h.AvailableChannel.List)
 		}
 
-		// 模型广场（仅返回用户有权访问且存在可用渠道的模型）
-		authenticated.GET("/model-catalog", h.ModelCatalog.List)
-
 		lottery := authenticated.Group("/lottery")
 		{
 			lottery.GET("", h.Lottery.List)

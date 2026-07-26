@@ -14,43 +14,6 @@ export default {
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
-    harbor: {
-      primaryNav: 'Primary navigation',
-      sceneLabel: 'Animated model harbor with ships following data routes toward a lighthouse and terminal',
-      eyebrow: 'Unified AI Model Harbor',
-      heroDescription: 'Send every model request from one port, then route it along a clear and reliable lane to the right intelligence service.',
-      exploreModels: 'Explore Models',
-      manageKeys: 'Manage API Keys',
-      nav: { catalog: 'Model Catalog', lottery: 'Lucky Draw' },
-      signals: {
-        oneKey: 'ONE KEY', oneKeyLabel: 'Unified access credential',
-        routes: 'LIVE', routesLabel: 'Intelligent model lanes',
-        billing: '￥', billingLabel: 'Transparent RMB billing',
-      },
-      routes: {
-        index: 'Choose a berth',
-        title: 'Enter the model harbor',
-        description: 'Each berth opens a focused route to models, access credentials, and ModelPort benefits.',
-        catalog: { title: 'Model Catalog', description: 'Compare capabilities, pricing, context, and real request formats.' },
-        keys: { title: 'API Keys', description: 'Create one credential, select a group, and manage downstream access.' },
-        lottery: { title: 'Lucky Draw', description: 'Join harbor campaigns for balance and subscription rewards.' },
-      },
-      manifest: {
-        index: 'Model lanes', title: 'Many providers, one harbor',
-        description: 'Every provider keeps its identity and capability boundaries while ModelPort provides one entry point.',
-        online: 'Online',
-      },
-      flow: {
-        index: 'Routing system', title: 'One request, three clear legs',
-        description: 'The entry point stays consistent while routing and upstream differences remain inside the harbor.',
-        steps: {
-          request: { title: 'Unified arrival', description: 'Downstream clients use one Base URL and API key.' },
-          route: { title: 'Lane dispatch', description: 'Select a path by group, model, and availability.' },
-          model: { title: 'Model berth', description: 'Adapt protocols, bill usage, and return the response.' },
-        },
-      },
-      cta: { index: 'Departure', title: 'Give your next model call a clearer route.', action: 'Enter ModelPort' },
-    },
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
     heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
