@@ -3328,6 +3328,11 @@
                                 option as unknown as DefaultSubscriptionGroupOption
                               ).rate
                             "
+                            :is-free="
+                              (
+                                option as unknown as DefaultSubscriptionGroupOption
+                              ).isFree
+                            "
                           />
                           <span v-else class="text-gray-400">
                             {{ t("admin.settings.defaults.subscriptionGroup") }}
@@ -3354,6 +3359,11 @@
                               (
                                 option as unknown as DefaultSubscriptionGroupOption
                               ).rate
+                            "
+                            :is-free="
+                              (
+                                option as unknown as DefaultSubscriptionGroupOption
+                              ).isFree
                             "
                             :description="
                               (
@@ -3658,6 +3668,11 @@
                                     option as unknown as DefaultSubscriptionGroupOption
                                   ).rate
                                 "
+                                :is-free="
+                                  (
+                                    option as unknown as DefaultSubscriptionGroupOption
+                                  ).isFree
+                                "
                               />
                               <span v-else class="text-gray-400">
                                 {{
@@ -3686,6 +3701,11 @@
                                   (
                                     option as unknown as DefaultSubscriptionGroupOption
                                   ).rate
+                                "
+                                :is-free="
+                                  (
+                                    option as unknown as DefaultSubscriptionGroupOption
+                                  ).isFree
                                 "
                                 :description="
                                   (
@@ -8424,6 +8444,7 @@ interface DefaultSubscriptionGroupOption {
   platform: AdminGroup["platform"];
   subscriptionType: AdminGroup["subscription_type"];
   rate: number;
+  isFree: boolean;
   [key: string]: unknown;
 }
 
@@ -9056,6 +9077,7 @@ const defaultSubscriptionGroupOptions = computed<
     platform: group.platform,
     subscriptionType: group.subscription_type,
     rate: group.rate_multiplier,
+    isFree: group.is_free,
   })),
 );
 

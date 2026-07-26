@@ -551,6 +551,42 @@ export default {
     }
   },
 
+  modelPricing: {
+    title: 'Model Pricing',
+    description: 'Base model prices for the groups you can access',
+    searchPlaceholder: 'Search models, channels, or groups...',
+    resultCount: '{count} models',
+    filters: {
+      allPlatforms: 'All platforms',
+      allGroups: 'All accessible groups',
+      allBillingMethods: 'All billing methods'
+    },
+    billing: {
+      usage: 'Usage based',
+      request: 'Per request',
+      unconfigured: 'Not configured'
+    },
+    columns: {
+      model: 'Model',
+      platform: 'Platform',
+      channel: 'Channel',
+      groups: 'Accessible Groups',
+      billingMethod: 'Billing Method',
+      input: 'Input ￥/MTok',
+      output: 'Output ￥/MTok',
+      cacheWrite: 'Cache Write ￥/MTok',
+      cacheRead: 'Cache Read ￥/MTok',
+      perRequest: 'Per Request'
+    },
+	tiers: {
+	  default: 'Default'
+	},
+    empty: {
+      unconfigured: 'No model pricing is available',
+      filtered: 'No models match the current filters'
+    }
+  },
+
   affiliate: {
     title: 'Affiliate Rebates',
     description: 'Invite new users and convert your rebate quota into account balance',

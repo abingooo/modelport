@@ -742,27 +742,30 @@ func (s *BillingCacheService) CheckBillingEligibility(ctx context.Context, user 
 	}
 
 	// 判断计费模式
+	if group != nil && group.IsSubscriptionType() && group.IsFreeBilling() && subscription == nil {
+		return ErrSubscriptionInvalid
+	}
 	isSubscriptionMode := group != nil && group.IsSubscriptionType() && subscription != nil
 
 	if isSubscriptionMode {
 		if err := s.checkSubscriptionEligibility(ctx, user.ID, group, subscription); err != nil {
 			return err
 		}
-	} else {
+	} else if group == nil || !group.IsFreeBilling() {
 		if err := s.checkBalanceEligibility(ctx, user.ID); err != nil {
 			return err
 		}
 	}
 
 	// user × platform quota 仅在 standard（余额）模式生效；订阅模式豁免
-	if !isSubscriptionMode {
+	if !isSubscriptionMode && (group == nil || !group.IsFreeBilling()) {
 		if err := s.checkUserPlatformQuotaEligibility(ctx, user.ID, platform); err != nil {
 			return err
 		}
 	}
 
-	// Check API Key rate limits (applies to both billing modes)
-	if apiKey != nil && apiKey.HasRateLimits() {
+	// API Key 金额窗口适用于标准和订阅计费；免费分组不消费也不检查这些金额窗口。
+	if apiKey != nil && apiKey.HasRateLimits() && (group == nil || !group.IsFreeBilling()) {
 		if err := s.checkAPIKeyRateLimits(ctx, apiKey); err != nil {
 			return err
 		}
@@ -919,6 +922,9 @@ func (s *BillingCacheService) checkSubscriptionEligibility(ctx context.Context, 
 	// 检查是否过期
 	if time.Now().After(subData.ExpiresAt) {
 		return ErrSubscriptionInvalid
+	}
+	if group.IsFreeBilling() {
+		return nil
 	}
 
 	// 检查限额（使用传入的Group限额配置）

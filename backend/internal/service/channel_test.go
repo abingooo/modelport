@@ -159,6 +159,18 @@ func TestGetTierByLabel_Empty(t *testing.T) {
 	require.Nil(t, p.GetTierByLabel("1K"))
 }
 
+func TestHiddenPricingStillResolvesForBilling(t *testing.T) {
+	channel := Channel{ModelPricing: []ChannelModelPricing{{
+		Models:      []string{"hidden-model"},
+		UserVisible: false,
+		InputPrice:  testPtrFloat64(0.25),
+	}}}
+	pricing := channel.GetModelPricing("hidden-model")
+	require.NotNil(t, pricing)
+	require.False(t, pricing.UserVisible)
+	require.InDelta(t, 0.25, *pricing.InputPrice, 1e-9)
+}
+
 func TestChannelClone(t *testing.T) {
 	original := &Channel{
 		ID:       1,
@@ -445,6 +457,16 @@ func TestValidateIntervals_ImageModeAllowsMultipleUnboundedTiers(t *testing.T) {
 	require.NoError(t, ValidateIntervals(intervals, BillingModePerRequest))
 }
 
+func TestValidateIntervals_ImageModeRejectsDuplicateTierLabels(t *testing.T) {
+	intervals := []PricingInterval{
+		{TierLabel: "2K", PerRequestPrice: testPtrFloat64(0.06)},
+		{TierLabel: " 2k ", PerRequestPrice: testPtrFloat64(0.08)},
+	}
+	err := ValidateIntervals(intervals, BillingModeImage)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "duplicate pricing tier label")
+}
+
 func TestValidateIntervals_ImageModeStillRejectsNegativePrice(t *testing.T) {
 	// image 模式只跳过区间重叠校验，单条字段自洽（价格非负）仍要校验。
 	intervals := []PricingInterval{
@@ -512,7 +534,6 @@ func TestSupportedModels_WildcardExpandedFromPricing(t *testing.T) {
 		require.NotContains(t, m.Name, "*")
 	}
 }
-
 
 func TestSupportedModels_MissingPricingKeepsNilPricing(t *testing.T) {
 	ch := &Channel{

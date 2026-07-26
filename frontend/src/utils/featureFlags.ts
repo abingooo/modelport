@@ -61,7 +61,7 @@
  *
  * const flagAvailableChannels = makeSidebarFlag(FeatureFlags.availableChannels)
  * // ...
- * { path: '/available-channels', label: ..., featureFlag: flagAvailableChannels }
+ * { path: '/model-pricing', label: ..., featureFlag: flagAvailableChannels }
  * ```
  *
  * `isFeatureFlagEnabled(flag)` returns the resolved boolean (`true` = show).

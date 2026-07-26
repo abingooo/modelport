@@ -18,6 +18,7 @@ type keyBillingInfoResponse struct {
 	SchemaVersion           int       `json:"schema_version"`
 	BillingScope            string    `json:"billing_scope"`
 	GroupRateMultiplier     float64   `json:"group_rate_multiplier"`
+	IsFree                  bool      `json:"is_free"`
 	UserRateMultiplier      *float64  `json:"user_rate_multiplier,omitempty"`
 	ResolvedRateMultiplier  float64   `json:"resolved_rate_multiplier"`
 	PeakRateEnabled         bool      `json:"peak_rate_enabled"`
@@ -62,6 +63,9 @@ func (h *GatewayHandler) KeyBillingInfo(c *gin.Context) {
 }
 
 func (h *GatewayHandler) resolveKeyBillingRate(c *gin.Context, apiKey *service.APIKey) (float64, bool) {
+	if apiKey.Group.IsFreeBilling() {
+		return 0, true
+	}
 	groupRate := apiKey.Group.RateMultiplier
 	switch {
 	case service.IsOpenAICompatiblePlatform(apiKey.Group.Platform):
@@ -90,6 +94,7 @@ func buildKeyBillingInfo(apiKey *service.APIKey, resolvedRate float64, now time.
 		SchemaVersion:           keyBillingInfoSchemaVersion,
 		BillingScope:            "token",
 		GroupRateMultiplier:     groupRate,
+		IsFree:                  apiKey.Group.IsFreeBilling(),
 		UserRateMultiplier:      userRate,
 		ResolvedRateMultiplier:  resolvedRate,
 		PeakRateEnabled:         apiKey.Group.PeakRateEnabled,

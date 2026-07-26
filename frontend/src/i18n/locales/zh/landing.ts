@@ -5,18 +5,47 @@ export default {
   },
   // Home Page
   home: {
+    primaryNavigation: '主导航',
+    heroImageAlt: '港口集装箱码头航拍图',
     viewOnGithub: '在 GitHub 上查看',
     viewDocs: '查看文档',
     docs: '文档',
+    modelPricing: '模型定价',
     switchToLight: '切换到浅色模式',
     switchToDark: '切换到深色模式',
     dashboard: '控制台',
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
+    viewModelPricing: '查看模型价格',
+    gatewayOnline: '网关在线',
+    heroKicker: '统一模型网关',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
+    heroDescription: '让不同厂商、协议与计费方式汇入同一个稳定入口。一次配置，即可按需调用全球主流模型。',
+    fleet: {
+      kicker: '模型航线',
+      title: '接入不同模型，只走一个入口',
+      description: '从闭源旗舰模型到国内主流服务，ModelPort 将不同上游统一为可管理、可计费、可观测的模型通路。',
+      routeLabel: '已接入模型服务商',
+      destination: '统一模型入口'
+    },
+    protocols: {
+      kicker: '原生协议',
+      title: '保留客户端习惯，统一网关配置',
+      description: '兼容 OpenAI、Anthropic 与 Google 调用方式，无需为了更换模型重写现有工作流。',
+      oneKey: '一个 API 密钥',
+      nativeClients: '兼容原生客户端',
+      clearBilling: '统一用量与计费',
+      tabLabel: '接口协议示例',
+      copy: '复制调用示例',
+      copied: '已复制',
+      requestReady: '请求已就绪'
+    },
+    closing: {
+      kicker: '准备靠港',
+      title: '从一个入口，抵达所有模型'
+    },
     tags: {
       subscriptionToApi: '订阅转 API',
       stickySession: '会话保持',

@@ -53,6 +53,7 @@
                   :platform="k.group.platform"
                   :subscription-type="k.group.subscription_type"
                   :rate-multiplier="k.group.rate_multiplier"
+                  :is-free="k.group.is_free"
                   :user-rate-multiplier="userGroupRates[k.group.id]"
                 />
                 <span v-else class="text-xs text-gray-400">—</span>

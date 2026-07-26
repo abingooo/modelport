@@ -256,14 +256,18 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/available-channels',
-    name: 'UserAvailableChannels',
-    component: () => import('@/views/user/AvailableChannelsView.vue'),
+    redirect: '/model-pricing',
+  },
+  {
+    path: '/model-pricing',
+    name: 'UserModelPricing',
+    component: () => import('@/views/user/ModelPricingView.vue'),
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
-      title: 'Available Channels',
-      titleKey: 'availableChannels.title',
-      descriptionKey: 'availableChannels.description'
+      title: 'Model Pricing',
+      titleKey: 'modelPricing.title',
+      descriptionKey: 'modelPricing.description'
     }
   },
   {

@@ -5,18 +5,47 @@ export default {
   },
   // Home Page
   home: {
+    primaryNavigation: 'Primary navigation',
+    heroImageAlt: 'Aerial view of a container port',
     viewOnGithub: 'View on GitHub',
     viewDocs: 'View Documentation',
     docs: 'Docs',
+    modelPricing: 'Model Pricing',
     switchToLight: 'Switch to Light Mode',
     switchToDark: 'Switch to Dark Mode',
     dashboard: 'Dashboard',
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
+    viewModelPricing: 'View Model Pricing',
+    gatewayOnline: 'Gateway online',
+    heroKicker: 'Unified Model Gateway',
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
-    heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
+    heroDescription: 'Bring providers, protocols, and billing into one dependable gateway. Configure once, then route to the model you need.',
+    fleet: {
+      kicker: 'Model Routes',
+      title: 'Different models. One way in.',
+      description: 'From frontier models to regional providers, ModelPort turns every upstream into a manageable, billable, and observable route.',
+      routeLabel: 'Connected model providers',
+      destination: 'Unified model gateway'
+    },
+    protocols: {
+      kicker: 'Native Protocols',
+      title: 'Keep your clients. Unify the gateway.',
+      description: 'Use familiar OpenAI, Anthropic, and Google request formats without rebuilding your workflow whenever models change.',
+      oneKey: 'One API key',
+      nativeClients: 'Native client compatibility',
+      clearBilling: 'Unified usage and billing',
+      tabLabel: 'API protocol examples',
+      copy: 'Copy request example',
+      copied: 'Copied',
+      requestReady: 'Request ready'
+    },
+    closing: {
+      kicker: 'Ready To Dock',
+      title: 'One entry point to every model.'
+    },
     tags: {
       subscriptionToApi: 'Subscription to API',
       stickySession: 'Session Persistence',

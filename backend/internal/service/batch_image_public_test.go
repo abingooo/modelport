@@ -129,6 +129,37 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.InDelta(t, 0.1608, *job.HoldAmount, 1e-12)
 	})
 
+	t.Run("free group keeps pricing snapshot but reserves no user balance", func(t *testing.T) {
+		svc, repo, _, _, _ := newTestBatchImagePublicService(true)
+		groupID := int64(7)
+		svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{
+			groupID: {
+				ID:                           groupID,
+				Platform:                     PlatformGemini,
+				RateMultiplier:               2,
+				IsFree:                       true,
+				AllowImageGeneration:         true,
+				AllowBatchImageGeneration:    true,
+				ImageRateIndependent:         true,
+				ImageRateMultiplier:          3,
+				BatchImageDiscountMultiplier: 0.5,
+				BatchImageHoldMultiplier:     0.6,
+			},
+		}}
+
+		got, err := svc.Submit(ctx, BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID}, validBatchImageSubmitRequest(), "")
+		require.NoError(t, err)
+		require.Zero(t, got.EstimatedCost)
+
+		job := repo.jobs[got.ID]
+		require.InDelta(t, 0.25, job.BaseUnitPrice, 1e-12)
+		require.Zero(t, job.GroupRateMultiplier)
+		require.Zero(t, job.BillableUnitPrice)
+		require.NotNil(t, job.HoldAmount)
+		require.Zero(t, *job.HoldAmount)
+		require.Empty(t, svc.BillingRepo.(*fakeBatchImageBillingRepo).reserves)
+	})
+
 	t.Run("pricing missing rejects before provider submit", func(t *testing.T) {
 		svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
 		svc.Pricing = &fakeBatchImagePricingResolver{err: ErrBatchImageSettlementPricingMissing}

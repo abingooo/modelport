@@ -24,7 +24,12 @@
       <!-- Group Info Preview -->
       <div v-if="selectedGroupInfo" class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
         <div class="mb-2 flex items-center gap-2">
-          <GroupBadge :name="selectedGroupInfo.name" :platform="selectedGroupInfo.platform" :rate-multiplier="selectedGroupInfo.rate_multiplier" />
+          <GroupBadge
+            :name="selectedGroupInfo.name"
+            :platform="selectedGroupInfo.platform"
+            :rate-multiplier="selectedGroupInfo.rate_multiplier"
+            :is-free="selectedGroupInfo.is_free"
+          />
         </div>
         <div class="grid grid-cols-2 gap-2 text-xs">
           <div><span class="text-gray-500">{{ t('payment.admin.dailyLimit') }}:</span> <span class="ml-1 font-medium text-gray-700 dark:text-gray-300">{{ selectedGroupInfo.daily_limit_usd != null ? '￥' + selectedGroupInfo.daily_limit_usd : t('payment.admin.unlimited') }}</span></div>

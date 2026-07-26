@@ -145,11 +145,14 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			return
 		}
 
+		isFreeGroup := apiKey.Group != nil && apiKey.Group.IsFreeBilling()
 		// Key 状态检查（状态字段可能因后台异步刷新而滞后，故显式拦截）。
 		switch apiKey.Status {
 		case service.StatusAPIKeyQuotaExhausted:
-			abortWithGoogleError(c, 429, "API key 额度已用完")
-			return
+			if !isFreeGroup {
+				abortWithGoogleError(c, 429, "API key 额度已用完")
+				return
+			}
 		case service.StatusAPIKeyExpired:
 			abortWithGoogleError(c, 403, "API key 已过期")
 			return
@@ -160,12 +163,16 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			abortWithGoogleError(c, 403, "API key 已过期")
 			return
 		}
-		if apiKey.IsQuotaExhausted() {
+		if !isFreeGroup && apiKey.IsQuotaExhausted() {
 			abortWithGoogleError(c, 429, "API key 额度已用完")
 			return
 		}
 
 		isSubscriptionType := apiKey.Group != nil && apiKey.Group.IsSubscriptionType()
+		if isSubscriptionType && apiKey.Group.IsFreeBilling() && subscriptionService == nil {
+			abortWithGoogleError(c, 403, "No active subscription found for this group")
+			return
+		}
 		if isSubscriptionType && subscriptionService != nil {
 			subscription, err := subscriptionService.GetActiveSubscription(
 				c.Request.Context(),
@@ -199,7 +206,7 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			}
 
 			c.Set(string(ContextKeySubscription), subscription)
-		} else {
+		} else if !isFreeGroup {
 			if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 				abortWithGoogleError(c, 403, "Insufficient account balance")
 				return

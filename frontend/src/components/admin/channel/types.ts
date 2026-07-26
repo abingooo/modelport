@@ -17,6 +17,7 @@ export interface IntervalFormEntry {
 
 export interface PricingFormEntry {
   models: string[]
+	user_visible: boolean
   billing_mode: BillingMode
   input_price: number | string | null
   output_price: number | string | null
@@ -142,7 +143,18 @@ export function validateIntervals(
   }
 
   // per_request / image 模式按 tier_label 匹配，不做 token 区间重叠校验
-  if (mode !== 'token') return null
+  if (mode !== 'token') {
+	const seen = new Set<string>()
+	for (const interval of sorted) {
+	  const label = interval.tier_label.trim().toLowerCase()
+	  if (!label) continue
+	  if (seen.has(label)) {
+		return intervalValidationMessage(t, 'duplicateTier', { label: interval.tier_label })
+	  }
+	  seen.add(label)
+	}
+	return null
+  }
   return checkIntervalOverlap(sorted, t)
 }
 

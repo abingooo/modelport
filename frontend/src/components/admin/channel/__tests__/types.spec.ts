@@ -66,6 +66,14 @@ describe('validateIntervals', () => {
       expect(validateIntervals(intervals, 'per_request', t)).toBeNull()
     })
 
+	it('rejects duplicate tier labels case-insensitively', () => {
+	  const intervals: IntervalFormEntry[] = [
+		makeInterval({ tier_label: '2K', per_request_price: 0.06 }),
+		makeInterval({ tier_label: ' 2k ', per_request_price: 0.08 }),
+	  ]
+	  expect(validateIntervals(intervals, 'image', t)).toContain('duplicateTier')
+	})
+
     it('still rejects negative prices', () => {
       const intervals: IntervalFormEntry[] = [
         makeInterval({ tier_label: '1K', per_request_price: -1 }),
