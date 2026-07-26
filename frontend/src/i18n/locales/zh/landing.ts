@@ -14,43 +14,6 @@ export default {
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
-    harbor: {
-      primaryNav: '主导航',
-      sceneLabel: '动态模型港：船只沿模型航线驶向数据码头，灯塔引导航道',
-      eyebrow: '统一 AI 模型港口',
-      heroDescription: '让每一次模型请求从同一座港口出发，在清晰、稳定的航线上抵达合适的智能服务。',
-      exploreModels: '探索模型广场',
-      manageKeys: '管理 API 密钥',
-      nav: { catalog: '模型广场', lottery: '幸运抽奖' },
-      signals: {
-        oneKey: 'ONE KEY', oneKeyLabel: '统一通行凭证',
-        routes: 'LIVE', routesLabel: '智能模型航线',
-        billing: '￥', billingLabel: '透明人民币计费',
-      },
-      routes: {
-        index: '选择泊位',
-        title: '从这里进入模型港',
-        description: '每个泊位对应一条清晰的工作路径，连接模型、密钥与 ModelPort 权益。',
-        catalog: { title: '模型广场', description: '比较模型能力、价格、上下文与真实调用格式。' },
-        keys: { title: 'API 密钥', description: '创建统一凭证，选择分组并管理下游访问。' },
-        lottery: { title: '幸运抽奖', description: '参与港口活动，查看余额和订阅权益奖励。' },
-      },
-      manifest: {
-        index: '模型航线', title: '多家模型，同港调度',
-        description: '每家服务商保留自己的识别与能力边界，由 ModelPort 提供统一入口。',
-        online: '在线',
-      },
-      flow: {
-        index: '航道系统', title: '一条请求，三段清晰航程',
-        description: '入口保持一致，路由与上游差异由港口内部消化。',
-        steps: {
-          request: { title: '统一入港', description: '下游请求使用一个 Base URL 和密钥。' },
-          route: { title: '航线调度', description: '按分组、模型与可用状态选择通路。' },
-          model: { title: '模型靠泊', description: '完成协议适配、计费与响应回传。' },
-        },
-      },
-      cta: { index: '启航', title: '把下一次模型调用，交给更清晰的航线。', action: '进入 ModelPort' },
-    },
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
     heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',

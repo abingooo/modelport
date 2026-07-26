@@ -1,150 +1,407 @@
 <template>
+  <!-- Custom Home Content: Full Page Mode -->
   <div v-if="homeContent" class="min-h-screen">
-    <iframe v-if="isHomeContentUrl" :src="homeContent.trim()" class="h-screen w-full border-0" allowfullscreen />
+    <!-- iframe mode -->
+    <iframe
+      v-if="isHomeContentUrl"
+      :src="homeContent.trim()"
+      class="h-screen w-full border-0"
+      allowfullscreen
+    ></iframe>
+    <!-- HTML mode - SECURITY: homeContent is admin-only setting, XSS risk is acceptable -->
     <div v-else v-html="homeContent"></div>
   </div>
 
-  <div v-else class="harbor-home" :class="{ 'harbor-home-dark': isDark }">
-    <section class="harbor-hero">
-      <HarborScene :dark="isDark" :label="t('home.harbor.sceneLabel')" />
+  <!-- Default Home Page -->
+  <div
+    v-else
+    class="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
+  >
+    <!-- Background Decorations -->
+    <div class="pointer-events-none absolute inset-0 overflow-hidden">
+      <div
+        class="absolute -right-40 -top-40 h-96 w-96 rounded-full bg-primary-400/20 blur-3xl"
+      ></div>
+      <div
+        class="absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-primary-500/15 blur-3xl"
+      ></div>
+      <div
+        class="absolute left-1/3 top-1/4 h-72 w-72 rounded-full bg-primary-300/10 blur-3xl"
+      ></div>
+      <div
+        class="absolute bottom-1/4 right-1/4 h-64 w-64 rounded-full bg-primary-400/10 blur-3xl"
+      ></div>
+      <div
+        class="absolute inset-0 bg-[linear-gradient(rgba(13,110,242,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(13,110,242,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
+      ></div>
+    </div>
 
-      <header class="harbor-header">
-        <nav class="harbor-shell flex h-full items-center justify-between gap-4" :aria-label="t('home.harbor.primaryNav')">
-          <RouterLink to="/home" class="harbor-brand" aria-label="ModelPort home">
-            <span class="harbor-brand-mark">
-              <BrandLogo :site-name="siteName" :site-logo="siteLogo" image-class="h-full w-full object-contain" />
+    <!-- Header -->
+    <header class="relative z-20 px-6 py-4">
+      <nav class="mx-auto flex max-w-6xl items-center justify-between">
+        <!-- Logo -->
+        <div class="flex items-center">
+          <div class="h-10 w-10 overflow-hidden rounded-xl shadow-md">
+            <BrandLogo
+              :site-name="siteName"
+              :site-logo="siteLogo"
+              image-class="h-full w-full object-contain"
+            />
+          </div>
+        </div>
+
+        <!-- Nav Actions -->
+        <div class="flex items-center gap-3">
+          <!-- Language Switcher -->
+          <LocaleSwitcher />
+
+          <!-- Doc Link -->
+          <a
+            v-if="docUrl"
+            :href="docUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            :title="t('home.viewDocs')"
+          >
+            <Icon name="book" size="md" />
+          </a>
+
+          <!-- Theme Toggle -->
+          <button
+            @click="toggleTheme"
+            class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+          >
+            <Icon v-if="isDark" name="sun" size="md" />
+            <Icon v-else name="moon" size="md" />
+          </button>
+
+          <!-- Login / Dashboard Button -->
+          <router-link
+            v-if="isAuthenticated"
+            :to="dashboardPath"
+            class="inline-flex items-center gap-1.5 rounded-full bg-gray-900 py-1 pl-1 pr-2.5 transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
+          >
+            <span
+              class="flex h-5 w-5 items-center justify-center rounded-full bg-gradient-to-br from-primary-400 to-primary-600 text-[10px] font-semibold text-white"
+            >
+              {{ userInitial }}
             </span>
-            <span class="harbor-brand-name">{{ siteName }}</span>
-          </RouterLink>
-
-          <div class="hidden items-center gap-7 md:flex">
-            <RouterLink to="/model-catalog" class="harbor-nav-link">{{ t('home.harbor.nav.catalog') }}</RouterLink>
-            <RouterLink to="/lottery" class="harbor-nav-link">{{ t('home.harbor.nav.lottery') }}</RouterLink>
-            <a v-if="docUrl" :href="docUrl" target="_blank" rel="noopener noreferrer" class="harbor-nav-link">{{ t('home.docs') }}</a>
-          </div>
-
-          <div class="flex shrink-0 items-center gap-1 sm:gap-2">
-            <LocaleSwitcher />
-            <button type="button" class="harbor-icon-button" :title="isDark ? t('home.switchToLight') : t('home.switchToDark')" @click="toggleTheme">
-              <Icon :name="isDark ? 'sun' : 'moon'" size="md" />
-            </button>
-            <RouterLink :to="isAuthenticated ? dashboardPath : '/login'" class="harbor-account-link">
-              <span v-if="isAuthenticated" class="harbor-user-initial">{{ userInitial }}</span>
-              <Icon v-else name="login" size="sm" />
-              <span class="hidden sm:inline">{{ isAuthenticated ? t('home.dashboard') : t('home.login') }}</span>
-              <Icon name="arrowRight" size="xs" />
-            </RouterLink>
-          </div>
-        </nav>
-      </header>
-
-      <div class="harbor-shell harbor-hero-content">
-        <p class="harbor-kicker"><span />{{ t('home.harbor.eyebrow') }}</p>
-        <h1 class="harbor-title">{{ siteName }}</h1>
-        <p class="harbor-lead">{{ t('home.harbor.heroDescription') }}</p>
-        <p v-if="siteSubtitle" class="harbor-subtitle">{{ siteSubtitle }}</p>
-        <div class="mt-8 flex flex-col gap-3 sm:flex-row">
-          <RouterLink to="/model-catalog" class="harbor-primary-action">
-            <Icon name="grid" size="md" />{{ t('home.harbor.exploreModels') }}<Icon name="arrowRight" size="sm" />
-          </RouterLink>
-          <RouterLink :to="isAuthenticated ? '/keys' : '/login'" class="harbor-secondary-action">
-            <Icon name="key" size="md" />{{ isAuthenticated ? t('home.harbor.manageKeys') : t('home.getStarted') }}
-          </RouterLink>
+            <span class="text-xs font-medium text-white">{{ t('home.dashboard') }}</span>
+            <svg
+              class="h-3 w-3 text-gray-400"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M4.5 19.5l15-15m0 0H8.25m11.25 0v11.25"
+              />
+            </svg>
+          </router-link>
+          <router-link
+            v-else
+            to="/login"
+            class="inline-flex items-center rounded-full bg-gray-900 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700"
+          >
+            {{ t('home.login') }}
+          </router-link>
         </div>
-      </div>
+      </nav>
+    </header>
 
-      <div class="harbor-signal-rail">
-        <div class="harbor-shell grid h-full grid-cols-3">
-          <div v-for="signal in signals" :key="signal.label" class="harbor-signal">
-            <span :class="['harbor-signal-light', signal.color]" />
-            <span><strong>{{ signal.value }}</strong><small>{{ signal.label }}</small></span>
-          </div>
-        </div>
-      </div>
-    </section>
+    <!-- Main Content -->
+    <main class="relative z-10 flex-1 px-6 py-16">
+      <div class="mx-auto max-w-6xl">
+        <!-- Hero Section - Left/Right Layout -->
+        <div class="mb-12 flex flex-col items-center justify-between gap-12 lg:flex-row lg:gap-16">
+          <!-- Left: Text Content -->
+          <div class="flex-1 text-center lg:text-left">
+            <h1
+              class="mb-4 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl lg:text-6xl"
+            >
+              {{ siteName }}
+            </h1>
+            <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
+              {{ siteSubtitle }}
+            </p>
 
-    <main>
-      <section class="harbor-routes-section">
-        <div class="harbor-shell py-20 md:py-24">
-          <div class="max-w-2xl">
-            <p class="section-index">01 / {{ t('home.harbor.routes.index') }}</p>
-            <h2 class="section-title">{{ t('home.harbor.routes.title') }}</h2>
-            <p class="section-description">{{ t('home.harbor.routes.description') }}</p>
-          </div>
-
-          <div class="route-grid mt-12">
-            <RouterLink v-for="route in harborRoutes" :key="route.path" :to="route.path" class="route-berth">
-              <div class="flex items-start justify-between gap-5">
-                <span class="route-number">{{ route.number }}</span>
-                <Icon name="arrowRight" size="md" class="route-arrow" />
-              </div>
-              <Icon :name="route.icon" size="xl" class="mt-9" :class="route.accent" />
-              <h3>{{ route.title }}</h3>
-              <p>{{ route.description }}</p>
-            </RouterLink>
-          </div>
-        </div>
-      </section>
-
-      <section class="harbor-manifest-section">
-        <div class="harbor-shell py-20 md:py-24">
-          <div class="manifest-heading">
+            <!-- CTA Button -->
             <div>
-              <p class="section-index section-index-dark">02 / {{ t('home.harbor.manifest.index') }}</p>
-              <h2 class="section-title section-title-dark">{{ t('home.harbor.manifest.title') }}</h2>
-            </div>
-            <p class="section-description section-description-dark">{{ t('home.harbor.manifest.description') }}</p>
-          </div>
-
-          <div class="manifest-track" aria-label="Supported providers">
-            <div v-for="provider in providers" :key="provider.platform" class="manifest-provider">
-              <span :class="['manifest-icon', platformBadgeClass(provider.platform)]">
-                <PlatformIcon :platform="provider.platform" size="lg" />
-              </span>
-              <span class="min-w-0"><strong>{{ platformLabel(provider.platform) }}</strong><small>{{ provider.lane }}</small></span>
-              <span class="manifest-status">{{ t('home.harbor.manifest.online') }}</span>
+              <router-link
+                :to="isAuthenticated ? dashboardPath : '/login'"
+                class="btn btn-primary px-8 py-3 text-base shadow-lg shadow-primary-500/30"
+              >
+                {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
+                <Icon name="arrowRight" size="md" class="ml-2" :stroke-width="2" />
+              </router-link>
             </div>
           </div>
-        </div>
-      </section>
 
-      <section class="harbor-flow-section">
-        <div class="harbor-shell py-20 md:py-28">
-          <p class="section-index">03 / {{ t('home.harbor.flow.index') }}</p>
-          <div class="flow-layout mt-6">
-            <div>
-              <h2 class="section-title">{{ t('home.harbor.flow.title') }}</h2>
-              <p class="section-description max-w-xl">{{ t('home.harbor.flow.description') }}</p>
-            </div>
-            <div class="flow-map" aria-hidden="true">
-              <div v-for="(step, index) in flowSteps" :key="step.title" class="flow-step">
-                <span class="flow-node">{{ String(index + 1).padStart(2, '0') }}</span>
-                <span><strong>{{ step.title }}</strong><small>{{ step.description }}</small></span>
+          <!-- Right: Terminal Animation -->
+          <div class="flex flex-1 justify-center lg:justify-end">
+            <div class="terminal-container">
+              <div class="terminal-window">
+                <!-- Window header -->
+                <div class="terminal-header">
+                  <div class="terminal-buttons">
+                    <span class="btn-close"></span>
+                    <span class="btn-minimize"></span>
+                    <span class="btn-maximize"></span>
+                  </div>
+                  <span class="terminal-title">terminal</span>
+                </div>
+                <!-- Terminal content -->
+                <div class="terminal-body">
+                  <div class="code-line line-1">
+                    <span class="code-prompt">$</span>
+                    <span class="code-cmd">curl</span>
+                    <span class="code-flag">-X POST</span>
+                    <span class="code-url">/v1/messages</span>
+                  </div>
+                  <div class="code-line line-2">
+                    <span class="code-comment"># Routing to upstream...</span>
+                  </div>
+                  <div class="code-line line-3">
+                    <span class="code-success">200 OK</span>
+                    <span class="code-response">{ "content": "Hello!" }</span>
+                  </div>
+                  <div class="code-line line-4">
+                    <span class="code-prompt">$</span>
+                    <span class="cursor"></span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </section>
 
-      <section class="harbor-cta-section">
-        <div class="harbor-shell harbor-cta-inner">
-          <div>
-            <p class="section-index section-index-cta">04 / {{ t('home.harbor.cta.index') }}</p>
-            <h2>{{ t('home.harbor.cta.title') }}</h2>
+        <!-- Feature Tags - Centered -->
+        <div class="mb-12 flex flex-wrap items-center justify-center gap-4 md:gap-6">
+          <div
+            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
+          >
+            <Icon name="swap" size="sm" class="text-primary-500" />
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
+              t('home.tags.subscriptionToApi')
+            }}</span>
           </div>
-          <RouterLink :to="isAuthenticated ? '/keys' : '/login'" class="harbor-cta-button">
-            <Icon name="key" size="md" />{{ isAuthenticated ? t('home.harbor.manageKeys') : t('home.harbor.cta.action') }}<Icon name="arrowRight" size="sm" />
-          </RouterLink>
+          <div
+            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
+          >
+            <Icon name="shield" size="sm" class="text-primary-500" />
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
+              t('home.tags.stickySession')
+            }}</span>
+          </div>
+          <div
+            class="inline-flex items-center gap-2.5 rounded-full border border-gray-200/50 bg-white/80 px-5 py-2.5 shadow-sm backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/80"
+          >
+            <Icon name="chart" size="sm" class="text-primary-500" />
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{
+              t('home.tags.realtimeBilling')
+            }}</span>
+          </div>
         </div>
-      </section>
+
+        <!-- Features Grid -->
+        <div class="mb-12 grid gap-6 md:grid-cols-3">
+          <!-- Feature 1: Unified Gateway -->
+          <div
+            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
+          >
+            <div
+              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 shadow-lg shadow-blue-500/30 transition-transform group-hover:scale-110"
+            >
+              <Icon name="server" size="lg" class="text-white" />
+            </div>
+            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('home.features.unifiedGateway') }}
+            </h3>
+            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
+              {{ t('home.features.unifiedGatewayDesc') }}
+            </p>
+          </div>
+
+          <!-- Feature 2: Account Pool -->
+          <div
+            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
+          >
+            <div
+              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-primary-500 to-primary-600 shadow-lg shadow-primary-500/30 transition-transform group-hover:scale-110"
+            >
+              <svg
+                class="h-6 w-6 text-white"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"
+                />
+              </svg>
+            </div>
+            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('home.features.multiAccount') }}
+            </h3>
+            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
+              {{ t('home.features.multiAccountDesc') }}
+            </p>
+          </div>
+
+          <!-- Feature 3: Billing & Quota -->
+          <div
+            class="group rounded-2xl border border-gray-200/50 bg-white/60 p-6 backdrop-blur-sm transition-all duration-300 hover:shadow-xl hover:shadow-primary-500/10 dark:border-dark-700/50 dark:bg-dark-800/60"
+          >
+            <div
+              class="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-purple-500 to-purple-600 shadow-lg shadow-purple-500/30 transition-transform group-hover:scale-110"
+            >
+              <svg
+                class="h-6 w-6 text-white"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                stroke-width="1.5"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M2.25 18.75a60.07 60.07 0 0115.797 2.101c.727.198 1.453-.342 1.453-1.096V18.75M3.75 4.5v.75A.75.75 0 013 6h-.75m0 0v-.375c0-.621.504-1.125 1.125-1.125H20.25M2.25 6v9m18-10.5v.75c0 .414.336.75.75.75h.75m-1.5-1.5h.375c.621 0 1.125.504 1.125 1.125v9.75c0 .621-.504 1.125-1.125 1.125h-.375m1.5-1.5H21a.75.75 0 00-.75.75v.75m0 0H3.75m0 0h-.375a1.125 1.125 0 01-1.125-1.125V15m1.5 1.5v-.75A.75.75 0 003 15h-.75M15 10.5a3 3 0 11-6 0 3 3 0 016 0zm3 0h.008v.008H18V10.5zm-12 0h.008v.008H6V10.5z"
+                />
+              </svg>
+            </div>
+            <h3 class="mb-2 text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('home.features.balanceQuota') }}
+            </h3>
+            <p class="text-sm leading-relaxed text-gray-600 dark:text-dark-400">
+              {{ t('home.features.balanceQuotaDesc') }}
+            </p>
+          </div>
+        </div>
+
+        <!-- Supported Providers -->
+        <div class="mb-8 text-center">
+          <h2 class="mb-3 text-2xl font-bold text-gray-900 dark:text-white">
+            {{ t('home.providers.title') }}
+          </h2>
+          <p class="text-sm text-gray-600 dark:text-dark-400">
+            {{ t('home.providers.description') }}
+          </p>
+        </div>
+
+        <div class="mb-16 flex flex-wrap items-center justify-center gap-4">
+          <!-- Claude - Supported -->
+          <div
+            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
+          >
+            <div
+              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-orange-400 to-orange-500"
+            >
+              <span class="text-xs font-bold text-white">C</span>
+            </div>
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.claude') }}</span>
+            <span
+              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
+              >{{ t('home.providers.supported') }}</span
+            >
+          </div>
+          <!-- GPT - Supported -->
+          <div
+            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
+          >
+            <div
+              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-green-500 to-green-600"
+            >
+              <span class="text-xs font-bold text-white">G</span>
+            </div>
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">GPT</span>
+            <span
+              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
+              >{{ t('home.providers.supported') }}</span
+            >
+          </div>
+          <!-- Gemini - Supported -->
+          <div
+            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
+          >
+            <div
+              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-blue-600"
+            >
+              <span class="text-xs font-bold text-white">G</span>
+            </div>
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.gemini') }}</span>
+            <span
+              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
+              >{{ t('home.providers.supported') }}</span
+            >
+          </div>
+          <!-- Antigravity - Supported -->
+          <div
+            class="flex items-center gap-2 rounded-xl border border-primary-200 bg-white/60 px-5 py-3 ring-1 ring-primary-500/20 backdrop-blur-sm dark:border-primary-800 dark:bg-dark-800/60"
+          >
+            <div
+              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-rose-500 to-pink-600"
+            >
+              <span class="text-xs font-bold text-white">A</span>
+            </div>
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.antigravity') }}</span>
+            <span
+              class="rounded bg-primary-100 px-1.5 py-0.5 text-[10px] font-medium text-primary-600 dark:bg-primary-900/30 dark:text-primary-400"
+              >{{ t('home.providers.supported') }}</span
+            >
+          </div>
+          <!-- More - Coming Soon -->
+          <div
+            class="flex items-center gap-2 rounded-xl border border-gray-200/50 bg-white/40 px-5 py-3 opacity-60 backdrop-blur-sm dark:border-dark-700/50 dark:bg-dark-800/40"
+          >
+            <div
+              class="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-gray-500 to-gray-600"
+            >
+              <span class="text-xs font-bold text-white">+</span>
+            </div>
+            <span class="text-sm font-medium text-gray-700 dark:text-dark-200">{{ t('home.providers.more') }}</span>
+            <span
+              class="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] font-medium text-gray-500 dark:bg-dark-700 dark:text-dark-400"
+              >{{ t('home.providers.soon') }}</span
+            >
+          </div>
+        </div>
+      </div>
     </main>
 
-    <footer class="harbor-footer">
-      <div class="harbor-shell flex flex-col gap-4 py-7 sm:flex-row sm:items-center sm:justify-between">
-        <p>&copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}</p>
-        <div class="flex items-center gap-5">
-          <a v-if="docUrl" :href="docUrl" target="_blank" rel="noopener noreferrer">{{ t('home.docs') }}</a>
-          <a :href="githubUrl" target="_blank" rel="noopener noreferrer">GitHub</a>
+    <!-- Footer -->
+    <footer class="relative z-10 border-t border-gray-200/50 px-6 py-8 dark:border-dark-800/50">
+      <div
+        class="mx-auto flex max-w-6xl flex-col items-center justify-center gap-4 text-center sm:flex-row sm:text-left"
+      >
+        <p class="text-sm text-gray-500 dark:text-dark-400">
+          &copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}
+        </p>
+        <div class="flex items-center gap-4">
+          <a
+            v-if="docUrl"
+            :href="docUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
+          >
+            {{ t('home.docs') }}
+          </a>
+          <a
+            :href="githubUrl"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-sm text-gray-500 transition-colors hover:text-gray-700 dark:text-dark-400 dark:hover:text-white"
+          >
+            GitHub
+          </a>
         </div>
       </div>
     </footer>
@@ -152,261 +409,246 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useAppStore, useAuthStore } from '@/stores'
-import BrandLogo from '@/components/common/BrandLogo.vue'
+import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
-import PlatformIcon from '@/components/common/PlatformIcon.vue'
-import HarborScene from '@/components/home/HarborScene.vue'
+import BrandLogo from '@/components/common/BrandLogo.vue'
 import Icon from '@/components/icons/Icon.vue'
-import type { GroupPlatform } from '@/types'
-import { platformBadgeClass, platformLabel } from '@/utils/platformColors'
 import { sanitizeUrl } from '@/utils/url'
 
 const { t } = useI18n()
+
 const authStore = useAuthStore()
 const appStore = useAppStore()
-const isDark = ref(document.documentElement.classList.contains('dark'))
 
-const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'ModelPort')
+// Site settings - directly from appStore (already initialized from injected config)
+const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API')
 const siteLogo = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
-const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || '')
+const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'AI API Gateway Platform')
 const docUrl = computed(() => sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''))
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+
+// Check if homeContent is a URL (for iframe display)
 const isHomeContentUrl = computed(() => {
   const content = homeContent.value.trim()
   return content.startsWith('http://') || content.startsWith('https://')
 })
-const githubUrl = computed(() => siteName.value.trim().toLowerCase() === 'modelport'
-  ? 'https://github.com/abingooo/modelport'
-  : 'https://github.com/Wei-Shaw/sub2api')
+
+// Theme
+const isDark = ref(document.documentElement.classList.contains('dark'))
+
+// GitHub URL
+const githubUrl = computed(() =>
+  siteName.value.trim().toLowerCase() === 'modelport'
+    ? 'https://github.com/abingooo/modelport'
+    : 'https://github.com/Wei-Shaw/sub2api'
+)
+
+// Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
-const dashboardPath = computed(() => authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
-const userInitial = computed(() => authStore.user?.email?.charAt(0).toUpperCase() || 'M')
+const isAdmin = computed(() => authStore.isAdmin)
+const dashboardPath = computed(() => isAdmin.value ? '/admin/dashboard' : '/dashboard')
+const userInitial = computed(() => {
+  const user = authStore.user
+  if (!user || !user.email) return ''
+  return user.email.charAt(0).toUpperCase()
+})
+
+// Current year for footer
 const currentYear = computed(() => new Date().getFullYear())
 
-const signals = computed(() => [
-  { value: t('home.harbor.signals.oneKey'), label: t('home.harbor.signals.oneKeyLabel'), color: 'signal-teal' },
-  { value: t('home.harbor.signals.routes'), label: t('home.harbor.signals.routesLabel'), color: 'signal-coral' },
-  { value: t('home.harbor.signals.billing'), label: t('home.harbor.signals.billingLabel'), color: 'signal-yellow' },
-])
-const harborRoutes = computed(() => [
-  { number: 'A1', path: '/model-catalog', icon: 'grid' as const, accent: 'text-teal-700 dark:text-teal-300', title: t('home.harbor.routes.catalog.title'), description: t('home.harbor.routes.catalog.description') },
-  { number: 'B2', path: isAuthenticated.value ? '/keys' : '/login', icon: 'key' as const, accent: 'text-coral-600', title: t('home.harbor.routes.keys.title'), description: t('home.harbor.routes.keys.description') },
-  { number: 'C3', path: '/lottery', icon: 'gift' as const, accent: 'text-amber-600 dark:text-amber-300', title: t('home.harbor.routes.lottery.title'), description: t('home.harbor.routes.lottery.description') },
-])
-const providers: Array<{ platform: GroupPlatform; lane: string }> = [
-  { platform: 'openai', lane: 'ATL-01' }, { platform: 'anthropic', lane: 'PAC-02' },
-  { platform: 'gemini', lane: 'ORB-03' }, { platform: 'deepseek', lane: 'DPS-04' },
-  { platform: 'qwen', lane: 'QWN-05' }, { platform: 'glm', lane: 'GLM-06' },
-  { platform: 'kimi', lane: 'KMI-07' }, { platform: 'doubao', lane: 'BYT-08' },
-  { platform: 'siliconflow', lane: 'SFL-09' }, { platform: 'minimax', lane: 'MMX-10' },
-  { platform: 'mimo', lane: 'MIM-11' }, { platform: 'grok', lane: 'XAI-12' },
-]
-const flowSteps = computed(() => [
-  { title: t('home.harbor.flow.steps.request.title'), description: t('home.harbor.flow.steps.request.description') },
-  { title: t('home.harbor.flow.steps.route.title'), description: t('home.harbor.flow.steps.route.description') },
-  { title: t('home.harbor.flow.steps.model.title'), description: t('home.harbor.flow.steps.model.description') },
-])
-
+// Toggle theme
 function toggleTheme() {
   isDark.value = !isDark.value
   document.documentElement.classList.toggle('dark', isDark.value)
   localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
 }
+
+// Initialize theme
 function initTheme() {
   const savedTheme = localStorage.getItem('theme')
-  if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+  if (
+    savedTheme === 'dark' ||
+    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
+  ) {
     isDark.value = true
     document.documentElement.classList.add('dark')
   }
 }
+
 onMounted(() => {
   initTheme()
-  void authStore.checkAuth()
-  if (!appStore.publicSettingsLoaded) void appStore.fetchPublicSettings()
+
+  // Check auth state
+  authStore.checkAuth()
+
+  // Ensure public settings are loaded (will use cache if already loaded from injected config)
+  if (!appStore.publicSettingsLoaded) {
+    appStore.fetchPublicSettings()
+  }
 })
 </script>
 
 <style scoped>
-.harbor-home {
-  --paper: #f4f2e8;
-  --ink: #152b2d;
-  --muted: #586b69;
-  --line: #bdc8c1;
-  --teal: #087f7a;
-  --coral: #e7664a;
-  --yellow: #eab84e;
-  min-height: 100vh;
-  background: var(--paper);
-  color: var(--ink);
-}
-
-.harbor-home-dark {
-  --paper: #0a171b;
-  --ink: #e9eee6;
-  --muted: #9aadaa;
-  --line: #304548;
-  --teal: #35b8ad;
-  --coral: #f1785c;
-  --yellow: #f2c96b;
-}
-
-.harbor-shell {
-  width: min(100% - 32px, 1240px);
-  margin-inline: auto;
-}
-
-.harbor-hero {
+/* Terminal Container */
+.terminal-container {
   position: relative;
-  height: 92svh;
-  min-height: 540px;
+  display: inline-block;
+}
+
+/* Terminal Window */
+.terminal-window {
+  width: 420px;
+  background: linear-gradient(145deg, #1e293b 0%, #0f172a 100%);
+  border-radius: 14px;
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
   overflow: hidden;
-  background: #dfe9e4;
+  transform: perspective(1000px) rotateX(2deg) rotateY(-2deg);
+  transition: transform 0.3s ease;
 }
 
-.harbor-home-dark .harbor-hero { background: #07171c; }
-
-.harbor-header {
-  position: relative;
-  z-index: 10;
-  height: 72px;
-  border-bottom: 1px solid rgba(21, 43, 45, 0.18);
+.terminal-window:hover {
+  transform: perspective(1000px) rotateX(0deg) rotateY(0deg) translateY(-4px);
 }
 
-.harbor-home-dark .harbor-header { border-color: rgba(228, 231, 218, 0.16); }
-
-.harbor-brand { display: inline-flex; min-width: 0; align-items: center; gap: 11px; }
-.harbor-brand-mark { display: flex; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; overflow: hidden; border-radius: 6px; }
-.harbor-brand-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 750; color: var(--ink); }
-.harbor-nav-link { font-size: 13px; font-weight: 650; color: var(--muted); transition: color 160ms ease; }
-.harbor-nav-link:hover { color: var(--ink); }
-.harbor-icon-button { display: inline-flex; width: 38px; height: 38px; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px; color: var(--muted); }
-.harbor-icon-button:hover { border-color: var(--line); color: var(--ink); }
-.harbor-account-link { display: inline-flex; min-height: 38px; align-items: center; gap: 7px; border-radius: 6px; background: var(--ink); padding: 0 12px; font-size: 12px; font-weight: 700; color: var(--paper); }
-.harbor-user-initial { display: inline-flex; width: 20px; height: 20px; align-items: center; justify-content: center; border-radius: 50%; background: var(--coral); color: #fff; font-size: 10px; }
-
-.harbor-hero-content {
-  position: relative;
-  z-index: 4;
+/* Terminal Header */
+.terminal-header {
   display: flex;
-  height: calc(100% - 152px);
-  flex-direction: column;
-  justify-content: center;
-  padding-bottom: 2vh;
-  pointer-events: none;
+  align-items: center;
+  padding: 12px 16px;
+  background: rgba(30, 41, 59, 0.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
 
-.harbor-hero-content a { pointer-events: auto; }
-.harbor-kicker { display: flex; align-items: center; gap: 10px; font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--muted); }
-.harbor-kicker span { width: 32px; height: 2px; background: var(--coral); }
-.harbor-title { max-width: 760px; margin-top: 18px; overflow-wrap: anywhere; font-size: 76px; font-weight: 800; line-height: 0.94; letter-spacing: 0; color: var(--ink); text-wrap: balance; }
-.harbor-lead { max-width: 590px; margin-top: 24px; font-size: 20px; font-weight: 560; line-height: 1.55; color: var(--ink); text-wrap: balance; }
-.harbor-subtitle { max-width: 560px; margin-top: 8px; font-size: 13px; color: var(--muted); }
-.harbor-primary-action, .harbor-secondary-action, .harbor-cta-button { display: inline-flex; min-height: 46px; align-items: center; justify-content: center; gap: 9px; border-radius: 6px; padding: 0 18px; font-size: 13px; font-weight: 750; transition: transform 160ms ease, background 160ms ease; }
-.harbor-primary-action { background: var(--coral); color: #fff; }
-.harbor-primary-action:hover, .harbor-cta-button:hover { transform: translateY(-2px); background: #d9583e; }
-.harbor-secondary-action { border: 1px solid rgba(21, 43, 45, 0.32); background: rgba(244, 242, 232, 0.56); color: var(--ink); backdrop-filter: blur(8px); }
-.harbor-home-dark .harbor-secondary-action { border-color: rgba(228, 231, 218, 0.28); background: rgba(10, 23, 27, 0.5); }
-.harbor-secondary-action:hover { transform: translateY(-2px); border-color: var(--teal); }
-
-.harbor-signal-rail { position: absolute; z-index: 5; right: 0; bottom: 0; left: 0; height: 80px; border-top: 1px solid rgba(21, 43, 45, 0.2); background: rgba(223, 233, 228, 0.74); backdrop-filter: blur(10px); }
-.harbor-home-dark .harbor-signal-rail { border-color: rgba(228, 231, 218, 0.15); background: rgba(7, 23, 28, 0.75); }
-.harbor-signal { display: flex; min-width: 0; align-items: center; gap: 12px; border-right: 1px solid rgba(21, 43, 45, 0.16); padding: 0 24px; }
-.harbor-home-dark .harbor-signal { border-color: rgba(228, 231, 218, 0.12); }
-.harbor-signal:last-child { border-right: 0; }
-.harbor-signal-light { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; }
-.signal-teal { background: var(--teal); box-shadow: 0 0 12px var(--teal); }
-.signal-coral { background: var(--coral); box-shadow: 0 0 12px var(--coral); }
-.signal-yellow { background: var(--yellow); box-shadow: 0 0 12px var(--yellow); }
-.harbor-signal strong, .harbor-signal small { display: block; }
-.harbor-signal > span:last-child { min-width: 0; }
-.harbor-signal strong { font-family: ui-monospace, monospace; font-size: 13px; color: var(--ink); }
-.harbor-signal small { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; text-transform: uppercase; color: var(--muted); }
-
-.harbor-routes-section, .harbor-flow-section { background: var(--paper); }
-.section-index { font-family: ui-monospace, monospace; font-size: 10px; font-weight: 700; text-transform: uppercase; color: var(--teal); }
-.section-title { margin-top: 14px; font-size: 38px; font-weight: 780; line-height: 1.13; letter-spacing: 0; color: var(--ink); text-wrap: balance; }
-.section-description { margin-top: 14px; font-size: 15px; line-height: 1.75; color: var(--muted); }
-.route-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
-.route-berth { min-width: 0; padding: 28px; border-right: 1px solid var(--line); transition: background 180ms ease; }
-.route-berth:last-child { border-right: 0; }
-.route-berth:hover { background: rgba(8, 127, 122, 0.08); }
-.route-number { font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
-.route-arrow { color: var(--muted); transition: transform 180ms ease, color 180ms ease; }
-.route-berth:hover .route-arrow { transform: translateX(4px); color: var(--coral); }
-.route-berth h3 { margin-top: 20px; font-size: 18px; font-weight: 730; color: var(--ink); }
-.route-berth p { margin-top: 8px; font-size: 13px; line-height: 1.65; color: var(--muted); }
-
-.harbor-manifest-section { background: #10282d; color: #e8eee6; }
-.manifest-heading { display: grid; grid-template-columns: 1fr minmax(280px, 0.6fr); align-items: end; gap: 48px; }
-.section-index-dark { color: #6ed0c4; }
-.section-title-dark { color: #edf1e8; }
-.section-description-dark { color: #a3b4b0; }
-.manifest-track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: 48px; border-top: 1px solid #395055; border-left: 1px solid #395055; }
-.manifest-provider { display: flex; min-width: 0; min-height: 88px; align-items: center; gap: 11px; border-right: 1px solid #395055; border-bottom: 1px solid #395055; padding: 14px; }
-.manifest-icon { display: inline-flex; width: 34px; height: 34px; flex: 0 0 34px; align-items: center; justify-content: center; border: 1px solid; border-radius: 6px; }
-.manifest-provider strong, .manifest-provider small { display: block; }
-.manifest-provider strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: #edf1e8; }
-.manifest-provider small { margin-top: 4px; font-family: ui-monospace, monospace; font-size: 9px; color: #78908d; }
-.manifest-status { margin-left: auto; font-family: ui-monospace, monospace; font-size: 8px; text-transform: uppercase; color: #6ed0c4; }
-
-.flow-layout { display: grid; grid-template-columns: minmax(0, 0.8fr) minmax(420px, 1.2fr); align-items: start; gap: 72px; }
-.flow-map { border-top: 1px solid var(--line); }
-.flow-step { position: relative; display: grid; grid-template-columns: 54px 1fr; min-height: 92px; align-items: center; border-bottom: 1px solid var(--line); }
-.flow-step::before { position: absolute; top: -1px; left: 22px; width: 10px; height: 10px; border-radius: 50%; background: var(--coral); content: ''; transform: translateY(-50%); }
-.flow-node { font-family: ui-monospace, monospace; font-size: 10px; color: var(--teal); }
-.flow-step strong, .flow-step small { display: block; }
-.flow-step strong { font-size: 14px; color: var(--ink); }
-.flow-step small { margin-top: 5px; font-size: 12px; color: var(--muted); }
-
-.harbor-cta-section { background: var(--coral); color: #fff; }
-.harbor-cta-inner { display: flex; min-height: 250px; align-items: center; justify-content: space-between; gap: 40px; }
-.section-index-cta { color: #ffe3d9; }
-.harbor-cta-inner h2 { margin-top: 12px; max-width: 760px; font-size: 38px; font-weight: 780; line-height: 1.18; letter-spacing: 0; text-wrap: balance; }
-.harbor-cta-button { flex: 0 0 auto; background: #10282d; color: #fff; }
-.harbor-footer { border-top: 1px solid var(--line); background: var(--paper); font-size: 11px; color: var(--muted); }
-.harbor-footer a:hover { color: var(--ink); }
-.text-coral-600 { color: var(--coral); }
-
-@media (max-width: 900px) {
-  .harbor-title { font-size: 58px; }
-  .harbor-lead { max-width: 520px; font-size: 17px; }
-  .route-grid { grid-template-columns: 1fr; }
-  .route-berth { border-right: 0; border-bottom: 1px solid var(--line); }
-  .route-berth:last-child { border-bottom: 0; }
-  .manifest-track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .flow-layout { grid-template-columns: 1fr; gap: 44px; }
+.terminal-buttons {
+  display: flex;
+  gap: 8px;
 }
 
-@media (max-width: 640px) {
-  .harbor-shell { width: min(100% - 24px, 1240px); }
-  .harbor-hero { height: 92svh; min-height: 540px; }
-  .harbor-header { height: 64px; }
-  .harbor-brand-name { max-width: 112px; font-size: 14px; }
-  .harbor-brand-mark { width: 30px; height: 30px; flex-basis: 30px; }
-  .harbor-hero-content { height: calc(100% - 136px); justify-content: flex-start; padding-top: 12vh; }
-  .harbor-title { max-width: 94%; margin-top: 14px; font-size: 44px; line-height: 0.98; }
-  .harbor-lead { max-width: 92%; margin-top: 18px; font-size: 15px; line-height: 1.5; }
-  .harbor-subtitle { display: none; }
-  .harbor-primary-action, .harbor-secondary-action { min-height: 43px; padding: 0 14px; }
-  .harbor-signal-rail { height: 72px; }
-  .harbor-signal { gap: 7px; padding: 0 8px; }
-  .harbor-signal strong { font-size: 10px; }
-  .harbor-signal small { font-size: 8px; }
-  .harbor-signal-light { width: 5px; height: 5px; flex-basis: 5px; }
-  .section-title, .harbor-cta-inner h2 { font-size: 30px; }
-  .route-berth { padding: 24px 8px; }
-  .manifest-heading { grid-template-columns: 1fr; gap: 12px; }
-  .manifest-track { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .manifest-provider { min-height: 76px; padding: 10px; }
-  .manifest-status { display: none; }
-  .harbor-cta-inner { min-height: 300px; flex-direction: column; align-items: flex-start; justify-content: center; }
-  .harbor-cta-button { width: 100%; }
+.terminal-buttons span {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .harbor-home *, .harbor-home *::before, .harbor-home *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
+.btn-close {
+  background: #ef4444;
+}
+.btn-minimize {
+  background: #eab308;
+}
+.btn-maximize {
+  background: #22c55e;
+}
+
+.terminal-title {
+  flex: 1;
+  text-align: center;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  color: #64748b;
+  margin-right: 52px;
+}
+
+/* Terminal Body */
+.terminal-body {
+  padding: 20px 24px;
+  font-family: ui-monospace, 'Fira Code', monospace;
+  font-size: 14px;
+  line-height: 2;
+}
+
+.code-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  opacity: 0;
+  animation: line-appear 0.5s ease forwards;
+}
+
+.line-1 {
+  animation-delay: 0.3s;
+}
+.line-2 {
+  animation-delay: 1s;
+}
+.line-3 {
+  animation-delay: 1.8s;
+}
+.line-4 {
+  animation-delay: 2.5s;
+}
+
+@keyframes line-appear {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.code-prompt {
+  color: #22c55e;
+  font-weight: bold;
+}
+.code-cmd {
+  color: #38bdf8;
+}
+.code-flag {
+  color: #a78bfa;
+}
+.code-url {
+  color: #0d6ef2;
+}
+.code-comment {
+  color: #64748b;
+  font-style: italic;
+}
+.code-success {
+  color: #22c55e;
+  background: rgba(34, 197, 94, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+}
+.code-response {
+  color: #fbbf24;
+}
+
+/* Blinking Cursor */
+.cursor {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: #22c55e;
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  51%,
+  100% {
+    opacity: 0;
+  }
+}
+
+/* Dark mode adjustments */
+:deep(.dark) .terminal-window {
+  box-shadow:
+    0 25px 50px -12px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(13, 110, 242, 0.2),
+    0 0 40px rgba(13, 110, 242, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 </style>

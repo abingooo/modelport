@@ -267,18 +267,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/model-catalog',
-    name: 'ModelCatalog',
-    component: () => import('@/views/user/ModelCatalogView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'Model Catalog',
-      titleKey: 'modelCatalog.title',
-      descriptionKey: 'modelCatalog.description'
-    }
-  },
-  {
     path: '/lottery',
     name: 'Lottery',
     component: () => import('@/views/user/LotteryView.vue'),
@@ -288,30 +276,6 @@ const routes: RouteRecordRaw[] = [
       title: 'Lucky Draw',
       titleKey: 'lottery.title',
       descriptionKey: 'lottery.description'
-    }
-  },
-  {
-    path: '/image-site',
-    name: 'ImageSite',
-    component: () => import('@/views/user/ImageSiteView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'Image Studio',
-      titleKey: 'imageSite.title',
-      descriptionKey: 'imageSite.description'
-    }
-  },
-  {
-    path: '/store',
-    name: 'ModelPortStore',
-    component: () => import('@/views/user/ModelPortStoreView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'ModelPort Store',
-      titleKey: 'modelPortStore.title',
-      descriptionKey: 'modelPortStore.description'
     }
   },
   {
@@ -525,18 +489,6 @@ const routes: RouteRecordRaw[] = [
       title: 'Channel Monitor',
       titleKey: 'admin.channelMonitor.title',
       descriptionKey: 'admin.channelMonitor.description'
-    }
-  },
-  {
-    path: '/admin/model-catalog',
-    name: 'AdminModelCatalog',
-    component: () => import('@/views/admin/ModelCatalogView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Model Catalog Management',
-      titleKey: 'modelCatalog.admin.title',
-      descriptionKey: 'modelCatalog.admin.description'
     }
   },
   {
