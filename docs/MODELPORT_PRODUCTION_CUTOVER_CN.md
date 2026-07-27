@@ -26,6 +26,8 @@
 9. 流量切换前保持 `TOKEN_REFRESH_ENABLED=false`，避免验收阶段旋转上游 OAuth 凭据。
 10. ModelPort 首次以 `TOKEN_REFRESH_ENABLED=true` 启动是凭据层提交点；此后回滚必须评估
     已轮换的上游凭据。接收首个用户写入后，禁止直接回旧快照。
+11. 测试站必须使用独立 JWT/TOTP 密钥，不能为了消除告警把生产密钥放到公网测试域名；
+    生产密钥的解密验收只能在不对公网开放的快照副本中执行。
 
 ## 3. 已验证的迁移事实
 
@@ -40,6 +42,11 @@
 - 目标只新增 ModelPort 预期字段、空表和八条迁移记录。
 - Redis 保留 9243 个登录会话相关键，删除 3398 个旧调度、计费、OAuth 和并发缓存；
   AOF 开启并重启后指纹不变。
+- 同一正式候选镜像连接完整会话副本运行后，9243 个认证键的总数、类型和值指纹保持不变。
+  测试站自身约 0.19 MB 的 Redis 数据与 TokensHub 约 3.35 MB 的 RDB 是两套数据，不能把
+  两者的键数差异解释为应用删除会话。
+- 使用 TokensHub 原始 `JWT_SECRET` 与 `TOTP_ENCRYPTION_KEY` 在隔离副本启动时无密钥告警；
+  8 个渠道监控和 2 个支付实例全部可解密，备份 S3 当前未配置。
 
 这些数字只证明快照演练。生产窗口必须对最终快照重新执行同一套检查，不能直接把旧数字
 当作生产最终值。
@@ -65,6 +72,9 @@ docker run --rm "$MODELPORT_IMAGE" --version
 - GitHub Actions 后端、前端、AMD64 镜像构建全部通过。
 - 绿色 Compose 显式继承旧站完整环境配置；至少对 `JWT_SECRET`、`TOTP_ENCRYPTION_KEY` 做
   长度与 SHA-256 对比，禁止把密钥明文写入证据日志。
+- Compose 必须把 `TOKEN_REFRESH_ENABLED`、`SERVER_TRUSTED_PROXIES` 和
+  `SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL` 真正传入应用容器；只写入未引用的 `.env`
+  不算配置成功。
 
 创建仅 root 可读的证据目录，并从一开始记录所有输出与校验和：
 
@@ -93,6 +103,15 @@ docker system df
   一份额外回滚备份，建议不少于当前数据库实际占用的三倍再加 10 GB。
 - 新容器只监听 `127.0.0.1` 或内部 Docker 网络，Nginx 是唯一公网入口。
 - 切换前验证域名证书、DNS 和 Nginx 配置，但不提前改变线上 upstream。
+- `SERVER_TRUSTED_PROXIES` 只填写宿主 Nginx 进入应用容器时使用的 Docker 网关 `/32`；
+  同时设置 `SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL=false`。切流后确认访问日志中的
+  `client_ip` 是真实客户端地址而不是 Docker 网关，否则 146 个已绑定 IP/UA 的 refresh
+  token 可能在轮换时失效。
+- 前后端同域部署时，CORS 空列表表示主动拒绝跨域请求，可以保留。若另有独立前端域名，
+  只加入确切的 HTTPS origin，禁止使用 `*` 搭配凭据。
+- TokensHub 快照包含多个自定义上游域名和一个 HTTP 上游。启用 URL allowlist 前必须从
+  最终快照提取全部在用 host，并决定该 HTTP 上游是升级到 HTTPS、停用还是显式承担风险；
+  不能直接套用默认白名单造成生产渠道中断。
 
 ## 6. 周边服务清单与停用策略
 
@@ -202,17 +221,21 @@ token_family:
 
 1. 新 Redis 数据卷必须为空，先以 `appendonly no` 启动一次。
 2. 放入最终 `dump.rdb` 并启动，确认 `DBSIZE` 与源快照一致。
-3. 运行 `audit-auth-redis.lua`，记录登录会话数量、类型、TTL 分类和指纹。
+3. 对源 RDB 记录文件大小、SHA-256，并运行 `audit-auth-redis.lua`，记录三个前缀数量、类型、
+   JSON 有效性、绑定会话数、TTL 分桶、TTL 总量和指纹。禁止拿测试站原有 Redis 作为源基线。
 4. 运行 `retain-auth-redis.lua`，删除其他缓存。
-5. 再次运行审计；会话指纹、类型、TTL 分类必须与裁剪前一致，`persistent` 和
-   `invalid_types` 必须为 0。
+5. 再次运行审计；会话指纹、类型、TTL 分类必须与裁剪前一致，`persistent`、
+   `invalid_types` 和 `invalid_refresh_json` 必须为 0。`refresh_tokens + user_sets +
+   family_sets = total`，`bound_refresh_tokens + unbound_refresh_tokens = refresh_tokens`，
+   `expiring = total`，五个 TTL 分桶之和也必须等于 `total`。
 6. 第二次运行裁剪脚本，删除数必须为 0。
 7. 执行 `CONFIG SET appendonly yes`，等待 `aof_last_bgrewrite_status:ok`。
 8. 执行 `SAVE` 和 `SHUTDOWN SAVE`，再用正常 `appendonly yes` 配置启动目标 Redis。
 9. 重启后再次审计，结果必须与重启前一致。
 
 源快照中已有的 dangling set member 只记录基线，不在切换时擅自清理；只要求裁剪前后数量
-不变。Redis 的 TTL 会随停机时间自然减少，这是预期行为。
+不变。Redis 的 TTL 会随停机时间自然减少，这是预期行为；键数不变时，目标 `ttl_sum_ms`
+应大致等于源值减去“认证键数 x 经过毫秒数”，不得无解释地增长或归零。
 
 ## 10. 首次启动围栏
 
@@ -231,6 +254,19 @@ psql -X -v ON_ERROR_STOP=1 "$MODELPORT_DATABASE_URL" \
 
 ```text
 TOKEN_REFRESH_ENABLED=false
+SERVER_TRUSTED_PROXIES=<绿色 Docker 网络网关>/32
+SECURITY_TRUST_FORWARDED_IP_FOR_API_KEY_ACL=false
+```
+
+无论服务器安装的是 Compose v2 还是 v1，都只选一个实际存在的命令并全程复用：
+
+```bash
+if docker compose version >/dev/null 2>&1; then
+  COMPOSE=(docker compose)
+else
+  COMPOSE=(docker-compose)
+fi
+"${COMPOSE[@]}" config >/dev/null
 ```
 
 应用只绑定回环地址，不接公网流量。完成以下只读或可回滚验证：
@@ -245,6 +281,11 @@ TOKEN_REFRESH_ENABLED=false
 使用专门的迁移验收 Key 发起低成本真实请求，至少覆盖 OpenAI Chat 流式、Codex Responses
 含 `prompt_cache_key`、Anthropic Messages 和 Google 协议。逐条核对首字节、用量日志、实际
 成本、用户扣费和免费分组语义。
+
+私网启动仍会运行订阅/账号到期、聚合和运维日志等本地 worker，已经到期的状态可能按当前
+时间正常收敛，运维表也会新增记录。因此启动后的全库指纹不应再与离线迁移指纹硬比较；
+必须单独核对用户数、余额、Key、订阅总数、用量、支付订单等核心不变量，并记录每一项合法
+时效变化。需要最干净回滚时，应在普通应用首次启动前完成决定。
 
 ## 11. 恢复核心能力与切流
 
