@@ -1,5 +1,4 @@
 <template>
-  <!-- Custom Home Content: Full Page Mode -->
   <div v-if="homeContent" class="min-h-screen">
     <iframe
       v-if="isHomeContentUrl"
@@ -7,262 +6,189 @@
       class="h-screen w-full border-0"
       allowfullscreen
     ></iframe>
-    <!-- homeContent is an administrator-controlled setting. -->
     <div v-else v-html="homeContent"></div>
   </div>
 
-  <!-- Default Home Page -->
-  <div v-else class="home-shell">
-    <section class="hero-section">
-      <img
-        src="/landing/modelport-harbor.jpg"
-        :alt="t('home.heroImageAlt')"
-        class="hero-image"
-      />
-      <div class="hero-overlay"></div>
-      <HarborScene :dark="isDark" :label="t('home.harborSceneLabel')" />
-
-      <header class="hero-header">
-        <nav class="hero-nav" :aria-label="t('home.primaryNavigation')">
-          <router-link to="/home" class="brand-link" :aria-label="siteName">
-            <img
-              v-if="isModelPortBrand"
-              src="/branding/modelport-wordmark-dark.png"
-              :alt="`${siteName} logo`"
-              class="hero-wordmark"
-            />
+  <div
+    v-else
+    class="home-shell"
+    :class="{ 'is-dark': isDark }"
+    :data-docs-configured="Boolean(docUrl)"
+  >
+    <header class="home-header" :class="{ 'is-scrolled': isScrolled }">
+      <nav class="home-nav" :aria-label="t('home.primaryNavigation')">
+        <router-link to="/home" class="brand-link" :aria-label="siteName">
+          <template v-if="isModelPortBrand">
+            <img :src="markSource" alt="" aria-hidden="true" class="nav-mark" />
+            <img :src="wordmarkSource" :alt="`${siteName} logo`" class="nav-wordmark" />
+          </template>
+          <template v-else>
             <BrandLogo
-              v-else
               :site-name="siteName"
               :site-logo="siteLogo"
               variant="mark"
-              image-class="h-9 w-9 object-contain"
+              image-class="h-8 w-8 object-contain"
             />
-            <span v-if="!isModelPortBrand" class="brand-name">{{ siteName }}</span>
+            <span class="brand-name">{{ siteName }}</span>
+          </template>
+        </router-link>
+
+        <div class="nav-actions">
+          <router-link to="/model-pricing" class="nav-control pricing-link">
+            {{ t('home.modelPricing') }}
           </router-link>
-
-          <div class="desktop-navigation">
-            <router-link to="/model-catalog" class="nav-link">
-              {{ t('home.modelCatalog') }}
-            </router-link>
-            <router-link to="/model-pricing" class="nav-link">
-              {{ t('home.modelPricing') }}
-            </router-link>
-            <router-link to="/lottery" class="nav-link">
-              {{ t('home.lottery') }}
-            </router-link>
-            <a
-              v-if="docUrl"
-              :href="docUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="nav-link"
-            >
-              {{ t('home.docs') }}
-            </a>
-            <a
-              :href="githubUrl"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="nav-link"
-            >
-              GitHub
-            </a>
-          </div>
-
-          <div class="nav-actions">
-            <div class="hero-locale"><LocaleSwitcher /></div>
-            <button
-              class="icon-action"
-              type="button"
-              :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
-              @click="toggleTheme"
-            >
-              <Icon v-if="isDark" name="sun" size="sm" />
-              <Icon v-else name="moon" size="sm" />
-            </button>
-            <router-link
-              :to="isAuthenticated ? dashboardPath : '/login'"
-              class="header-action"
-            >
-              <span v-if="isAuthenticated" class="user-initial">{{ userInitial }}</span>
-              {{ isAuthenticated ? t('home.dashboard') : t('home.login') }}
-              <Icon name="arrowRight" size="xs" :stroke-width="2" />
-            </router-link>
-          </div>
-        </nav>
-      </header>
-
-      <div class="hero-content">
-        <p class="hero-kicker">{{ t('home.heroKicker') }}</p>
-        <h1>{{ siteName }}</h1>
-        <p class="hero-tagline">{{ heroTagline }}</p>
-        <p class="hero-description">{{ t('home.heroDescription') }}</p>
-        <div class="hero-actions">
-          <router-link
-            :to="isAuthenticated ? '/keys' : '/login'"
-            class="primary-action"
+          <div class="locale-control"><LocaleSwitcher /></div>
+          <button
+            class="nav-control theme-action"
+            type="button"
+            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+            :aria-label="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+            @click="toggleTheme"
           >
-            {{ isAuthenticated ? t('home.manageKeys') : t('home.getStarted') }}
-            <Icon name="arrowRight" size="sm" :stroke-width="2" />
-          </router-link>
-          <router-link to="/model-catalog" class="secondary-action">
-            {{ t('home.exploreModels') }}
+            <Icon :name="isDark ? 'moon' : 'sun'" size="sm" />
+          </button>
+          <router-link :to="startPath" class="nav-control nav-start">
+            {{ t('home.getStarted') }}
+            <Icon name="arrowRight" size="xs" :stroke-width="2" />
           </router-link>
         </div>
-      </div>
-
-      <div class="hero-manifest" aria-hidden="true">
-        <span>OPENAI</span>
-        <span>ANTHROPIC</span>
-        <span>GOOGLE</span>
-        <span class="manifest-status"><i></i>{{ t('home.gatewayOnline') }}</span>
-      </div>
-    </section>
+      </nav>
+    </header>
 
     <main>
-      <section class="fleet-section">
-        <div class="section-inner">
-          <div class="section-heading">
-            <div>
-              <p class="section-kicker">{{ t('home.fleet.kicker') }}</p>
-              <h2>{{ t('home.fleet.title') }}</h2>
-            </div>
-            <p>{{ t('home.fleet.description') }}</p>
-          </div>
+      <section class="hero-section" aria-labelledby="home-title">
+        <HarborScene
+          :dark="isDark"
+          :label="t('home.harborSceneLabel')"
+          :providers="providers"
+        />
 
-          <div class="provider-route" role="list" :aria-label="t('home.fleet.routeLabel')">
-            <div
-              v-for="provider in providers"
-              :key="provider.platform"
-              class="provider-stop"
-              role="listitem"
-            >
-              <span class="provider-icon" :class="platformTextClass(provider.platform)">
-                <PlatformIcon :platform="provider.platform" size="lg" />
+        <div class="home-width hero-layout">
+          <div class="hero-copy">
+            <p class="hero-kicker">
+              <span class="kicker-rule"></span>
+              <span v-if="isModelPortBrand" class="chinese-wordmark" aria-label="模型港">
+                <span>模型</span><span class="chinese-wordmark-accent">港</span>
               </span>
-              <span>{{ provider.name }}</span>
-            </div>
-          </div>
-
-          <div class="gateway-destination">
-            <span class="destination-line"></span>
-            <span class="destination-mark">
-              <BrandLogo
-                :site-name="siteName"
-                :site-logo="siteLogo"
-                variant="mark"
-                image-class="h-8 w-8 object-contain"
-              />
-            </span>
-            <span class="destination-copy">
-              <strong>{{ siteName }}</strong>
-              <small>{{ t('home.fleet.destination') }}</small>
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section class="protocol-section">
-        <div class="protocol-inner">
-          <div class="protocol-copy">
-            <p class="section-kicker">{{ t('home.protocols.kicker') }}</p>
-            <h2>{{ t('home.protocols.title') }}</h2>
-            <p>{{ t('home.protocols.description') }}</p>
-            <div class="protocol-points">
-              <span><Icon name="check" size="sm" />{{ t('home.protocols.oneKey') }}</span>
-              <span><Icon name="check" size="sm" />{{ t('home.protocols.nativeClients') }}</span>
-              <span><Icon name="check" size="sm" />{{ t('home.protocols.clearBilling') }}</span>
-            </div>
-          </div>
-
-          <div class="request-console">
-            <div class="console-toolbar">
-              <div class="protocol-tabs" role="tablist" :aria-label="t('home.protocols.tabLabel')">
-                <button
-                  v-for="protocol in protocols"
-                  :key="protocol.id"
-                  type="button"
-                  role="tab"
-                  :aria-selected="activeProtocol === protocol.id"
-                  :class="{ active: activeProtocol === protocol.id }"
-                  @click="activeProtocol = protocol.id"
-                >
-                  {{ protocol.label }}
-                </button>
-              </div>
-              <button
-                type="button"
-                class="copy-action"
-                :title="copied ? t('home.protocols.copied') : t('home.protocols.copy')"
-                :aria-label="copied ? t('home.protocols.copied') : t('home.protocols.copy')"
-                @click="copyRequest"
-              >
-                <Icon :name="copied ? 'check' : 'copy'" size="sm" />
-              </button>
-            </div>
-            <pre><code>{{ activeRequest }}</code></pre>
-            <div class="console-status">
-              <span><i></i>{{ t('home.protocols.requestReady') }}</span>
-              <span>{{ activeProtocolConfig.endpoint }}</span>
+              <span v-if="isModelPortBrand" class="kicker-divider" aria-hidden="true"></span>
+              <span class="kicker-label">{{ t('home.heroKicker') }}</span>
+            </p>
+            <h1 id="home-title" class="hero-title">
+              <template v-if="isModelPortBrand">
+                <img :src="wordmarkSource" alt="" aria-hidden="true" />
+                <span class="sr-only">{{ siteName }}</span>
+              </template>
+              <span v-else>{{ siteName }}</span>
+            </h1>
+            <p class="hero-tagline">{{ heroTagline }}</p>
+            <p class="hero-description">{{ t('home.heroDescription') }}</p>
+            <div class="hero-actions">
+              <router-link :to="startPath" class="primary-action">
+                {{ t('home.getStarted') }}
+                <Icon name="arrowRight" size="sm" :stroke-width="2" />
+              </router-link>
+              <router-link to="/model-pricing" class="secondary-action">
+                {{ t('home.modelPricing') }}
+              </router-link>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="closing-section">
-        <div class="closing-inner">
-          <div>
-            <p class="section-kicker">{{ t('home.closing.kicker') }}</p>
-            <h2>{{ t('home.closing.title') }}</h2>
-          </div>
-          <router-link
-            :to="isAuthenticated ? dashboardPath : '/login'"
-            class="primary-action"
+      <section class="model-current" :aria-label="t('home.modelCurrent.label')">
+        <div class="current-stage">
+          <div
+            class="model-lane lane-east"
+            role="list"
+            :aria-label="t('home.modelCurrent.label')"
           >
-            {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
-            <Icon name="arrowRight" size="sm" :stroke-width="2" />
-          </router-link>
+            <div class="model-track track-east">
+              <div
+                v-for="copy in 2"
+                :key="`east-${copy}`"
+                class="model-sequence"
+                :aria-hidden="copy === 2"
+              >
+                <span
+                  v-for="(provider, index) in flowProviders"
+                  :key="`east-${copy}-${index}-${provider.platform}`"
+                  class="provider-chip"
+                  :class="{
+                    'is-loop-duplicate': index >= providers.length,
+                    'needs-dark-icon': provider.darkIcon,
+                  }"
+                  :role="copy === 1 && index < providers.length ? 'listitem' : undefined"
+                  :aria-label="copy === 1 && index < providers.length ? provider.name : undefined"
+                  :aria-hidden="copy !== 1 || index >= providers.length ? 'true' : undefined"
+                  :title="provider.name"
+                  :data-platform="provider.platform"
+                  :style="{ '--provider-color': provider.color }"
+                >
+                  <span class="provider-emblem">
+                    <PlatformIcon :platform="provider.platform" size="lg" />
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="model-lane lane-west" aria-hidden="true">
+            <div class="model-track track-west">
+              <div v-for="copy in 2" :key="`west-${copy}`" class="model-sequence">
+                <span
+                  v-for="(provider, index) in reversedFlowProviders"
+                  :key="`west-${copy}-${index}-${provider.platform}`"
+                  class="provider-chip"
+                  :class="{
+                    'is-loop-duplicate': index >= providers.length,
+                    'needs-dark-icon': provider.darkIcon,
+                  }"
+                  :title="provider.name"
+                  :data-platform="provider.platform"
+                  :style="{ '--provider-color': provider.color }"
+                >
+                  <span class="provider-emblem">
+                    <PlatformIcon :platform="provider.platform" size="lg" />
+                  </span>
+                </span>
+              </div>
+            </div>
+          </div>
         </div>
       </section>
     </main>
 
     <footer class="home-footer">
-      <div class="footer-inner">
-        <p>&copy; {{ currentYear }} {{ siteName }}. {{ t('home.footer.allRightsReserved') }}</p>
-        <div>
-          <router-link to="/model-catalog">{{ t('home.modelCatalog') }}</router-link>
-          <router-link to="/model-pricing">{{ t('home.modelPricing') }}</router-link>
-          <a v-if="docUrl" :href="docUrl" target="_blank" rel="noopener noreferrer">
-            {{ t('home.docs') }}
-          </a>
-          <a :href="githubUrl" target="_blank" rel="noopener noreferrer">GitHub</a>
-        </div>
+      <div class="home-width footer-layout">
+        <p>{{ copyrightText }}</p>
       </div>
     </footer>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BrandLogo from '@/components/common/BrandLogo.vue'
-import HarborScene from '@/components/home/HarborScene.vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
+import HarborScene, { type HarborProvider } from '@/components/home/HarborScene.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore, useAuthStore } from '@/stores'
 import type { GroupPlatform } from '@/types'
-import { platformTextClass } from '@/utils/platformColors'
+import { DEFAULT_SITE_NAME } from '@/utils/branding'
+import { platformAccentHex, platformLabel } from '@/utils/platformColors'
 import { sanitizeUrl } from '@/utils/url'
-
-type ProtocolId = 'openai' | 'anthropic' | 'google'
 
 const { t } = useI18n()
 const authStore = useAuthStore()
 const appStore = useAppStore()
+const isDark = ref(document.documentElement.classList.contains('dark'))
+const isScrolled = ref(false)
 
-const siteName = computed(() => appStore.cachedPublicSettings?.site_name || appStore.siteName || 'Sub2API')
+const siteName = computed(
+  () => appStore.cachedPublicSettings?.site_name || appStore.siteName || DEFAULT_SITE_NAME
+)
 const siteLogo = computed(() =>
   sanitizeUrl(appStore.cachedPublicSettings?.site_logo || appStore.siteLogo || '', {
     allowRelative: true,
@@ -282,67 +208,78 @@ const isHomeContentUrl = computed(() => {
 })
 
 const isModelPortBrand = computed(() => siteName.value.trim().toLowerCase() === 'modelport')
-const heroTagline = computed(() =>
-  isModelPortBrand.value ? 'one port，all model' : siteSubtitle.value
+const heroTagline = computed(() => isModelPortBrand.value ? 'One port, All Models.' : siteSubtitle.value)
+const homeMetaDescription = computed(() =>
+  isModelPortBrand.value ? t('home.metaDescription') : siteSubtitle.value
 )
-const githubUrl = computed(() =>
-  isModelPortBrand.value
-    ? 'https://github.com/abingooo/modelport'
-    : 'https://github.com/Wei-Shaw/sub2api'
+const wordmarkSource = computed(() =>
+  isDark.value
+    ? '/branding/modelport-wordmark-dark.png'
+    : '/branding/modelport-wordmark-light.png'
 )
-
-const isDark = ref(document.documentElement.classList.contains('dark'))
+const markSource = computed(() =>
+  isDark.value
+    ? '/branding/modelport-mark-dark.png'
+    : '/branding/modelport-mark-light.png'
+)
 const isAuthenticated = computed(() => authStore.isAuthenticated)
-const isAdmin = computed(() => authStore.isAdmin)
-const dashboardPath = computed(() => (isAdmin.value ? '/admin/dashboard' : '/dashboard'))
-const userInitial = computed(() => authStore.user?.email?.charAt(0).toUpperCase() || '')
+const dashboardPath = computed(() => authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+const startPath = computed(() => isAuthenticated.value ? dashboardPath.value : '/login')
 const currentYear = computed(() => new Date().getFullYear())
+const copyrightText = computed(
+  () => isModelPortBrand.value
+    ? `© ${currentYear.value} ModelPort 保留所有权利`
+    : `© ${currentYear.value} ${siteName.value} ${t('home.footer.copyrightNotice')}`
+)
 
-const providers: Array<{ name: string; platform: GroupPlatform }> = [
-  { name: 'OpenAI', platform: 'openai' },
-  { name: 'Claude', platform: 'anthropic' },
-  { name: 'Gemini', platform: 'gemini' },
-  { name: 'DeepSeek', platform: 'deepseek' },
-  { name: 'Qwen', platform: 'qwen' },
-  { name: 'Kimi', platform: 'kimi' },
-  { name: 'GLM', platform: 'glm' },
-  { name: 'ByteDance', platform: 'doubao' },
+const modelVendorPlatforms: GroupPlatform[] = [
+  'openai',
+  'anthropic',
+  'gemini',
+  'deepseek',
+  'qwen',
+  'glm',
+  'kimi',
+  'doubao',
+  'minimax',
+  'mimo',
+  'grok',
 ]
 
-const protocols: Array<{ id: ProtocolId; label: string }> = [
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'google', label: 'Google' },
-]
-const protocolConfigs: Record<ProtocolId, { endpoint: string; request: (origin: string) => string }> = {
-  openai: {
-    endpoint: '/v1/chat/completions',
-    request: (origin) => `curl ${origin}/v1/chat/completions \\
-  -H "Authorization: Bearer $MODELPORT_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"gpt-5","messages":[{"role":"user","content":"Hello"}]}'`,
-  },
-  anthropic: {
-    endpoint: '/v1/messages',
-    request: (origin) => `curl ${origin}/v1/messages \\
-  -H "x-api-key: $MODELPORT_API_KEY" \\
-  -H "anthropic-version: 2023-06-01" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model":"claude-sonnet-4-5","max_tokens":1024,"messages":[{"role":"user","content":"Hello"}]}'`,
-  },
-  google: {
-    endpoint: '/v1beta/models/{model}:generateContent',
-    request: (origin) => `curl ${origin}/v1beta/models/gemini-2.5-pro:generateContent \\
-  -H "x-goog-api-key: $MODELPORT_API_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"contents":[{"parts":[{"text":"Hello"}]}]}'`,
-  },
+const providers = computed<HarborProvider[]>(() => modelVendorPlatforms.map((platform) => ({
+  name: platformLabel(platform),
+  platform,
+  color: platformAccentHex(platform),
+  darkIcon: platform === 'grok' || platform === 'kimi',
+})))
+const reversedProviders = computed(() => [...providers.value].reverse())
+const flowProviders = computed(() => [...providers.value, ...providers.value])
+const reversedFlowProviders = computed(() => [
+  ...reversedProviders.value,
+  ...reversedProviders.value,
+])
+
+let descriptionElement: HTMLMetaElement | null = null
+let createdDescriptionElement = false
+let previousDescriptionContent: string | null = null
+let homeMetadataActive = false
+
+function updateHomeMetaDescription() {
+  if (!descriptionElement) {
+    descriptionElement = document.head.querySelector<HTMLMetaElement>('meta[name="description"]')
+    if (descriptionElement) {
+      previousDescriptionContent = descriptionElement.getAttribute('content')
+    } else {
+      descriptionElement = document.createElement('meta')
+      descriptionElement.name = 'description'
+      descriptionElement.dataset.homeManaged = 'true'
+      document.head.appendChild(descriptionElement)
+      createdDescriptionElement = true
+    }
+  }
+
+  descriptionElement.content = homeMetaDescription.value
 }
-
-const activeProtocol = ref<ProtocolId>('openai')
-const copied = ref(false)
-const activeProtocolConfig = computed(() => protocolConfigs[activeProtocol.value])
-const activeRequest = computed(() => activeProtocolConfig.value.request(window.location.origin))
 
 function toggleTheme() {
   isDark.value = !isDark.value
@@ -353,845 +290,885 @@ function toggleTheme() {
 function initTheme() {
   const savedTheme = localStorage.getItem('theme')
   if (
-    savedTheme === 'dark' ||
-    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
+    savedTheme === 'dark'
+    || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
   ) {
     isDark.value = true
     document.documentElement.classList.add('dark')
   }
 }
 
-async function copyRequest() {
-  try {
-    await navigator.clipboard.writeText(activeRequest.value)
-    copied.value = true
-    window.setTimeout(() => {
-      copied.value = false
-    }, 1600)
-  } catch {
-    copied.value = false
-  }
+function updateHeader() {
+  isScrolled.value = window.scrollY > 20
 }
 
-onMounted(() => {
+watch(homeMetaDescription, () => {
+  if (homeMetadataActive) updateHomeMetaDescription()
+})
+
+onMounted(async () => {
+  homeMetadataActive = true
   initTheme()
   authStore.checkAuth()
-  if (!appStore.publicSettingsLoaded) {
-    appStore.fetchPublicSettings()
+  if (!appStore.publicSettingsLoaded) await appStore.fetchPublicSettings()
+  if (!homeMetadataActive) return
+  updateHomeMetaDescription()
+  updateHeader()
+  window.addEventListener('scroll', updateHeader, { passive: true })
+})
+
+onBeforeUnmount(() => {
+  homeMetadataActive = false
+  window.removeEventListener('scroll', updateHeader)
+  if (createdDescriptionElement) {
+    descriptionElement?.remove()
+  } else if (descriptionElement) {
+    if (previousDescriptionContent === null) {
+      descriptionElement.removeAttribute('content')
+    } else {
+      descriptionElement.content = previousDescriptionContent
+    }
   }
 })
 </script>
 
 <style scoped>
-.home-shell {
-  min-height: 100vh;
-  overflow-x: hidden;
-  background: #f7f9fc;
-  color: #10223d;
-}
-
-.hero-section {
-  position: relative;
-  min-height: calc(100svh - 160px);
-  overflow: hidden;
-  background: #07162b;
-  color: #fff;
-}
-
-.hero-image,
-.hero-overlay {
+.sr-only {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
-.hero-image {
-  object-fit: cover;
-  object-position: center 54%;
-  transform: scale(1.02);
+.home-shell {
+  --paper: #f4f2e8;
+  --paper-soft: #edf2ee;
+  --sky: #dfe9e4;
+  --ink: #132a2d;
+  --muted: #5f706e;
+  --line: #bcc9c3;
+  --line-soft: rgba(19, 42, 45, 0.15);
+  --mint: #0b8b82;
+  --coral: #e7664a;
+  --yellow: #eab84e;
+  --blue: #0d6efd;
+  min-height: 100vh;
+  overflow-x: clip;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: Inter, "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", ui-sans-serif, system-ui, sans-serif;
 }
 
-.hero-overlay {
-  background:
-    linear-gradient(90deg, rgba(3, 13, 28, 0.95) 0%, rgba(3, 14, 30, 0.82) 42%, rgba(3, 15, 32, 0.3) 76%, rgba(3, 15, 32, 0.48) 100%),
-    linear-gradient(0deg, rgba(2, 10, 23, 0.84) 0%, transparent 38%, rgba(2, 10, 23, 0.22) 100%);
+.home-shell.is-dark {
+  --paper: #0a171a;
+  --paper-soft: #0d1d20;
+  --sky: #07181d;
+  --ink: #edf1e9;
+  --muted: #9eb0ad;
+  --line: #31484a;
+  --line-soft: rgba(232, 240, 235, 0.14);
+  --mint: #45c2b5;
+  --coral: #f1785c;
+  --yellow: #f2c96b;
+  --blue: #2f82ff;
 }
 
-.hero-header {
-  position: relative;
-  z-index: 4;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+.home-width {
+  width: min(100% - 40px, 1280px);
+  margin-inline: auto;
 }
 
-.hero-nav {
+.home-header {
+  position: fixed;
+  z-index: 30;
+  top: 0;
+  right: 0;
+  left: 0;
+  border-bottom: 1px solid transparent;
+  transition: background-color 180ms ease, border-color 180ms ease, backdrop-filter 180ms ease;
+}
+
+.home-header.is-scrolled {
+  border-color: var(--line-soft);
+  background: color-mix(in srgb, var(--sky) 88%, transparent);
+  backdrop-filter: blur(18px) saturate(120%);
+}
+
+.home-nav {
   display: flex;
+  width: min(100% - 40px, 1280px);
   min-height: 72px;
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 0 28px;
+  margin-inline: auto;
   align-items: center;
   justify-content: space-between;
-  gap: 28px;
+  gap: 24px;
 }
 
 .brand-link,
 .nav-actions,
-.desktop-navigation,
-.header-action,
+.nav-control,
+.hero-kicker,
 .hero-actions,
-.protocol-points span,
-.console-status,
-.footer-inner,
-.footer-inner div {
+.primary-action,
+.secondary-action,
+.provider-chip {
   display: flex;
   align-items: center;
 }
 
 .brand-link {
-  min-width: 168px;
+  min-width: 188px;
   gap: 10px;
 }
 
-.brand-name {
-  color: #fff;
-  font-size: 17px;
-  font-weight: 700;
+.nav-wordmark {
+  width: 146px;
+  height: auto;
 }
 
-.hero-wordmark {
-  width: auto;
+.nav-mark {
+  display: block;
+  width: 28px;
   height: 32px;
+  object-fit: contain;
 }
 
-.desktop-navigation {
-  margin-left: auto;
-  gap: 30px;
-}
-
-.nav-link {
-  color: rgba(255, 255, 255, 0.72);
-  font-size: 14px;
-  transition: color 160ms ease;
-}
-
-.nav-link:hover {
-  color: #fff;
+.brand-name {
+  margin-left: 10px;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 760;
 }
 
 .nav-actions {
-  gap: 8px;
-  flex-shrink: 0;
+  min-height: 40px;
+  justify-content: flex-end;
+  gap: 2px;
 }
 
-.icon-action,
-.copy-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.icon-action {
-  width: 34px;
-  height: 34px;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 8px;
-  color: rgba(255, 255, 255, 0.82);
-  background: rgba(6, 20, 42, 0.3);
-}
-
-.icon-action:hover {
-  border-color: rgba(255, 255, 255, 0.42);
-  color: #fff;
-}
-
-.header-action {
+.nav-control {
   min-height: 36px;
-  padding: 0 13px;
-  gap: 7px;
-  border-radius: 8px;
-  color: #07162b;
-  background: #fff;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.user-initial {
-  display: inline-flex;
-  width: 20px;
-  height: 20px;
-  align-items: center;
+  padding: 0 11px;
   justify-content: center;
-  border-radius: 50%;
-  color: #fff;
-  background: #0d6ef2;
-  font-size: 10px;
+  gap: 7px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 690;
+  line-height: 1;
+  transition: color 160ms ease, background-color 160ms ease;
 }
 
-.hero-locale :deep(button) {
-  color: rgba(255, 255, 255, 0.78);
+.nav-control:hover,
+.nav-control:focus-visible,
+.locale-control :deep(button:hover) {
+  color: var(--blue);
+  background: color-mix(in srgb, var(--sky) 62%, transparent);
 }
 
-.hero-locale :deep(button:hover) {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
+.locale-control {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
 }
 
-.hero-content {
+.locale-control :deep(button) {
+  min-height: 36px;
+  color: var(--muted);
+}
+
+.locale-control :deep(button > span:first-child) {
+  display: none;
+}
+
+.locale-control :deep(button > span:nth-child(2)) {
+  display: inline;
+}
+
+.theme-action {
+  width: 36px;
+  padding: 0;
+}
+
+.nav-start {
+  color: var(--ink);
+  font-weight: 760;
+}
+
+.hero-section {
   position: relative;
-  z-index: 3;
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 16vh 28px 160px;
+  height: clamp(700px, 82svh, 860px);
+  min-height: 700px;
+  overflow: hidden;
+  background: var(--sky);
 }
 
-.hero-kicker,
-.section-kicker {
-  margin: 0 0 18px;
-  color: #63a2ff;
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0;
+.hero-layout {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  height: 100%;
+  padding-top: 72px;
+  align-items: flex-start;
+  pointer-events: none;
+}
+
+.hero-copy {
+  width: min(540px, 48%);
+  padding-top: clamp(72px, 9vh, 96px);
+  pointer-events: auto;
+}
+
+.hero-kicker {
+  width: fit-content;
+  margin: 0;
+  gap: 11px;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.kicker-rule {
+  width: 36px;
+  height: 2px;
+  background: var(--coral);
+}
+
+.chinese-wordmark {
+  display: inline-flex;
+  color: var(--ink);
+  font-family: "Noto Sans CJK SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 25px;
+  font-weight: 900;
+  line-height: 1;
+  transform: skewX(-4deg);
+  transform-origin: left center;
+}
+
+.chinese-wordmark-accent {
+  color: var(--blue);
+}
+
+.kicker-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--line);
+}
+
+.kicker-label {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  font-weight: 760;
+  line-height: 1;
   text-transform: uppercase;
 }
 
-.hero-content h1 {
-  max-width: 760px;
-  margin: 0;
-  color: #fff;
-  font-size: 72px;
-  font-weight: 750;
-  line-height: 1.04;
+.hero-title {
+  width: min(500px, 100%);
+  min-height: 68px;
+  margin: 24px 0 0;
+  color: var(--ink);
+  font-size: 64px;
+  font-weight: 820;
+  line-height: 1;
   letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.hero-title img {
+  display: block;
+  width: 100%;
+  height: auto;
 }
 
 .hero-tagline {
-  margin: 14px 0 0;
-  color: #fff;
-  font-size: 28px;
-  font-weight: 500;
-  line-height: 1.25;
+  margin: 24px 0 0;
+  color: var(--ink);
+  font-size: 27px;
+  font-weight: 650;
+  line-height: 1.2;
+  letter-spacing: 0;
 }
 
 .hero-description {
-  max-width: 530px;
-  margin: 24px 0 0;
-  color: rgba(230, 239, 250, 0.78);
-  font-size: 16px;
-  line-height: 1.75;
+  max-width: 510px;
+  margin: 16px 0 0;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.72;
 }
 
 .hero-actions {
-  margin-top: 34px;
-  flex-wrap: wrap;
-  gap: 12px;
+  margin-top: 27px;
+  gap: 10px;
 }
 
 .primary-action,
 .secondary-action {
-  display: inline-flex;
+  min-width: 122px;
   min-height: 46px;
-  padding: 0 20px;
-  align-items: center;
+  padding: 0 19px;
   justify-content: center;
   gap: 9px;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 750;
-  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+  border-radius: 6px;
+  font-size: 15px;
+  font-weight: 760;
+  transition: transform 160ms ease, color 160ms ease, border-color 160ms ease, background-color 160ms ease;
 }
 
 .primary-action {
+  border: 1px solid var(--coral);
   color: #fff;
-  background: #0d6ef2;
-  box-shadow: 0 10px 30px rgba(13, 110, 242, 0.26);
+  background: var(--coral);
+  box-shadow: 0 13px 32px color-mix(in srgb, var(--coral) 24%, transparent);
 }
 
 .primary-action:hover,
-.secondary-action:hover {
-  transform: translateY(-1px);
-}
-
-.primary-action:hover {
-  background: #075bd8;
+.primary-action:focus-visible {
+  border-color: #d9563d;
+  background: #d9563d;
+  transform: translateY(-2px);
 }
 
 .secondary-action {
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  color: #fff;
-  background: rgba(4, 16, 34, 0.36);
+  border: 1px solid color-mix(in srgb, var(--ink) 34%, transparent);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--paper) 55%, transparent);
   backdrop-filter: blur(10px);
 }
 
-.secondary-action:hover {
-  border-color: rgba(255, 255, 255, 0.62);
-  background: rgba(4, 16, 34, 0.56);
+.secondary-action:hover,
+.secondary-action:focus-visible {
+  border-color: var(--mint);
+  color: var(--mint);
+  transform: translateY(-2px);
 }
 
-.hero-manifest {
-  position: absolute;
-  z-index: 3;
-  right: max(28px, calc((100vw - 1184px) / 2));
-  bottom: 28px;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  color: rgba(255, 255, 255, 0.58);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-}
-
-.manifest-status {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: rgba(255, 255, 255, 0.8);
-}
-
-.manifest-status i,
-.console-status i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: #31c48d;
-  box-shadow: 0 0 0 4px rgba(49, 196, 141, 0.14);
-}
-
-.fleet-section,
-.protocol-section,
-.closing-section {
+.model-current {
   position: relative;
+  border-top: 1px solid var(--line-soft);
+  border-bottom: 1px solid var(--line-soft);
+  overflow: hidden;
+  background: var(--paper);
 }
 
-.fleet-section {
-  padding: 88px 28px 96px;
-  background: #f7f9fc;
-}
-
-.section-inner,
-.protocol-inner,
-.closing-inner,
-.footer-inner {
-  max-width: 1184px;
-  margin: 0 auto;
-}
-
-.section-heading {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 430px);
-  gap: 56px;
-  align-items: end;
-}
-
-.section-heading h2,
-.protocol-copy h2,
-.closing-inner h2 {
-  margin: 0;
-  color: #10223d;
-  font-size: 36px;
-  font-weight: 750;
-  line-height: 1.18;
-  letter-spacing: 0;
-}
-
-.section-heading > p,
-.protocol-copy > p {
-  margin: 0;
-  color: #65748a;
-  font-size: 15px;
-  line-height: 1.75;
-}
-
-.provider-route {
+.current-stage {
   position: relative;
-  display: grid;
-  grid-template-columns: repeat(8, minmax(90px, 1fr));
-  margin-top: 64px;
+  height: 132px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--paper-soft) 88%, var(--sky));
 }
 
-.provider-route::before {
+.current-stage::before {
   position: absolute;
-  top: 23px;
-  right: 5%;
-  left: 5%;
+  z-index: 0;
+  top: 50%;
+  right: 0;
+  left: 0;
   height: 1px;
-  background: #cbd6e5;
-  content: '';
+  content: "";
+  background: var(--line-soft);
 }
 
-.provider-stop {
-  position: relative;
-  z-index: 1;
+.model-lane {
+  position: absolute;
+  z-index: 2;
+  right: 0;
+  left: 0;
+  height: 50px;
+  overflow: hidden;
+}
+
+.lane-east {
+  top: 11px;
+}
+
+.lane-west {
+  bottom: 11px;
+}
+
+.model-track,
+.model-sequence {
   display: flex;
-  flex-direction: column;
+  width: max-content;
   align-items: center;
+  flex-shrink: 0;
+}
+
+.model-track {
   gap: 12px;
-  color: #526177;
-  font-size: 12px;
-  font-weight: 700;
-  white-space: nowrap;
+  will-change: transform;
 }
 
-.provider-icon {
-  display: flex;
-  width: 46px;
-  height: 46px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid #d7e0eb;
-  border-radius: 50%;
-  color: #15243a;
-  background: #fff;
-  box-shadow: 0 6px 18px rgba(26, 50, 82, 0.08);
+.model-sequence {
+  min-width: max(1320px, 100vw);
+  padding-inline: 8px;
+  justify-content: space-around;
+  gap: 10px;
 }
 
-.gateway-destination {
-  display: flex;
-  max-width: 420px;
-  margin: 54px auto 0;
-  align-items: center;
-  justify-content: center;
-  gap: 13px;
+.track-east {
+  animation: current-east 42s linear infinite;
 }
 
-.destination-line {
-  width: 72px;
-  height: 1px;
-  background: #0d6ef2;
+.track-west {
+  animation: current-west 47s linear infinite;
 }
 
-.destination-mark {
-  display: flex;
+.provider-chip {
+  --provider-color: var(--blue);
+  position: relative;
   width: 48px;
   height: 48px;
+  flex: 0 0 48px;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--provider-color) 58%, var(--line));
+  border-radius: 6px;
+  color: var(--provider-color);
+  background: color-mix(in srgb, var(--paper) 64%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 58%, transparent),
+    inset 0 -4px 10px color-mix(in srgb, var(--provider-color) 9%, transparent),
+    0 7px 15px color-mix(in srgb, var(--ink) 9%, transparent);
+  backdrop-filter: blur(10px) saturate(125%);
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.provider-chip::before {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  left: 6px;
+  height: 1px;
+  content: "";
+  background: color-mix(in srgb, #fff 72%, transparent);
+  opacity: 0.8;
+}
+
+.provider-chip:hover {
+  border-color: var(--provider-color);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, #fff 64%, transparent),
+    inset 0 -4px 10px color-mix(in srgb, var(--provider-color) 12%, transparent),
+    0 10px 20px color-mix(in srgb, var(--provider-color) 16%, transparent);
+  transform: translateY(-2px);
+}
+
+.is-dark .provider-chip {
+  background: color-mix(in srgb, var(--paper) 58%, transparent);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.13),
+    inset 0 -5px 12px color-mix(in srgb, var(--provider-color) 12%, transparent),
+    0 8px 18px rgba(0, 0, 0, 0.22);
+}
+
+.provider-emblem {
+  display: inline-flex;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
   align-items: center;
   justify-content: center;
-  border: 1px solid #b9d2f8;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 8px 24px rgba(13, 110, 242, 0.14);
+  color: var(--provider-color);
 }
 
-.destination-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
+.provider-emblem :deep(svg) {
+  width: 24px;
+  height: 24px;
 }
 
-.destination-copy strong {
-  color: #10223d;
-  font-size: 14px;
+.is-dark .provider-chip.needs-dark-icon {
+  color: #f4f7f2;
 }
 
-.destination-copy small {
-  color: #7d899b;
-  font-size: 11px;
+.is-dark .provider-chip.needs-dark-icon .provider-emblem {
+  color: #f4f7f2;
 }
 
-.protocol-section {
-  padding: 104px 28px;
-  color: #fff;
-  background: #07162b;
-}
-
-.protocol-inner {
-  display: grid;
-  grid-template-columns: minmax(0, 0.8fr) minmax(540px, 1.2fr);
-  gap: 88px;
-  align-items: center;
-}
-
-.protocol-copy h2 {
-  color: #fff;
-}
-
-.protocol-copy > p {
-  max-width: 460px;
-  margin-top: 22px;
-  color: #9caec4;
-}
-
-.protocol-points {
-  display: flex;
-  margin-top: 30px;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.protocol-points span {
-  gap: 9px;
-  color: #d8e3f0;
-  font-size: 13px;
-}
-
-.protocol-points svg {
-  color: #59a0ff;
-}
-
-.request-console {
-  overflow: hidden;
-  border: 1px solid #263c59;
-  border-radius: 8px;
-  background: #041020;
-  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.28);
-}
-
-.console-toolbar {
-  display: flex;
-  min-height: 52px;
-  padding: 8px 10px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid #1d3049;
-}
-
-.protocol-tabs {
-  display: inline-flex;
-  padding: 3px;
-  border-radius: 7px;
-  background: #0c1d33;
-}
-
-.protocol-tabs button {
-  min-height: 30px;
-  padding: 0 12px;
-  border-radius: 5px;
-  color: #7f91a8;
-  font-size: 11px;
-  font-weight: 700;
-}
-
-.protocol-tabs button.active {
-  color: #fff;
-  background: #19314f;
-}
-
-.copy-action {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  color: #8fa2b9;
-}
-
-.copy-action:hover {
-  color: #fff;
-  background: #122640;
-}
-
-.request-console pre {
-  min-height: 250px;
-  margin: 0;
-  padding: 25px 24px;
-  overflow-x: auto;
-  color: #c9d8ea;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 12px;
-  line-height: 1.9;
-  white-space: pre;
-}
-
-.console-status {
-  min-height: 42px;
-  padding: 0 18px;
-  justify-content: space-between;
-  gap: 20px;
-  border-top: 1px solid #1d3049;
-  color: #6f8299;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10px;
-}
-
-.console-status span:first-child {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #9db0c7;
-}
-
-.closing-section {
-  padding: 72px 28px;
-  background: #eaf1fa;
-}
-
-.closing-inner {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 40px;
-}
-
-.closing-inner .section-kicker {
-  margin-bottom: 10px;
+.is-dark .provider-chip.needs-dark-icon :deep(svg path) {
+  fill: #f4f7f2;
 }
 
 .home-footer {
-  padding: 26px 28px;
-  border-top: 1px solid #dce5f0;
-  color: #748196;
-  background: #f7f9fc;
-  font-size: 12px;
+  border-top: 1px solid var(--line-soft);
+  background: var(--paper);
 }
 
-.footer-inner {
-  justify-content: space-between;
-  gap: 28px;
+.footer-layout {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  font-size: 10px;
 }
 
-.footer-inner div {
-  gap: 20px;
+.footer-layout p {
+  margin: 0;
 }
 
-.footer-inner a:hover {
-  color: #0d6ef2;
+@keyframes current-east {
+  from { transform: translateX(calc(-50% - 6px)); }
+  to { transform: translateX(0); }
 }
 
-:global(.dark .home-shell),
-:global(.dark .fleet-section),
-:global(.dark .home-footer) {
-  color: #d8e3f0;
-  background: #07111f;
+@keyframes current-west {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-50% - 6px)); }
 }
 
-:global(.dark .section-heading h2),
-:global(.dark .destination-copy strong) {
-  color: #f2f6fb;
-}
+@media (min-width: 1800px) {
+  .home-width,
+  .home-nav {
+    width: min(100% - 64px, 1536px);
+  }
 
-:global(.dark .section-heading > p),
-:global(.dark .provider-stop),
-:global(.dark .destination-copy small),
-:global(.dark .home-footer) {
-  color: #8fa0b5;
-}
+  .home-nav {
+    min-height: 86px;
+  }
 
-:global(.dark .provider-route::before) {
-  background: #26384f;
-}
+  .brand-link {
+    min-width: 224px;
+    gap: 12px;
+  }
 
-:global(.dark .provider-icon),
-:global(.dark .destination-mark) {
-  border-color: #2b405a;
-  background: #0e1d30;
-}
+  .nav-mark {
+    width: 34px;
+    height: 39px;
+  }
 
-:global(.dark .closing-section) {
-  background: #0d1b2d;
-}
+  .nav-wordmark {
+    width: 176px;
+  }
 
-:global(.dark .closing-inner h2) {
-  color: #f2f6fb;
-}
+  .nav-actions {
+    min-height: 46px;
+  }
 
-:global(.dark .home-footer) {
-  border-color: #1a2c42;
+  .nav-control,
+  .locale-control,
+  .locale-control :deep(button) {
+    min-height: 42px;
+  }
+
+  .nav-control {
+    padding-inline: 14px;
+    gap: 8px;
+    font-size: 15px;
+  }
+
+  .theme-action {
+    width: 42px;
+    padding: 0;
+  }
+
+  .hero-section {
+    height: clamp(780px, 89svh, 920px);
+    min-height: 780px;
+  }
+
+  .hero-layout {
+    padding-top: 86px;
+  }
+
+  .hero-copy {
+    width: min(640px, 43%);
+    padding-top: 96px;
+  }
+
+  .hero-kicker {
+    gap: 13px;
+  }
+
+  .kicker-rule {
+    width: 44px;
+  }
+
+  .chinese-wordmark {
+    font-size: 30px;
+  }
+
+  .kicker-divider {
+    height: 27px;
+  }
+
+  .kicker-label {
+    font-size: 15px;
+  }
+
+  .hero-title {
+    width: min(600px, 100%);
+    min-height: 82px;
+    margin-top: 28px;
+  }
+
+  .hero-tagline {
+    margin-top: 27px;
+    font-size: 32px;
+  }
+
+  .hero-description {
+    max-width: 600px;
+    margin-top: 18px;
+    font-size: 18px;
+    line-height: 1.68;
+  }
+
+  .hero-actions {
+    margin-top: 32px;
+    gap: 12px;
+  }
+
+  .primary-action,
+  .secondary-action {
+    min-width: 146px;
+    min-height: 54px;
+    padding-inline: 23px;
+    font-size: 17px;
+  }
+
+  .current-stage {
+    height: 158px;
+  }
+
+  .model-lane {
+    height: 60px;
+  }
+
+  .lane-east {
+    top: 14px;
+  }
+
+  .lane-west {
+    bottom: 14px;
+  }
+
+  .provider-chip {
+    width: 58px;
+    height: 58px;
+    flex-basis: 58px;
+  }
+
+  .provider-emblem,
+  .provider-emblem :deep(svg) {
+    width: 29px;
+    height: 29px;
+  }
+
+  .footer-layout {
+    min-height: 62px;
+    font-size: 11px;
+  }
 }
 
 @media (max-width: 900px) {
-  .desktop-navigation {
-    display: none;
+  .hero-copy {
+    width: min(520px, 58%);
   }
 
-  .hero-content {
-    padding-top: 13vh;
-  }
-
-  .hero-content h1 {
-    font-size: 60px;
-  }
-
-  .section-heading,
-  .protocol-inner {
-    grid-template-columns: 1fr;
-  }
-
-  .section-heading {
-    gap: 18px;
-  }
-
-  .protocol-inner {
-    gap: 52px;
-  }
-
-  .provider-route {
-    grid-template-columns: repeat(8, 112px);
-    margin-right: -28px;
-    margin-left: -28px;
-    padding: 0 28px 12px;
-    overflow-x: auto;
-  }
-
-  .provider-route::before {
-    right: 56px;
-    left: 56px;
+  .hero-title {
+    width: min(430px, 100%);
   }
 }
 
 @media (max-width: 640px) {
-  .hero-section {
-    min-height: calc(100svh - 100px);
+  .home-width,
+  .home-nav {
+    width: calc(100% - 28px);
   }
 
-  .hero-image {
-    object-position: 58% center;
-  }
-
-  .hero-overlay {
-    background: linear-gradient(90deg, rgba(3, 13, 28, 0.94), rgba(3, 14, 30, 0.58));
-  }
-
-  .hero-nav {
-    min-height: 64px;
-    padding: 0 18px;
-    gap: 12px;
+  .home-nav {
+    min-height: 62px;
+    gap: 10px;
   }
 
   .brand-link {
-    min-width: 0;
+    min-width: 29px;
+    gap: 0;
   }
 
-  .brand-link :deep(img) {
-    max-width: 132px;
-    height: 25px;
-  }
-
-  .hero-wordmark {
-    max-width: 132px;
-    height: 25px;
-  }
-
-  .nav-actions {
-    position: absolute;
-    right: 18px;
-    display: flex;
-  }
-
-  .hero-locale,
-  .header-action svg,
-  .user-initial {
+  .nav-wordmark {
     display: none;
   }
 
-  .header-action {
+  .nav-mark {
+    display: block;
+  }
+
+  .brand-name,
+  .pricing-link {
+    display: none;
+  }
+
+  .nav-actions {
+    gap: 0;
+  }
+
+  .nav-control,
+  .locale-control :deep(button) {
     min-height: 34px;
-    padding: 0 11px;
+    font-size: 11px;
   }
 
-  .hero-content {
-    padding: 15vh 18px 118px;
+  .theme-action {
+    width: 34px;
   }
 
-  .hero-content h1 {
-    font-size: 46px;
-    line-height: 1.08;
+  .nav-start {
+    padding: 0 7px;
+  }
+
+  .hero-section {
+    height: min(780px, 88svh);
+    min-height: 700px;
+    max-height: 780px;
+  }
+
+  .hero-layout {
+    padding-top: 62px;
+  }
+
+  .hero-copy {
+    width: 100%;
+    padding-top: 56px;
+  }
+
+  .hero-kicker {
+    gap: 8px;
+  }
+
+  .kicker-rule {
+    width: 24px;
+  }
+
+  .chinese-wordmark {
+    font-size: 20px;
+  }
+
+  .kicker-divider {
+    height: 19px;
+  }
+
+  .kicker-label {
+    font-size: 12px;
+  }
+
+  .hero-title {
+    width: min(320px, 100%);
+    min-height: 44px;
+    margin-top: 19px;
+    font-size: 44px;
   }
 
   .hero-tagline {
-    margin-top: 10px;
+    margin-top: 18px;
     font-size: 22px;
   }
 
   .hero-description {
-    max-width: 330px;
-    margin-top: 20px;
-    font-size: 14px;
-    overflow-wrap: anywhere;
+    max-width: 360px;
+    margin-top: 12px;
+    font-size: 13px;
+    line-height: 1.65;
   }
 
   .hero-actions {
-    margin-top: 28px;
+    display: grid;
+    margin-top: 20px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .primary-action,
   .secondary-action {
+    min-width: 0;
     min-height: 44px;
-    padding: 0 16px;
+    padding: 0 12px;
   }
 
-  .hero-manifest {
-    right: 18px;
-    bottom: 20px;
-    left: 18px;
-    justify-content: space-between;
-    gap: 10px;
+  .current-stage {
+    height: 122px;
   }
 
-  .hero-manifest > span:not(.manifest-status) {
+  .lane-east {
+    top: 9px;
+  }
+
+  .lane-west {
+    bottom: 9px;
+  }
+
+  .provider-chip {
+    width: 42px;
+    height: 42px;
+    flex-basis: 42px;
+    backdrop-filter: blur(7px) saturate(118%);
+  }
+
+  .provider-emblem,
+  .provider-emblem :deep(svg) {
+    width: 22px;
+    height: 22px;
+  }
+
+  .footer-layout {
+    min-height: 52px;
+  }
+}
+
+@media (max-width: 380px) {
+  .locale-control {
     display: none;
   }
 
-  .fleet-section,
-  .protocol-section {
-    padding: 72px 18px;
+  .hero-title {
+    width: min(292px, 100%);
   }
 
-  .section-heading h2,
-  .protocol-copy h2,
-  .closing-inner h2 {
-    font-size: 29px;
-  }
-
-  .provider-route {
-    margin-top: 46px;
-    margin-right: -18px;
-    margin-left: -18px;
-    padding-right: 18px;
-    padding-left: 18px;
-  }
-
-  .gateway-destination {
-    justify-content: flex-start;
-  }
-
-  .destination-line {
-    width: 36px;
-  }
-
-  .protocol-inner {
-    gap: 38px;
-  }
-
-  .console-toolbar {
-    align-items: flex-start;
-  }
-
-  .protocol-tabs {
-    overflow-x: auto;
-  }
-
-  .protocol-tabs button {
-    padding: 0 9px;
-  }
-
-  .request-console pre {
-    min-height: 286px;
-    padding: 20px 18px;
-    font-size: 11px;
-  }
-
-  .console-status span:last-child {
-    display: none;
-  }
-
-  .closing-section {
-    padding: 60px 18px;
-  }
-
-  .closing-inner,
-  .footer-inner {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .home-footer {
-    padding: 24px 18px;
+  .hero-tagline {
+    font-size: 20px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .home-header,
+  .nav-control,
   .primary-action,
   .secondary-action {
     transition: none;
+  }
+
+  .current-stage {
+    height: auto;
+    padding: 18px 0;
+  }
+
+  .model-lane {
+    position: static;
+    height: auto;
+    overflow: visible;
+  }
+
+  .model-track,
+  .model-sequence {
+    width: auto;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: center;
+    animation: none;
+    transform: none;
+  }
+
+  .model-sequence:nth-child(2) {
+    display: none;
+  }
+
+  .provider-chip.is-loop-duplicate {
+    display: none;
   }
 }
 </style>

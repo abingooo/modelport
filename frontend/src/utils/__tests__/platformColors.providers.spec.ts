@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  platformAccentHex,
   platformAccentBarClass,
   platformAccentDotClass,
   platformBadgeClass,
@@ -59,6 +60,13 @@ describe('platform colors', () => {
   it('keeps every group badge palette distinct', () => {
     const badgeClasses = platforms.map(([platform]) => platformBadgeLightClass(platform))
     expect(new Set(badgeClasses)).toHaveLength(platforms.length)
+  })
+
+  it('provides stable scene accents for every platform', () => {
+    const accents = platforms.map(([platform]) => platformAccentHex(platform))
+    expect(accents.every((accent) => /^#[0-9a-f]{6}$/i.test(accent))).toBe(true)
+    expect(new Set(accents)).toHaveLength(platforms.length)
+    expect(platformAccentHex('unknown')).toBe('#0d6efd')
   })
 
   it('uses the approved Zhipu AI product name', () => {

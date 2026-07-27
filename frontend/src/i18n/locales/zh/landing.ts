@@ -6,7 +6,6 @@ export default {
   // Home Page
   home: {
     primaryNavigation: '主导航',
-    heroImageAlt: '港口集装箱码头航拍图',
     viewOnGithub: '在 GitHub 上查看',
     viewDocs: '查看文档',
     docs: '文档',
@@ -15,7 +14,8 @@ export default {
     lottery: '幸运抽奖',
     manageKeys: '管理 API 密钥',
     exploreModels: '探索模型广场',
-    harborSceneLabel: '港区照片上的动态模型航线，船形数据载体驶向灯塔泊位',
+    harborSceneLabel: '货船双向往来、模型货柜持续装卸的动态 ModelPort 港口',
+    openNavigation: '打开导航',
     switchToLight: '切换到浅色模式',
     switchToDark: '切换到深色模式',
     dashboard: '控制台',
@@ -25,20 +25,38 @@ export default {
     viewModelPricing: '查看模型价格',
     gatewayOnline: '网关在线',
     heroKicker: '统一模型网关',
+    metaDescription: '模型港 ModelPort 是统一接入、调度与计费的多模型 API 网关，兼容 OpenAI、Anthropic 与 Google 调用方式',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '让不同厂商、协议与计费方式汇入同一个稳定入口。一次配置，即可按需调用全球主流模型。',
+    heroDescription: '统一接入、调度与计费，让不同协议与模型能力汇聚于同一个端口',
+    modelCurrent: {
+      label: '双向流动的模型服务商序列'
+    },
+    signals: {
+      oneKey: '一个密钥',
+      oneKeyLabel: '统一访问凭证',
+      protocols: '三种协议',
+      protocolsLabel: '原生格式接入',
+      billing: '人民币计费',
+      billingLabel: '价格与用量透明'
+    },
     fleet: {
-      kicker: '模型航线',
-      title: '接入不同模型，只走一个入口',
-      description: '从闭源旗舰模型到国内主流服务，ModelPort 将不同上游统一为可管理、可计费、可观测的模型通路。',
+      kicker: '模型泊位',
+      title: '每一种模型，都有清晰泊位',
+      description: '不同服务商沿同一座内港展开。选择任意泊位，即可查看当前平台的模型定价。',
       routeLabel: '已接入模型服务商',
-      destination: '统一模型入口'
+      destination: '统一模型入口',
+      routeStatus: '模型航线已就绪',
+      directory: '服务商泊位目录',
+      berths: '个模型泊位',
+      berthReady: '航线就绪',
+      ingress: '原生协议进港',
+      berthAction: '模型定价'
     },
     protocols: {
-      kicker: '原生协议',
-      title: '保留客户端习惯，统一网关配置',
-      description: '兼容 OpenAI、Anthropic 与 Google 调用方式，无需为了更换模型重写现有工作流。',
+      kicker: '协议航线',
+      title: '三种协议，汇入一个端口',
+      description: '兼容 OpenAI、Anthropic 与 Google 调用方式，客户端无需因模型变化重写接入逻辑。',
       oneKey: '一个 API 密钥',
       nativeClients: '兼容原生客户端',
       clearBilling: '统一用量与计费',
@@ -49,7 +67,7 @@ export default {
     },
     closing: {
       kicker: '准备靠港',
-      title: '从一个入口，抵达所有模型'
+      title: '从同一个端口，开始下一次模型调用。'
     },
     tags: {
       subscriptionToApi: '订阅转 API',
@@ -144,6 +162,7 @@ export default {
       button: '免费注册'
     },
     footer: {
+      copyrightNotice: '保留所有权利',
       allRightsReserved: '保留所有权利。'
     }
   },
