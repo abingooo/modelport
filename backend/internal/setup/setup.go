@@ -547,28 +547,25 @@ func getEnvIntOrDefault(key string, defaultValue int) int {
 	return defaultValue
 }
 
-// AutoSetupFromEnv performs automatic setup using environment variables
-// This is designed for Docker deployment where all config is passed via env vars
-func AutoSetupFromEnv() error {
-	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
-	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
+func databaseConfigFromEnv() DatabaseConfig {
+	return DatabaseConfig{
+		Host:     getEnvOrDefault("DATABASE_HOST", "localhost"),
+		Port:     getEnvIntOrDefault("DATABASE_PORT", 5432),
+		User:     getEnvOrDefault("DATABASE_USER", "postgres"),
+		Password: getEnvOrDefault("DATABASE_PASSWORD", ""),
+		DBName:   getEnvOrDefault("DATABASE_DBNAME", "sub2api"),
+		SSLMode:  getEnvOrDefault("DATABASE_SSLMODE", "disable"),
+	}
+}
 
-	// Get timezone from TZ or TIMEZONE env var (TZ is standard for Docker)
+func setupConfigFromEnv() *SetupConfig {
 	tz := getEnvOrDefault("TZ", "")
 	if tz == "" {
 		tz = getEnvOrDefault("TIMEZONE", "Asia/Shanghai")
 	}
 
-	// Build config from environment variables
-	cfg := &SetupConfig{
-		Database: DatabaseConfig{
-			Host:     getEnvOrDefault("DATABASE_HOST", "localhost"),
-			Port:     getEnvIntOrDefault("DATABASE_PORT", 5432),
-			User:     getEnvOrDefault("DATABASE_USER", "postgres"),
-			Password: getEnvOrDefault("DATABASE_PASSWORD", ""),
-			DBName:   getEnvOrDefault("DATABASE_DBNAME", "sub2api"),
-			SSLMode:  getEnvOrDefault("DATABASE_SSLMODE", "disable"),
-		},
+	return &SetupConfig{
+		Database: databaseConfigFromEnv(),
 		Redis: RedisConfig{
 			Host:      getEnvOrDefault("REDIS_HOST", "localhost"),
 			Port:      getEnvIntOrDefault("REDIS_PORT", 6379),
@@ -593,6 +590,30 @@ func AutoSetupFromEnv() error {
 		Timezone:                tz,
 		MigrationTimeoutSeconds: getEnvIntOrDefault("SETUP_MIGRATION_TIMEOUT_SECONDS", 0),
 	}
+}
+
+// MigrateOnlyFromEnv applies embedded SQL migrations using only database
+// environment variables. It does not connect to Redis, write setup files,
+// bootstrap users or secrets, or initialize application workers.
+func MigrateOnlyFromEnv() error {
+	cfg := &SetupConfig{
+		Database:                databaseConfigFromEnv(),
+		MigrationTimeoutSeconds: getEnvIntOrDefault("SETUP_MIGRATION_TIMEOUT_SECONDS", 0),
+	}
+	logger.LegacyPrintf("setup", "%s", "Applying database migrations without starting application services...")
+	if err := initializeDatabase(cfg); err != nil {
+		return fmt.Errorf("apply database migrations: %w", err)
+	}
+	return nil
+}
+
+// AutoSetupFromEnv performs automatic setup using environment variables
+// This is designed for Docker deployment where all config is passed via env vars
+func AutoSetupFromEnv() error {
+	logger.LegacyPrintf("setup", "%s", "Auto setup enabled, configuring from environment variables...")
+	logger.LegacyPrintf("setup", "Data directory: %s", GetDataDir())
+
+	cfg := setupConfigFromEnv()
 
 	// Generate JWT secret if not provided
 	if cfg.JWT.Secret == "" {
