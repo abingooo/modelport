@@ -111,12 +111,6 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if settings.GoogleOAuthFrontendRedirectURL == "" {
 		settings.GoogleOAuthFrontendRedirectURL = defaultGoogleOAuthFrontend
 	}
-	imageSiteURL, err := normalizeExternalHTTPURL(settings.ImageSiteURL)
-	if err != nil {
-		return nil, infraerrors.BadRequest("INVALID_IMAGE_SITE_URL", err.Error())
-	}
-	settings.ImageSiteURL = imageSiteURL
-
 	updates := make(map[string]string)
 
 	// 注册设置
@@ -276,7 +270,6 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyAPIBaseURL] = settings.APIBaseURL
 	updates[SettingKeyContactInfo] = settings.ContactInfo
 	updates[SettingKeyDocURL] = settings.DocURL
-	updates[SettingKeyImageSiteURL] = settings.ImageSiteURL
 	updates[SettingKeyHomeContent] = settings.HomeContent
 	updates[SettingKeyHideCcsImportButton] = strconv.FormatBool(settings.HideCcsImportButton)
 	updates[SettingKeyPurchaseSubscriptionEnabled] = strconv.FormatBool(settings.PurchaseSubscriptionEnabled)

@@ -89,28 +89,6 @@ func (s *settingGetAllRepoStub) Delete(ctx context.Context, key string) error {
 	panic("unexpected Delete call")
 }
 
-func TestSettingServiceUpdateValidatesImageSiteURL(t *testing.T) {
-	for _, invalid := range []string{
-		"javascript:alert(1)",
-		"/relative/image-site",
-		"https://user:password@example.com/studio",
-	} {
-		repo := &settingUpdateRepoStub{}
-		service := NewSettingService(repo, &config.Config{})
-		err := service.UpdateSettings(context.Background(), &SystemSettings{ImageSiteURL: invalid})
-		require.Error(t, err)
-		require.Nil(t, repo.updates)
-	}
-
-	repo := &settingUpdateRepoStub{}
-	service := NewSettingService(repo, &config.Config{})
-	err := service.UpdateSettings(context.Background(), &SystemSettings{
-		ImageSiteURL: "  https://images.modelport.link/studio?mode=create  ",
-	})
-	require.NoError(t, err)
-	require.Equal(t, "https://images.modelport.link/studio?mode=create", repo.updates[SettingKeyImageSiteURL])
-}
-
 type forwardedIPMigrationRepoStub struct {
 	values         map[string]string
 	updates        map[string]string

@@ -154,8 +154,6 @@ export default {
     announcements: 'Announcements',
     apiKeys: 'API Keys',
     batchImage: 'Batch Images',
-    imageSite: 'Image Studio',
-    modelPortStore: 'ModelPort Store',
     lottery: 'Lucky Draw',
     lotteryManagement: 'Lottery Management',
     usage: 'Usage',

@@ -283,30 +283,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/image-site',
-    name: 'ImageSite',
-    component: () => import('@/views/user/ImageSiteView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'Image Studio',
-      titleKey: 'imageSite.title',
-      descriptionKey: 'imageSite.description'
-    }
-  },
-  {
-    path: '/store',
-    name: 'ModelPortStore',
-    component: () => import('@/views/user/ModelPortStoreView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'ModelPort Store',
-      titleKey: 'modelPortStore.title',
-      descriptionKey: 'modelPortStore.description'
-    }
-  },
-  {
     path: '/profile',
     name: 'Profile',
     component: () => import('@/views/user/ProfileView.vue'),

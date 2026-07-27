@@ -78,23 +78,6 @@ func TestSettingService_GetPublicSettings_ExposesTablePreferences(t *testing.T) 
 	require.Equal(t, []int{20, 50, 100}, settings.TablePageSizeOptions)
 }
 
-func TestSettingService_GetPublicSettingsFiltersInvalidImageSiteURL(t *testing.T) {
-	service := NewSettingService(&settingPublicRepoStub{values: map[string]string{
-		SettingKeyImageSiteURL: "javascript:alert(1)",
-	}}, &config.Config{})
-
-	settings, err := service.GetPublicSettings(context.Background())
-	require.NoError(t, err)
-	require.Empty(t, settings.ImageSiteURL)
-
-	service = NewSettingService(&settingPublicRepoStub{values: map[string]string{
-		SettingKeyImageSiteURL: "https://images.modelport.link/create",
-	}}, &config.Config{})
-	settings, err = service.GetPublicSettings(context.Background())
-	require.NoError(t, err)
-	require.Equal(t, "https://images.modelport.link/create", settings.ImageSiteURL)
-}
-
 func TestSettingService_GetPublicSettings_ExposesForceEmailOnThirdPartySignup(t *testing.T) {
 	repo := &settingPublicRepoStub{
 		values: map[string]string{
