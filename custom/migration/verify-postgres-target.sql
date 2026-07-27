@@ -67,8 +67,15 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'usage_logs.billing_model is missing';
     END IF;
-    IF EXISTS (SELECT 1 FROM public.usage_logs WHERE billing_model IS NOT NULL) THEN
-        RAISE EXCEPTION 'historical usage_logs.billing_model values were unexpectedly populated';
+    IF EXISTS (
+        SELECT 1
+        FROM public.usage_logs AS usage
+        CROSS JOIN public.schema_migrations AS migration
+        WHERE migration.filename = '189_add_usage_log_billing_model.sql'
+          AND usage.billing_model IS NOT NULL
+          AND usage.created_at < migration.applied_at
+    ) THEN
+        RAISE EXCEPTION 'pre-migration usage_logs.billing_model values were unexpectedly populated';
     END IF;
 
     FOREACH object_name IN ARRAY expected_tables LOOP
