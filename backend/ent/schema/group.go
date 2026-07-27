@@ -45,6 +45,9 @@ func (Group) Fields() []ent.Field {
 		field.Float("rate_multiplier").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
 			Default(1.0),
+		field.Bool("is_free").
+			Default(false).
+			Comment("是否为免费分组；免费分组记录原始成本但不消耗用户侧货币额度"),
 		// 高峰时段倍率（added by migration 158）
 		field.Bool("peak_rate_enabled").
 			Default(false).

@@ -196,6 +196,9 @@ const DataTableStub = {
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
         </div>
+        <div data-test="key-group">
+          <slot name="cell-group" :value="row.group" :row="row" />
+        </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
           data-test="last-used-ip"
@@ -245,6 +248,12 @@ const IconStub = {
   template: '<span data-test="icon">{{ name }}</span>',
 }
 
+const GroupBadgeStub = {
+  name: 'GroupBadge',
+  props: ['name', 'isFree'],
+  template: '<span data-test="group-badge" :data-is-free="String(isFree)">{{ name }}</span>',
+}
+
 const mountView = async () => {
   const wrapper = mount(KeysView, {
     global: {
@@ -261,7 +270,7 @@ const mountView = async () => {
         Icon: IconStub,
         UseKeyModal: true,
         EndpointPopover: true,
-        GroupBadge: true,
+        GroupBadge: GroupBadgeStub,
         GroupOptionItem: true,
         Teleport: true,
       },
@@ -424,6 +433,30 @@ describe('user KeysView column settings', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+  })
+
+  it('passes the free billing state to the API key group badge', async () => {
+    listKeys.mockResolvedValueOnce({
+      items: [{
+        ...createApiKey(),
+        group: {
+          id: 9,
+          name: 'Free MiMo',
+          platform: 'mimo',
+          subscription_type: 'standard',
+          rate_multiplier: 1,
+          is_free: true,
+        },
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = await mountView()
+
+    expect(wrapper.get('[data-test="group-badge"]').attributes('data-is-free')).toBe('true')
   })
 
   it('marks current concurrency as sortable', async () => {

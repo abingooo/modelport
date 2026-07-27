@@ -1,6 +1,16 @@
 package service
 
+func resolveGroupBillingMultiplier(apiKey *APIKey, effectiveGroupMultiplier float64) float64 {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.IsFreeBilling() {
+		return 0
+	}
+	return effectiveGroupMultiplier
+}
+
 func resolveImageRateMultiplier(apiKey *APIKey, effectiveGroupMultiplier float64) float64 {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.IsFreeBilling() {
+		return 0
+	}
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ImageRateIndependent {
 		if apiKey.Group.ImageRateMultiplier < 0 {
 			return 0
@@ -11,6 +21,9 @@ func resolveImageRateMultiplier(apiKey *APIKey, effectiveGroupMultiplier float64
 }
 
 func resolveVideoRateMultiplier(apiKey *APIKey, effectiveGroupMultiplier float64) float64 {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.IsFreeBilling() {
+		return 0
+	}
 	if apiKey != nil && apiKey.Group != nil && apiKey.Group.VideoRateIndependent {
 		if apiKey.Group.VideoRateMultiplier < 0 {
 			return 0

@@ -5,18 +5,70 @@ export default {
   },
   // Home Page
   home: {
+    primaryNavigation: '主导航',
     viewOnGithub: '在 GitHub 上查看',
     viewDocs: '查看文档',
     docs: '文档',
+    modelPricing: '模型定价',
+    modelCatalog: '模型广场',
+    lottery: '幸运抽奖',
+    manageKeys: '管理 API 密钥',
+    exploreModels: '探索模型广场',
+    harborSceneLabel: '货船双向往来、模型货柜持续装卸的动态 ModelPort 港口',
+    openNavigation: '打开导航',
     switchToLight: '切换到浅色模式',
     switchToDark: '切换到深色模式',
     dashboard: '控制台',
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
+    viewModelPricing: '查看模型价格',
+    gatewayOnline: '网关在线',
+    heroKicker: '统一模型网关',
+    metaDescription: '模型港 ModelPort 是统一接入、调度与计费的多模型 API 网关，兼容 OpenAI、Anthropic 与 Google 调用方式',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
+    heroDescription: '统一接入、调度与计费，让不同协议与模型能力汇聚于同一个端口',
+    modelCurrent: {
+      label: '双向流动的模型服务商序列'
+    },
+    signals: {
+      oneKey: '一个密钥',
+      oneKeyLabel: '统一访问凭证',
+      protocols: '三种协议',
+      protocolsLabel: '原生格式接入',
+      billing: '人民币计费',
+      billingLabel: '价格与用量透明'
+    },
+    fleet: {
+      kicker: '模型泊位',
+      title: '每一种模型，都有清晰泊位',
+      description: '不同服务商沿同一座内港展开。选择任意泊位，即可查看当前平台的模型定价。',
+      routeLabel: '已接入模型服务商',
+      destination: '统一模型入口',
+      routeStatus: '模型航线已就绪',
+      directory: '服务商泊位目录',
+      berths: '个模型泊位',
+      berthReady: '航线就绪',
+      ingress: '原生协议进港',
+      berthAction: '模型定价'
+    },
+    protocols: {
+      kicker: '协议航线',
+      title: '三种协议，汇入一个端口',
+      description: '兼容 OpenAI、Anthropic 与 Google 调用方式，客户端无需因模型变化重写接入逻辑。',
+      oneKey: '一个 API 密钥',
+      nativeClients: '兼容原生客户端',
+      clearBilling: '统一用量与计费',
+      tabLabel: '接口协议示例',
+      copy: '复制调用示例',
+      copied: '已复制',
+      requestReady: '请求已就绪'
+    },
+    closing: {
+      kicker: '准备靠港',
+      title: '从同一个端口，开始下一次模型调用。'
+    },
     tags: {
       subscriptionToApi: '订阅转 API',
       stickySession: '会话保持',
@@ -110,6 +162,7 @@ export default {
       button: '免费注册'
     },
     footer: {
+      copyrightNotice: '保留所有权利',
       allRightsReserved: '保留所有权利。'
     }
   },

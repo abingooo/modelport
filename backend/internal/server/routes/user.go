@@ -84,6 +84,8 @@ func RegisterUserRoutes(
 			channels.GET("/available", h.AvailableChannel.List)
 		}
 
+		authenticated.GET("/model-catalog", h.ModelCatalog.List)
+
 		lottery := authenticated.Group("/lottery")
 		{
 			lottery.GET("", h.Lottery.List)

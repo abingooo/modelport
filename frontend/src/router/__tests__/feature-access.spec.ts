@@ -128,7 +128,10 @@ describe('feature route guard', () => {
   })
 
   it.each([
+    ['/model-catalog', 'ModelCatalog'],
     ['/lottery', 'Lottery'],
+    ['/image-site', 'ImageSite'],
+    ['/store', 'ModelPortStore'],
   ])('registers protected feature route %s', (path, name) => {
     const route = routerHarness.routes.find((item) => item.path === path)
     expect(route).toMatchObject({
@@ -142,19 +145,13 @@ describe('feature route guard', () => {
   })
 
   it.each([
-    '/model-catalog',
-    '/admin/model-catalog',
-    '/image-site',
-    '/store',
-  ])('does not register removed route %s', (path) => {
-    expect(routerHarness.routes.some((item) => item.path === path)).toBe(false)
-  })
-
-  it('registers the administrator lottery route', () => {
-    const route = routerHarness.routes.find((item) => item.path === '/admin/lottery')
+    ['/admin/lottery', 'AdminLottery'],
+    ['/admin/model-catalog', 'AdminModelCatalog'],
+  ])('registers protected administrator route %s', (path, name) => {
+    const route = routerHarness.routes.find((item) => item.path === path)
     expect(route).toMatchObject({
-      path: '/admin/lottery',
-      name: 'AdminLottery',
+      path,
+      name,
       meta: { requiresAuth: true, requiresAdmin: true },
     })
   })

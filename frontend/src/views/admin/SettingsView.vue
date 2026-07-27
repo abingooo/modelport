@@ -3328,6 +3328,11 @@
                                 option as unknown as DefaultSubscriptionGroupOption
                               ).rate
                             "
+                            :is-free="
+                              (
+                                option as unknown as DefaultSubscriptionGroupOption
+                              ).isFree
+                            "
                           />
                           <span v-else class="text-gray-400">
                             {{ t("admin.settings.defaults.subscriptionGroup") }}
@@ -3354,6 +3359,11 @@
                               (
                                 option as unknown as DefaultSubscriptionGroupOption
                               ).rate
+                            "
+                            :is-free="
+                              (
+                                option as unknown as DefaultSubscriptionGroupOption
+                              ).isFree
                             "
                             :description="
                               (
@@ -3658,6 +3668,11 @@
                                     option as unknown as DefaultSubscriptionGroupOption
                                   ).rate
                                 "
+                                :is-free="
+                                  (
+                                    option as unknown as DefaultSubscriptionGroupOption
+                                  ).isFree
+                                "
                               />
                               <span v-else class="text-gray-400">
                                 {{
@@ -3686,6 +3701,11 @@
                                   (
                                     option as unknown as DefaultSubscriptionGroupOption
                                   ).rate
+                                "
+                                :is-free="
+                                  (
+                                    option as unknown as DefaultSubscriptionGroupOption
+                                  ).isFree
                                 "
                                 :description="
                                   (
@@ -5665,6 +5685,21 @@
                 />
                 <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
                   {{ t("admin.settings.site.docUrlHint") }}
+                </p>
+              </div>
+
+              <div>
+                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t("admin.settings.site.imageSiteUrl") }}
+                </label>
+                <input
+                  v-model.trim="form.image_site_url"
+                  type="url"
+                  class="input font-mono text-sm"
+                  :placeholder="t('admin.settings.site.imageSiteUrlPlaceholder')"
+                />
+                <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ t("admin.settings.site.imageSiteUrlHint") }}
                 </p>
               </div>
 
@@ -8424,6 +8459,7 @@ interface DefaultSubscriptionGroupOption {
   platform: AdminGroup["platform"];
   subscriptionType: AdminGroup["subscription_type"];
   rate: number;
+  isFree: boolean;
   [key: string]: unknown;
 }
 
@@ -8501,6 +8537,7 @@ const form = reactive<SettingsForm>({
   api_base_url: "",
   contact_info: "",
   doc_url: "",
+  image_site_url: "",
   home_content: "",
   backend_mode_enabled: false,
   hide_ccs_import_button: false,
@@ -9056,6 +9093,7 @@ const defaultSubscriptionGroupOptions = computed<
     platform: group.platform,
     subscriptionType: group.subscription_type,
     rate: group.rate_multiplier,
+    isFree: group.is_free,
   })),
 );
 
@@ -9965,6 +10003,10 @@ async function saveSettings() {
     // Optional URL fields: auto-clear invalid values so they don't cause backend 400 errors
     if (!isValidHttpUrl(form.frontend_url)) form.frontend_url = "";
     if (!isValidHttpUrl(form.doc_url)) form.doc_url = "";
+    if (!isValidHttpUrl(form.image_site_url)) {
+      appStore.showError(t("admin.settings.site.imageSiteUrlInvalid"));
+      return;
+    }
     syncWeChatConnectMode();
     const wechatStoredMode = deriveWeChatConnectStoredMode(
       form.wechat_connect_open_enabled,
@@ -10020,6 +10062,7 @@ async function saveSettings() {
       api_base_url: form.api_base_url,
       contact_info: form.contact_info,
       doc_url: form.doc_url,
+      image_site_url: form.image_site_url,
       home_content: form.home_content,
       backend_mode_enabled: form.backend_mode_enabled,
       hide_ccs_import_button: form.hide_ccs_import_button,

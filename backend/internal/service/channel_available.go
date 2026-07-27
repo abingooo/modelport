@@ -18,6 +18,7 @@ type AvailableGroupRef struct {
 	Platform           string
 	SubscriptionType   string
 	RateMultiplier     float64
+	IsFree             bool
 	PeakRateEnabled    bool
 	PeakStart          string
 	PeakEnd            string
@@ -68,6 +69,7 @@ func (s *ChannelService) ListAvailable(ctx context.Context) ([]AvailableChannel,
 			Platform:           g.Platform,
 			SubscriptionType:   g.SubscriptionType,
 			RateMultiplier:     g.RateMultiplier,
+			IsFree:             g.IsFree,
 			PeakRateEnabled:    g.PeakRateEnabled,
 			PeakStart:          g.PeakStart,
 			PeakEnd:            g.PeakEnd,
@@ -171,16 +173,21 @@ func synthesizePricingFromLiteLLM(lp *LiteLLMModelPricing, existing *ChannelMode
 	}
 
 	mode := BillingModeToken
+	userVisible := true
 	switch {
 	case existing != nil && existing.BillingMode != "":
 		mode = existing.BillingMode
 	case lp.Mode == "image_generation":
 		mode = BillingModeImage
 	}
+	if existing != nil {
+		userVisible = existing.UserVisible
+	}
 
 	if mode == BillingModeImage || mode == BillingModePerRequest {
 		return &ChannelModelPricing{
 			BillingMode:      mode,
+			UserVisible:      userVisible,
 			PerRequestPrice:  nonZeroPtr(lp.OutputCostPerImage),
 			ImageOutputPrice: nonZeroPtr(lp.OutputCostPerImageToken),
 			InputPrice:       nonZeroPtr(lp.InputCostPerToken),
@@ -189,6 +196,7 @@ func synthesizePricingFromLiteLLM(lp *LiteLLMModelPricing, existing *ChannelMode
 	}
 	return &ChannelModelPricing{
 		BillingMode:      mode,
+		UserVisible:      userVisible,
 		InputPrice:       nonZeroPtr(lp.InputCostPerToken),
 		OutputPrice:      nonZeroPtr(lp.OutputCostPerToken),
 		CacheWritePrice:  nonZeroPtr(lp.CacheCreationInputTokenCost),

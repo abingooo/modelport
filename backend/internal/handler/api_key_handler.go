@@ -267,18 +267,13 @@ func (h *APIKeyHandler) BulkUpdateGroup(c *gin.Context) {
 		return
 	}
 
-	updated, err := h.apiKeyService.BulkUpdateGroup(
-		c.Request.Context(),
-		subject.UserID,
-		req.KeyIDs,
-		req.GroupID,
-	)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-
-	response.Success(c, gin.H{"updated_count": updated})
+	executeUserIdempotentJSON(c, "user.api_keys.bulk_group", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
+		updated, err := h.apiKeyService.BulkUpdateGroup(ctx, subject.UserID, req.KeyIDs, req.GroupID)
+		if err != nil {
+			return nil, err
+		}
+		return gin.H{"updated_count": updated}, nil
+	})
 }
 
 // Delete handles deleting an API key

@@ -9,6 +9,7 @@
         :platform="group.platform"
         :subscription-type="group.subscription_type"
         :rate-multiplier="group.rate_multiplier"
+        :is-free="group.is_free"
         :show-rate="false"
         class="max-w-24"
       />
@@ -60,6 +61,7 @@
               :platform="group.platform"
               :subscription-type="group.subscription_type"
               :rate-multiplier="group.rate_multiplier"
+              :is-free="group.is_free"
               :show-rate="false"
             />
           </div>

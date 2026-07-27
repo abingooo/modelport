@@ -1,13 +1,16 @@
 import { i18n } from '@/i18n'
 import type { RouteLocationNormalizedLoaded } from 'vue-router'
 import type { CustomMenuItem } from '@/types'
+import { DEFAULT_SITE_NAME } from '@/utils/branding'
 
 /**
  * 统一生成页面标题，避免多处写入 document.title 产生覆盖冲突。
  * 优先使用 titleKey 通过 i18n 翻译，fallback 到静态 routeTitle。
  */
 export function resolveDocumentTitle(routeTitle: unknown, siteName?: string, titleKey?: string): string {
-  const normalizedSiteName = typeof siteName === 'string' && siteName.trim() ? siteName.trim() : 'Sub2API'
+  const normalizedSiteName = typeof siteName === 'string' && siteName.trim()
+    ? siteName.trim()
+    : DEFAULT_SITE_NAME
 
   if (typeof titleKey === 'string' && titleKey.trim()) {
     const translated = i18n.global.t(titleKey)
@@ -28,6 +31,14 @@ export function resolveRouteDocumentTitle(
   siteName: string | undefined,
   customMenuItems: CustomMenuItem[] = [],
 ): string {
+  if (
+    route.name === 'Home'
+    && typeof siteName === 'string'
+    && siteName.trim().toLowerCase() === 'modelport'
+  ) {
+    return '模型港 ModelPort - 统一模型网关'
+  }
+
   const id = typeof route.params.id === 'string' ? route.params.id : ''
   const menuItem = route.name === 'CustomPage' && id
     ? customMenuItems.find((item) => item.id === id)

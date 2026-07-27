@@ -282,6 +282,25 @@ func TestAdminService_CreateGroup_WithImagePricing(t *testing.T) {
 	require.InDelta(t, 0.30, *repo.created.ImagePrice4K, 0.0001)
 }
 
+func TestAdminService_CreateAndUpdateGroup_FreeBilling(t *testing.T) {
+	repo := &groupRepoStubForAdmin{}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name: "free-group", RateMultiplier: 1.25, IsFree: true,
+	})
+	require.NoError(t, err)
+	require.True(t, group.IsFree)
+	require.InDelta(t, 1.25, group.RateMultiplier, 1e-12)
+
+	repo.getByID = group
+	disabled := false
+	updated, err := svc.UpdateGroup(context.Background(), group.ID, &UpdateGroupInput{IsFree: &disabled})
+	require.NoError(t, err)
+	require.False(t, updated.IsFree)
+	require.InDelta(t, 1.25, updated.RateMultiplier, 1e-12)
+}
+
 func TestAdminService_CreateGroup_WithVideoPricing(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
 	svc := &adminServiceImpl{groupRepo: repo}

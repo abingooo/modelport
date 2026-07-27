@@ -955,6 +955,9 @@ func (s *SubscriptionService) EnsureWindowMaintenance(ctx context.Context, sub *
 // CheckUsageLimits 检查使用限额（返回错误如果超限）
 // 用于中间件的快速预检查，additionalCost 通常为 0
 func (s *SubscriptionService) CheckUsageLimits(ctx context.Context, sub *UserSubscription, group *Group, additionalCost float64) error {
+	if group != nil && group.IsFreeBilling() {
+		return nil
+	}
 	if !sub.CheckDailyLimit(group, additionalCost) {
 		return ErrDailyLimitExceeded
 	}
@@ -980,6 +983,9 @@ func (s *SubscriptionService) ValidateAndCheckLimits(sub *UserSubscription, grou
 	}
 	if sub.IsExpired() {
 		return false, ErrSubscriptionExpired
+	}
+	if group != nil && group.IsFreeBilling() {
+		return false, nil
 	}
 
 	// 2. 内存中修正过期窗口的用量，确保预检查不会误拒绝用户。

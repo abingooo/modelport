@@ -237,9 +237,15 @@
             </div>
           </template>
 
-          <template #cell-rate_multiplier="{ value }">
-            <span class="text-sm text-gray-700 dark:text-gray-300"
-              >{{ value }}x</span
+          <template #cell-rate_multiplier="{ row }">
+            <span
+              v-if="row.is_free"
+              class="inline-flex rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-300"
+            >
+              {{ t("admin.groups.freeBilling.badge") }}
+            </span>
+            <span v-else class="text-sm text-gray-700 dark:text-gray-300"
+              >{{ row.rate_multiplier }}x</span
             >
           </template>
 
@@ -386,7 +392,9 @@
               </button>
               <button
                 @click="handleRateMultipliers(row)"
-                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-purple-600 dark:hover:bg-dark-700 dark:hover:text-purple-400"
+                :disabled="row.is_free"
+                :title="row.is_free ? t('admin.groups.freeBilling.customRateDisabled') : undefined"
+                class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-purple-600 disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-dark-700 dark:hover:text-purple-400"
               >
                 <Icon name="dollar" size="sm" />
                 <span class="text-xs">{{
@@ -457,6 +465,26 @@
             :placeholder="t('admin.groups.enterGroupName')"
             data-tour="group-form-name"
           />
+        </div>
+        <div>
+          <label class="input-label">{{ t("admin.groups.freeBilling.title") }}</label>
+          <div class="grid grid-cols-2 rounded-md bg-gray-100 p-1 dark:bg-dark-700">
+            <button
+              type="button"
+              :class="['rounded px-3 py-2 text-sm font-medium transition-colors', !createForm.is_free ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-600 dark:text-white' : 'text-gray-500 dark:text-gray-400']"
+              @click="setCreateBillingMode(false)"
+            >
+              {{ t("admin.groups.freeBilling.standard") }}
+            </button>
+            <button
+              type="button"
+              :class="['rounded px-3 py-2 text-sm font-medium transition-colors', createForm.is_free ? 'bg-cyan-600 text-white shadow-sm' : 'text-gray-500 dark:text-gray-400']"
+              @click="setCreateBillingMode(true)"
+            >
+              {{ t("admin.groups.freeBilling.free") }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t("admin.groups.freeBilling.hint") }}</p>
         </div>
         <div>
           <label class="input-label">{{
@@ -580,6 +608,7 @@
             step="0.001"
             min="0.001"
             required
+            :disabled="createForm.is_free"
             class="input"
             data-tour="group-form-multiplier"
           />
@@ -875,6 +904,7 @@
               <input
                 v-model="createForm.image_rate_independent"
                 type="checkbox"
+                :disabled="createForm.is_free"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               {{ t(imagePricingI18nKey(createForm.platform, "independentMultiplier")) }}
@@ -890,6 +920,7 @@
             <input
               v-model.number="createForm.image_rate_multiplier"
               type="number"
+              :disabled="createForm.is_free"
               step="0.0001"
               min="0"
               class="input"
@@ -972,6 +1003,7 @@
                 <input
                   v-model.number="createForm.batch_image_discount_multiplier"
                   type="number"
+                  :disabled="createForm.is_free"
                   step="0.0001"
                   min="0"
                   class="input"
@@ -985,6 +1017,7 @@
                 <input
                   v-model.number="createForm.batch_image_hold_multiplier"
                   type="number"
+                  :disabled="createForm.is_free"
                   step="0.0001"
                   min="0"
                   class="input"
@@ -1019,6 +1052,7 @@
               <input
                 v-model="createForm.video_rate_independent"
                 type="checkbox"
+                :disabled="createForm.is_free"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               {{ t(videoPricingI18nKey("independentMultiplier")) }}
@@ -1034,6 +1068,7 @@
             <input
               v-model.number="createForm.video_rate_multiplier"
               type="number"
+              :disabled="createForm.is_free"
               step="0.0001"
               min="0"
               class="input"
@@ -1100,6 +1135,7 @@
               <input
                 v-model="createForm.peak_rate_enabled"
                 type="checkbox"
+                :disabled="createForm.is_free"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               <span>{{ t("admin.groups.peakRate.enable") }}</span>
@@ -1130,6 +1166,7 @@
               <input
                 v-model.number="createForm.peak_rate_multiplier"
                 type="number"
+                :disabled="createForm.is_free"
                 step="0.001"
                 min="0"
                 class="input"
@@ -2092,6 +2129,26 @@
           </p>
         </div>
         <div>
+          <label class="input-label">{{ t("admin.groups.freeBilling.title") }}</label>
+          <div class="grid grid-cols-2 rounded-md bg-gray-100 p-1 dark:bg-dark-700">
+            <button
+              type="button"
+              :class="['rounded px-3 py-2 text-sm font-medium transition-colors', !editForm.is_free ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-600 dark:text-white' : 'text-gray-500 dark:text-gray-400']"
+              @click="setEditBillingMode(false)"
+            >
+              {{ t("admin.groups.freeBilling.standard") }}
+            </button>
+            <button
+              type="button"
+              :class="['rounded px-3 py-2 text-sm font-medium transition-colors', editForm.is_free ? 'bg-cyan-600 text-white shadow-sm' : 'text-gray-500 dark:text-gray-400']"
+              @click="setEditBillingMode(true)"
+            >
+              {{ t("admin.groups.freeBilling.free") }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t("admin.groups.freeBilling.hint") }}</p>
+        </div>
+        <div>
           <label class="input-label">{{
             t("admin.groups.form.rateMultiplier")
           }}</label>
@@ -2101,6 +2158,7 @@
             step="0.001"
             min="0.001"
             required
+            :disabled="editForm.is_free"
             class="input"
             data-tour="group-form-multiplier"
           />
@@ -2397,6 +2455,7 @@
               <input
                 v-model="editForm.image_rate_independent"
                 type="checkbox"
+                :disabled="editForm.is_free"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               {{ t(imagePricingI18nKey(editForm.platform, "independentMultiplier")) }}
@@ -2412,6 +2471,7 @@
             <input
               v-model.number="editForm.image_rate_multiplier"
               type="number"
+              :disabled="editForm.is_free"
               step="0.0001"
               min="0"
               class="input"
@@ -2494,6 +2554,7 @@
                 <input
                   v-model.number="editForm.batch_image_discount_multiplier"
                   type="number"
+                  :disabled="editForm.is_free"
                   step="0.0001"
                   min="0"
                   class="input"
@@ -2507,6 +2568,7 @@
                 <input
                   v-model.number="editForm.batch_image_hold_multiplier"
                   type="number"
+                  :disabled="editForm.is_free"
                   step="0.0001"
                   min="0"
                   class="input"
@@ -2541,6 +2603,7 @@
               <input
                 v-model="editForm.video_rate_independent"
                 type="checkbox"
+                :disabled="editForm.is_free"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               {{ t(videoPricingI18nKey("independentMultiplier")) }}
@@ -2556,6 +2619,7 @@
             <input
               v-model.number="editForm.video_rate_multiplier"
               type="number"
+              :disabled="editForm.is_free"
               step="0.0001"
               min="0"
               class="input"
@@ -2622,6 +2686,7 @@
               <input
                 v-model="editForm.peak_rate_enabled"
                 type="checkbox"
+                :disabled="editForm.is_free"
                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
               <span>{{ t("admin.groups.peakRate.enable") }}</span>
@@ -2652,6 +2717,7 @@
               <input
                 v-model.number="editForm.peak_rate_multiplier"
                 type="number"
+                :disabled="editForm.is_free"
                 step="0.001"
                 min="0"
                 class="input"
@@ -3516,15 +3582,7 @@
                 <span
                   :class="[
                     'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium',
-                    group.platform === 'anthropic'
-                      ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                      : group.platform === 'openai'
-                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-                        : group.platform === 'antigravity'
-                          ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-                          : group.platform === 'grok'
-                            ? 'bg-zinc-200 text-zinc-800 dark:bg-zinc-700 dark:text-zinc-100'
-                            : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                    platformBadgeLightClass(group.platform),
                   ]"
                 >
                   {{ t("admin.groups.platforms." + group.platform) }}
@@ -3985,6 +4043,7 @@ import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffor
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import { extractApiErrorMessage } from "@/utils/apiError";
+import { platformBadgeLightClass } from "@/utils/platformColors";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
 import {
@@ -4481,6 +4540,7 @@ const createForm = reactive({
   description: "",
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
+  is_free: false,
   is_exclusive: false,
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
@@ -4829,6 +4889,7 @@ const editForm = reactive({
   description: "",
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
+  is_free: false,
   is_exclusive: false,
   status: "active" as "active" | "inactive",
   subscription_type: "standard" as SubscriptionType,
@@ -4886,11 +4947,27 @@ const editForm = reactive({
   reasoning_effort_mappings: [] as ReasoningEffortMappingRow[],
 });
 
+const confirmFreeBilling = () =>
+  window.confirm(t("admin.groups.freeBilling.confirm"));
+
+const setCreateBillingMode = (isFree: boolean) => {
+  if (createForm.is_free === isFree) return;
+  if (isFree && !confirmFreeBilling()) return;
+  createForm.is_free = isFree;
+};
+
+const setEditBillingMode = (isFree: boolean) => {
+  if (editForm.is_free === isFree) return;
+  if (isFree && !confirmFreeBilling()) return;
+  editForm.is_free = isFree;
+};
+
 type ImagePricingFormState = {
   platform: GroupPlatform;
   allow_image_generation: boolean;
   allow_batch_image_generation: boolean;
   rate_multiplier: number;
+  is_free: boolean;
   image_rate_independent: boolean;
   image_rate_multiplier: number;
   batch_image_discount_multiplier: number;
@@ -4907,6 +4984,7 @@ type ImagePricingFormState = {
 type VideoPricingFormState = {
   platform: GroupPlatform;
   rate_multiplier: number;
+  is_free: boolean;
   video_rate_independent: boolean;
   video_rate_multiplier: number;
   video_price_480p: number | string | null;
@@ -4965,7 +5043,7 @@ const formatVideoPricePreview = (value: number | string | null | undefined) => {
 };
 
 const buildImageFinalPricePreview = (form: ImagePricingFormState) => {
-  const imageMultiplier = form.image_rate_independent
+  const imageMultiplier = form.is_free ? 0 : form.image_rate_independent
     ? normalizePreviewNumber(form.image_rate_multiplier, 1)
     : normalizePreviewNumber(form.rate_multiplier, 1);
   const multiplier = imageMultiplier;
@@ -4983,7 +5061,7 @@ const buildImageFinalPricePreview = (form: ImagePricingFormState) => {
 };
 
 const buildVideoFinalPricePreview = (form: VideoPricingFormState) => {
-  const multiplier = form.video_rate_independent
+  const multiplier = form.is_free ? 0 : form.video_rate_independent
     ? normalizePreviewNumber(form.video_rate_multiplier, 1)
     : normalizePreviewNumber(form.rate_multiplier, 1);
   return videoPricingTiers.map((tier) => {
@@ -5018,11 +5096,12 @@ const DEFAULT_WEB_SEARCH_PRICE_PER_CALL = 0.01;
 const buildWebSearchFinalPricePreview = (form: {
   web_search_price_per_call: number | string | null;
   rate_multiplier: number | string | null;
+  is_free: boolean;
 }) => {
   const basePrice =
     parsePreviewPrice(form.web_search_price_per_call) ??
     DEFAULT_WEB_SEARCH_PRICE_PER_CALL;
-  const multiplier = normalizePreviewNumber(form.rate_multiplier, 1);
+  const multiplier = form.is_free ? 0 : normalizePreviewNumber(form.rate_multiplier, 1);
   return formatImagePricePreview(basePrice * multiplier);
 };
 
@@ -5239,6 +5318,7 @@ const closeCreateModal = () => {
   createForm.description = "";
   createForm.platform = "anthropic";
   createForm.rate_multiplier = 1.0;
+  createForm.is_free = false;
   createForm.is_exclusive = false;
   createForm.subscription_type = "standard";
   createForm.daily_limit_usd = null;
@@ -5417,6 +5497,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.description = group.description || "";
   editForm.platform = group.platform;
   editForm.rate_multiplier = group.rate_multiplier;
+  editForm.is_free = group.is_free ?? false;
   editForm.is_exclusive = group.is_exclusive;
   editForm.status = group.status;
   editForm.subscription_type = group.subscription_type || "standard";
@@ -5645,6 +5726,7 @@ const removeEditMessagesDispatchMapping = (row: MessagesDispatchMappingRow) => {
 };
 
 const handleRateMultipliers = (group: AdminGroup) => {
+  if (group.is_free) return;
   rateMultipliersGroup.value = group;
   showRateMultipliersModal.value = true;
 };

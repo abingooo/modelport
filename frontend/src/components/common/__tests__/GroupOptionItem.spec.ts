@@ -48,4 +48,32 @@ describe('GroupOptionItem platform colors', () => {
     const classes = wrapper.findAll('*').flatMap((node) => node.classes())
     expect(classes.some((className) => className.includes(color))).toBe(true)
   })
+
+  it('shows free instead of rate and peak multipliers', () => {
+    const wrapper = mount(GroupOptionItem, {
+      props: {
+        name: 'Test group',
+        platform: 'openai',
+        rateMultiplier: 2,
+        userRateMultiplier: 3,
+        peakRateEnabled: true,
+        peakStart: '09:00',
+        peakEnd: '18:00',
+        peakRateMultiplier: 4,
+        isFree: true
+      },
+      global: {
+        plugins: [createI18n({
+          legacy: false,
+          locale: 'en',
+          messages: { en: { admin: { groups: { freeBilling: { badge: () => 'Free' } } } } }
+        })]
+      }
+    })
+
+    expect(wrapper.text()).toContain('Free')
+    expect(wrapper.text()).not.toContain('2x')
+    expect(wrapper.text()).not.toContain('3x')
+    expect(wrapper.text()).not.toContain('4x')
+  })
 })

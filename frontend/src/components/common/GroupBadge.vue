@@ -40,6 +40,7 @@ interface Props {
   platform?: GroupPlatform
   subscriptionType?: SubscriptionType
   rateMultiplier?: number
+  isFree?: boolean
   userRateMultiplier?: number | null // 用户专属倍率
   peakRateEnabled?: boolean
   peakStart?: string
@@ -61,6 +62,7 @@ const props = withDefaults(defineProps<Props>(), {
   daysRemaining: null,
   userRateMultiplier: null,
   peakRateEnabled: false,
+  isFree: false,
   alwaysShowRate: false
 })
 
@@ -71,6 +73,7 @@ const isSubscription = computed(() => props.subscriptionType === 'subscription')
 // 是否有专属倍率（且与默认倍率不同）
 const hasCustomRate = computed(() => {
   return (
+    !props.isFree &&
     props.userRateMultiplier !== null &&
     props.userRateMultiplier !== undefined &&
     props.rateMultiplier !== undefined &&
@@ -81,7 +84,7 @@ const hasCustomRate = computed(() => {
 const appStore = useAppStore()
 
 const hasPeakRate = computed(() => {
-  return Boolean(props.showRate && props.peakRateEnabled && props.peakStart && props.peakEnd)
+  return Boolean(!props.isFree && props.showRate && props.peakRateEnabled && props.peakStart && props.peakEnd)
 })
 
 const peakRateText = computed(() => {
@@ -103,6 +106,7 @@ const peakRateTitle = computed(() => {
 // 是否显示右侧标签
 const showLabel = computed(() => {
   if (!props.showRate) return false
+  if (props.isFree) return true
   // 订阅类型：显示天数或"订阅"
   if (isSubscription.value) return true
   // 标准类型：显示倍率（包括专属倍率）
@@ -111,6 +115,7 @@ const showLabel = computed(() => {
 
 // Label text
 const labelText = computed(() => {
+  if (props.isFree) return t('admin.groups.freeBilling.badge')
   const rateLabel = props.rateMultiplier !== undefined ? `${props.rateMultiplier}x` : ''
   if (isSubscription.value && !props.alwaysShowRate) {
     // 如果有剩余天数，显示天数
@@ -129,6 +134,10 @@ const labelText = computed(() => {
 // Label style based on type and days remaining
 const labelClass = computed(() => {
   const base = 'px-1.5 py-0.5 rounded text-[10px] font-semibold'
+
+  if (props.isFree) {
+    return `${base} bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300`
+  }
 
   if (!isSubscription.value) {
     // Standard: subtle background (不再为专属倍率使用不同的背景色)

@@ -102,6 +102,8 @@ func RegisterAdminRoutes(
 		// 渠道管理
 		registerChannelRoutes(admin, h)
 
+		registerModelCatalogRoutes(admin, h)
+
 		registerLotteryRoutes(admin, h)
 
 		// 渠道监控
@@ -118,6 +120,15 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerModelCatalogRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	modelCatalog := admin.Group("/model-catalog")
+	{
+		modelCatalog.GET("", h.Admin.ModelCatalog.List)
+		modelCatalog.PUT("", h.Admin.ModelCatalog.Upsert)
+		modelCatalog.DELETE("/:id", h.Admin.ModelCatalog.Delete)
 	}
 }
 

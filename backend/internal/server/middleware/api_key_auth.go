@@ -210,15 +210,22 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				subscription = sub
 			}
 		}
+		if !skipBilling && isSubscriptionType && apiKey.Group.IsFreeBilling() && subscription == nil {
+			AbortWithError(c, 403, "SUBSCRIPTION_NOT_FOUND", "No active subscription found for this group")
+			return
+		}
 
 		// ── 6. 计费执行（skipBilling 时整块跳过） ────────────────────
 
 		if !skipBilling {
+			isFreeGroup := apiKey.Group != nil && apiKey.Group.IsFreeBilling()
 			// Key 状态检查
 			switch apiKey.Status {
 			case service.StatusAPIKeyQuotaExhausted:
-				abortWithAPIKeyQuotaError(c)
-				return
+				if !isFreeGroup {
+					abortWithAPIKeyQuotaError(c)
+					return
+				}
 			case service.StatusAPIKeyExpired:
 				AbortWithError(c, 403, "API_KEY_EXPIRED", "API key 已过期")
 				return
@@ -229,7 +236,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 				AbortWithError(c, 403, "API_KEY_EXPIRED", "API key 已过期")
 				return
 			}
-			if apiKey.IsQuotaExhausted() {
+			if !isFreeGroup && apiKey.IsQuotaExhausted() {
 				abortWithAPIKeyQuotaError(c)
 				return
 			}
@@ -258,7 +265,7 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 					AbortWithError(c, status, code, validateErr.Error())
 					return
 				}
-			} else {
+			} else if !isFreeGroup {
 				// 非订阅模式 或 订阅模式但 subscriptionService 未注入：回退到余额检查
 				if apiKeyBalanceBelowAuthThreshold(apiKey.User.Balance, cfg) {
 					AbortWithError(c, 403, "INSUFFICIENT_BALANCE", "Insufficient account balance")

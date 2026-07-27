@@ -161,6 +161,25 @@ const ICON: Record<Platform, string> = {
 }
 const ICON_DEFAULT = 'text-primary-500 dark:text-primary-400'
 
+const ACCENT_HEX: Record<Platform, string> = {
+  anthropic: '#d97757',
+  openai: '#10a37f',
+  antigravity: '#7c3aed',
+  gemini: '#4285f4',
+  grok: '#27272a',
+  deepseek: '#4d6bfe',
+  qwen: '#7147d8',
+  glm: '#0899b8',
+  kimi: '#0f8b8d',
+  doubao: '#168cff',
+  siliconflow: '#d946a1',
+  openrouter: '#64748b',
+  minimax: '#e54868',
+  mimo: '#f26822',
+  composite: '#65a30d',
+}
+const ACCENT_HEX_DEFAULT = '#0d6efd'
+
 // ── Button (solid bg) ───────────────────────────────────────────────
 const BUTTON: Record<Platform, string> = {
   anthropic: 'bg-amber-600 text-white hover:bg-amber-700 active:bg-amber-800 dark:bg-amber-500/80 dark:hover:bg-amber-500',
@@ -295,6 +314,10 @@ export function platformTextClass(p: string): string {
 
 export function platformIconClass(p: string): string {
   return isPlatform(p) ? ICON[p] : ICON_DEFAULT
+}
+
+export function platformAccentHex(p: string): string {
+  return isPlatform(p) ? ACCENT_HEX[p] : ACCENT_HEX_DEFAULT
 }
 
 export function platformButtonClass(p: string): string {

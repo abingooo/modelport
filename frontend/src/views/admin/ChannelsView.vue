@@ -851,6 +851,7 @@ function toggleGroupInSection(sectionIdx: number, groupId: number) {
 function addPricingEntry(sectionIdx: number) {
   form.platforms[sectionIdx].model_pricing.push({
     models: [],
+	user_visible: true,
     billing_mode: 'token',
     input_price: null,
     output_price: null,
@@ -884,6 +885,7 @@ async function syncLatestModels(sectionIdx: number) {
     // Add new models as a single new pricing entry (user fills in prices)
     form.platforms[sectionIdx].model_pricing.push({
       models: newModels,
+	  user_visible: true,
       billing_mode: 'token',
       input_price: null,
       output_price: null,
@@ -949,6 +951,7 @@ function addAccountStatsRule(sectionIdx: number) {
 function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
   form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push({
     models: [],
+	user_visible: true,
     billing_mode: 'token',
     input_price: null,
     output_price: null,
@@ -1106,6 +1109,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
       model_pricing.push({
         platform: section.platform,
         models: entry.models,
+		user_visible: entry.user_visible,
         billing_mode: entry.billing_mode,
         input_price: mTokToPerToken(entry.input_price),
         output_price: mTokToPerToken(entry.output_price),
@@ -1203,6 +1207,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
       .filter(p => (p.platform || 'anthropic') === platform)
       .map(p => ({
         models: p.models || [],
+		user_visible: p.user_visible !== false,
         billing_mode: p.billing_mode,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
@@ -1392,6 +1397,7 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
       account_ids: [...(apiRule.account_ids || [])],
       pricing: (apiRule.pricing || []).map(p => ({
         models: [...(p.models || [])],
+		user_visible: true,
         billing_mode: p.billing_mode,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),

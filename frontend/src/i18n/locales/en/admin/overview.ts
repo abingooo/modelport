@@ -888,6 +888,15 @@ export default {
       groupUpdatedSuccess: 'Group updated successfully',
       groupDeletedSuccess: 'Group deleted successfully',
       rateMultiplierHint: 'Cost multiplier for this group (e.g., 1.5 = 150% of base cost)',
+      freeBilling: {
+        title: 'Billing Settings',
+        standard: 'Standard Billing',
+        free: 'Free Group',
+        badge: 'Free',
+        hint: 'Free groups still record raw cost but do not consume user balance, subscription quota, or API key monetary quota. Access and rate limits remain active.',
+        confirm: 'Enable free billing? Requests in this group will not create user charges, but they will still call upstream services and record cost.',
+        customRateDisabled: 'User-specific multipliers are disabled for free groups',
+      },
       exclusiveHint: 'Exclusive group, manually assign to specific users',
       exclusiveTooltip: {
         title: 'What is an exclusive group?',

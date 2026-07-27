@@ -32,4 +32,20 @@ describe('GroupBadge platform colors', () => {
 
     expect(wrapper.classes().some((className) => className.includes(color))).toBe(true)
   })
+
+  it('shows the free label instead of a rate', () => {
+    const wrapper = mount(GroupBadge, {
+      props: { name: 'Test group', platform: 'openai', rateMultiplier: 2, isFree: true },
+      global: {
+        plugins: [createI18n({
+          legacy: false,
+          locale: 'en',
+          messages: { en: { admin: { groups: { freeBilling: { badge: () => 'Free' } } } } }
+        })]
+      }
+    })
+
+    expect(wrapper.text()).toContain('Free')
+    expect(wrapper.text()).not.toContain('2x')
+  })
 })

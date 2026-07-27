@@ -5,18 +5,70 @@ export default {
   },
   // Home Page
   home: {
+    primaryNavigation: 'Primary navigation',
     viewOnGithub: 'View on GitHub',
     viewDocs: 'View Documentation',
     docs: 'Docs',
+    modelPricing: 'Model Pricing',
+    modelCatalog: 'Model Catalog',
+    lottery: 'Lucky Draw',
+    manageKeys: 'Manage API Keys',
+    exploreModels: 'Explore Models',
+    harborSceneLabel: 'Animated ModelPort harbor with two-way cargo traffic and models moving through the gateway',
+    openNavigation: 'Open navigation',
     switchToLight: 'Switch to Light Mode',
     switchToDark: 'Switch to Dark Mode',
     dashboard: 'Dashboard',
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
+    viewModelPricing: 'View Model Pricing',
+    gatewayOnline: 'Gateway online',
+    heroKicker: 'Unified Model Gateway',
+    metaDescription: 'ModelPort is a unified multi-model API gateway for connecting, routing, and billing OpenAI, Anthropic, and Google-compatible requests.',
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
-    heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
+    heroDescription: 'Connect, route, and bill different protocols and model capabilities through one dependable port.',
+    modelCurrent: {
+      label: 'Model provider sequences moving in opposite directions'
+    },
+    signals: {
+      oneKey: 'One key',
+      oneKeyLabel: 'Unified access credential',
+      protocols: 'Three protocols',
+      protocolsLabel: 'Native request formats',
+      billing: 'RMB billing',
+      billingLabel: 'Transparent price and usage'
+    },
+    fleet: {
+      kicker: 'Model Berths',
+      title: 'A clear berth for every model.',
+      description: 'Providers line one shared harbor. Select any berth to open pricing for that platform.',
+      routeLabel: 'Connected model providers',
+      destination: 'Unified model gateway',
+      routeStatus: 'Model routes ready',
+      directory: 'Provider berth directory',
+      berths: 'model berths',
+      berthReady: 'Route ready',
+      ingress: 'Native ingress',
+      berthAction: 'model pricing'
+    },
+    protocols: {
+      kicker: 'Protocol Routes',
+      title: 'Three protocols. One port.',
+      description: 'Use OpenAI, Anthropic, and Google request formats without rebuilding clients whenever models change.',
+      oneKey: 'One API key',
+      nativeClients: 'Native client compatibility',
+      clearBilling: 'Unified usage and billing',
+      tabLabel: 'API protocol examples',
+      copy: 'Copy request example',
+      copied: 'Copied',
+      requestReady: 'Request ready'
+    },
+    closing: {
+      kicker: 'Ready To Dock',
+      title: 'Start the next model call from the same port.'
+    },
     tags: {
       subscriptionToApi: 'Subscription to API',
       stickySession: 'Session Persistence',
@@ -110,6 +162,7 @@ export default {
       button: 'Sign Up Free'
     },
     footer: {
+      copyrightNotice: 'All rights reserved',
       allRightsReserved: 'All rights reserved.'
     }
   },

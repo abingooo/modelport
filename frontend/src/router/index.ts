@@ -256,14 +256,30 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/available-channels',
-    name: 'UserAvailableChannels',
-    component: () => import('@/views/user/AvailableChannelsView.vue'),
+    redirect: '/model-pricing',
+  },
+  {
+    path: '/model-pricing',
+    name: 'UserModelPricing',
+    component: () => import('@/views/user/ModelPricingView.vue'),
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
-      title: 'Available Channels',
-      titleKey: 'availableChannels.title',
-      descriptionKey: 'availableChannels.description'
+      title: 'Model Pricing',
+      titleKey: 'modelPricing.title',
+      descriptionKey: 'modelPricing.description'
+    }
+  },
+  {
+    path: '/model-catalog',
+    name: 'ModelCatalog',
+    component: () => import('@/views/user/ModelCatalogView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Model Catalog',
+      titleKey: 'modelCatalog.title',
+      descriptionKey: 'modelCatalog.description'
     }
   },
   {
@@ -276,6 +292,30 @@ const routes: RouteRecordRaw[] = [
       title: 'Lucky Draw',
       titleKey: 'lottery.title',
       descriptionKey: 'lottery.description'
+    }
+  },
+  {
+    path: '/image-site',
+    name: 'ImageSite',
+    component: () => import('@/views/user/ImageSiteView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Image Studio',
+      titleKey: 'imageSite.title',
+      descriptionKey: 'imageSite.description'
+    }
+  },
+  {
+    path: '/store',
+    name: 'ModelPortStore',
+    component: () => import('@/views/user/ModelPortStoreView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'ModelPort Store',
+      titleKey: 'modelPortStore.title',
+      descriptionKey: 'modelPortStore.description'
     }
   },
   {
@@ -501,6 +541,18 @@ const routes: RouteRecordRaw[] = [
       title: 'Lottery Management',
       titleKey: 'lottery.admin.title',
       descriptionKey: 'lottery.admin.description'
+    }
+  },
+  {
+    path: '/admin/model-catalog',
+    name: 'AdminModelCatalog',
+    component: () => import('@/views/admin/ModelCatalogView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Model Catalog Management',
+      titleKey: 'modelCatalog.admin.title',
+      descriptionKey: 'modelCatalog.admin.description'
     }
   },
   {

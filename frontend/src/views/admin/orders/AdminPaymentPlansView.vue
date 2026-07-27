@@ -24,6 +24,7 @@
             :name="getGroup(value)!.name"
             :platform="getGroup(value)!.platform"
             :rate-multiplier="getGroup(value)!.rate_multiplier"
+            :is-free="getGroup(value)!.is_free"
           />
           <span v-else class="text-sm text-gray-400">-</span>
         </template>

@@ -87,6 +87,7 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesWebSearchPricePerCall(t *testi
 			Status:                StatusActive,
 			SubscriptionType:      SubscriptionTypeStandard,
 			RateMultiplier:        1,
+			IsFree:                true,
 			WebSearchPricePerCall: float64Ptr(0.008),
 		},
 	}
@@ -98,4 +99,5 @@ func TestAPIKeyService_SnapshotRoundTrip_PreservesWebSearchPricePerCall(t *testi
 	require.NotNil(t, roundTrip.Group)
 	require.NotNil(t, roundTrip.Group.WebSearchPricePerCall)
 	require.InDelta(t, 0.008, *roundTrip.Group.WebSearchPricePerCall, 1e-12)
+	require.True(t, roundTrip.Group.IsFree)
 }

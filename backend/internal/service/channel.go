@@ -87,6 +87,7 @@ type ChannelModelPricing struct {
 	ChannelID        int64
 	Platform         string            // 所属平台（anthropic/openai/gemini/...）
 	Models           []string          // 绑定的模型列表
+	UserVisible      bool              // 是否展示在用户侧模型定价页面；不影响计费和路由
 	BillingMode      BillingMode       // 计费模式
 	InputPrice       *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
 	OutputPrice      *float64          // 每 token 输出价格（USD）
@@ -312,6 +313,17 @@ func ValidateIntervals(intervals []PricingInterval, mode BillingMode) error {
 
 	// per_request / image 模式按 tier_label 匹配，不做 token 区间重叠校验
 	if mode == BillingModePerRequest || mode == BillingModeImage {
+		seen := make(map[string]struct{}, len(sorted))
+		for _, interval := range sorted {
+			label := strings.ToLower(strings.TrimSpace(interval.TierLabel))
+			if label == "" {
+				continue
+			}
+			if _, exists := seen[label]; exists {
+				return fmt.Errorf("duplicate pricing tier label: %s", interval.TierLabel)
+			}
+			seen[label] = struct{}{}
+		}
 		return nil
 	}
 	return validateIntervalOverlap(sorted)

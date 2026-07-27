@@ -110,6 +110,32 @@ func TestGatewayHandlerKeyBillingInfoUsesGroupRate(t *testing.T) {
 	require.NotContains(t, w.Body.String(), apiKey.Group.Name)
 }
 
+func TestGatewayHandlerKeyBillingInfoFreeGroupOverridesConfiguredRate(t *testing.T) {
+	groupID := int64(7)
+	repo := &keyBillingUserGroupRateRepo{err: errors.New("free groups must not resolve user rates")}
+	apiKey := &service.APIKey{
+		UserID:  11,
+		GroupID: &groupID,
+		Group: &service.Group{
+			ID:             groupID,
+			RateMultiplier: 1.75,
+			IsFree:         true,
+		},
+	}
+	c, w := newKeyBillingContext(apiKey)
+
+	newKeyBillingHandler(repo).KeyBillingInfo(c)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var got keyBillingInfoResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+	require.True(t, got.IsFree)
+	require.Equal(t, 1.75, got.GroupRateMultiplier)
+	require.Zero(t, got.ResolvedRateMultiplier)
+	require.Zero(t, got.EffectiveRateMultiplier)
+	require.Zero(t, repo.lookupCalls)
+}
+
 func TestGatewayHandlerKeyBillingInfoUsesUserOverride(t *testing.T) {
 	groupID := int64(7)
 	userRate := 0.5

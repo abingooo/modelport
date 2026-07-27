@@ -97,6 +97,7 @@
                     :platform="g.platform as GroupPlatform"
                     :subscription-type="(g.subscription_type || 'standard') as SubscriptionType"
                     :rate-multiplier="g.rate_multiplier"
+                    :is-free="g.is_free"
                     :user-rate-multiplier="userGroupRates[g.id] ?? null"
                     always-show-rate
                   />
@@ -131,6 +132,7 @@
                     :platform="g.platform as GroupPlatform"
                     :subscription-type="(g.subscription_type || 'standard') as SubscriptionType"
                     :rate-multiplier="g.rate_multiplier"
+                    :is-free="g.is_free"
                     :user-rate-multiplier="userGroupRates[g.id] ?? null"
                     always-show-rate
                   />
@@ -218,7 +220,7 @@ function publicGroups(section: UserChannelPlatformSection): UserAvailableGroup[]
 const appStore = useAppStore()
 
 function hasPeakRate(group: UserAvailableGroup): boolean {
-  return groupHasPeakRate(group)
+  return !group.is_free && groupHasPeakRate(group)
 }
 
 function peakRateLabel(group: UserAvailableGroup): string {

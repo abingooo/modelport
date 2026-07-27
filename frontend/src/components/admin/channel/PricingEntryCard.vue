@@ -38,11 +38,19 @@
           </span>
         </div>
 
-        <!-- Billing mode badge -->
         <span
-          class="flex-shrink-0 rounded-full bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
+          class="flex-shrink-0 rounded px-2 py-0.5 text-xs font-medium"
+          :class="entry.user_visible ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/25 dark:text-cyan-300' : 'bg-gray-200 text-gray-500 dark:bg-dark-600 dark:text-gray-400'"
+        >
+          {{ entry.user_visible ? t('admin.channels.form.userVisible') : t('admin.channels.form.userHidden') }}
+        </span>
+        <span
+          class="flex-shrink-0 rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
         >
           {{ billingModeLabel }}
+        </span>
+        <span class="flex-shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400">
+          {{ priceSummary }}
         </span>
       </div>
 
@@ -92,6 +100,21 @@
               class="mt-1"
             />
           </div>
+        </div>
+
+        <div class="mt-3 flex items-center justify-between border-y border-gray-200 py-2 dark:border-dark-600">
+          <div>
+            <div class="text-sm font-medium text-gray-700 dark:text-gray-200">
+              {{ t('admin.channels.form.showInUserPricing') }}
+            </div>
+            <div class="text-xs text-gray-400">
+              {{ t('admin.channels.form.showInUserPricingHint') }}
+            </div>
+          </div>
+          <Toggle
+            :model-value="entry.user_visible"
+            @update:model-value="emit('update', { ...entry, user_visible: $event })"
+          />
         </div>
 
         <!-- Token mode -->
@@ -171,11 +194,11 @@
           </div>
 
           <!-- Tiers -->
-          <div class="mt-3 flex items-center justify-between">
+          <div class="mt-3 flex items-center justify-between gap-3">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
               {{ t('admin.channels.form.requestTiers') }}
             </label>
-            <button type="button" @click="addInterval" class="text-xs text-primary-600 hover:text-primary-700">
+            <button type="button" @click="addTier()" class="text-xs text-primary-600 hover:text-primary-700">
               + {{ t('admin.channels.form.addTier') }}
             </button>
           </div>
@@ -207,13 +230,29 @@
           </div>
 
           <!-- Image tiers -->
-          <div class="mt-3 flex items-center justify-between">
+          <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
               {{ t('admin.channels.form.imageTiers') }}
             </label>
-            <button type="button" @click="addImageTier" class="text-xs text-primary-600 hover:text-primary-700">
-              + {{ t('admin.channels.form.addTier') }}
-            </button>
+            <div class="inline-flex overflow-hidden rounded border border-gray-200 dark:border-dark-500">
+              <button
+                v-for="preset in imageTierPresets"
+                :key="preset"
+                type="button"
+                class="border-r border-gray-200 px-2.5 py-1 text-xs text-gray-600 last:border-r-0 hover:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-300 dark:border-dark-500 dark:text-gray-300 dark:hover:bg-dark-600 dark:disabled:text-dark-500"
+                :disabled="hasTier(preset)"
+                @click="addTier(preset)"
+              >
+                {{ preset }}
+              </button>
+              <button
+                type="button"
+                class="border-l border-gray-200 px-2.5 py-1 text-xs text-primary-600 hover:bg-gray-100 dark:border-dark-500 dark:hover:bg-dark-600"
+                @click="addTier()"
+              >
+                + {{ t('admin.channels.form.customTier') }}
+              </button>
+            </div>
           </div>
           <div v-if="entry.intervals && entry.intervals.length > 0" class="mt-2 space-y-2">
             <IntervalRow
@@ -235,6 +274,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
@@ -269,6 +309,21 @@ const billingModeLabel = computed(() => {
   return opt ? opt.label : props.entry.billing_mode
 })
 
+const imageTierPresets = ['1K', '2K', '4K']
+
+const priceSummary = computed(() => {
+  if (props.entry.billing_mode === 'token') {
+    const count = [props.entry.input_price, props.entry.output_price, props.entry.cache_write_price, props.entry.cache_read_price]
+      .filter(value => value !== null && value !== '').length
+    return t('admin.channels.form.priceFieldCount', { count })
+  }
+  const tiers = props.entry.intervals?.length || 0
+  if (tiers > 0) return t('admin.channels.form.tierCount', { count: tiers })
+  return props.entry.per_request_price == null || props.entry.per_request_price === ''
+    ? t('admin.channels.form.noPrice')
+    : `￥${props.entry.per_request_price}`
+})
+
 function emitField(field: keyof PricingFormEntry, value: string) {
   emit('update', { ...props.entry, [field]: value === '' ? null : value })
 }
@@ -284,16 +339,19 @@ function addInterval() {
   emit('update', { ...props.entry, intervals })
 }
 
-function addImageTier() {
+function addTier(label = '') {
   const intervals = [...(props.entry.intervals || [])]
-  const labels = ['1K', '2K', '4K', 'HD']
   intervals.push({
-    min_tokens: 0, max_tokens: null, tier_label: labels[intervals.length] || '',
+    min_tokens: 0, max_tokens: null, tier_label: label,
     input_price: null, output_price: null, cache_write_price: null,
     cache_read_price: null, per_request_price: null,
     sort_order: intervals.length
   })
   emit('update', { ...props.entry, intervals })
+}
+
+function hasTier(label: string): boolean {
+  return (props.entry.intervals || []).some(interval => interval.tier_label.trim().toLowerCase() === label.toLowerCase())
 }
 
 function updateInterval(idx: number, updated: IntervalFormEntry) {

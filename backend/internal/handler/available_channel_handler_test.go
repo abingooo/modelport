@@ -63,6 +63,17 @@ func TestToUserSupportedModels_NilAllowedPlatformsKeepsAll(t *testing.T) {
 	require.Len(t, toUserSupportedModels(src, nil), 2)
 }
 
+func TestToUserSupportedModels_HidesPricingEntryMarkedNotVisible(t *testing.T) {
+	src := []service.SupportedModel{
+		{Name: "visible", Platform: "openai", Pricing: &service.ChannelModelPricing{UserVisible: true}},
+		{Name: "hidden", Platform: "openai", Pricing: &service.ChannelModelPricing{UserVisible: false}},
+		{Name: "mapping-only", Platform: "openai", Pricing: nil},
+	}
+	out := toUserSupportedModels(src, map[string]struct{}{"openai": {}})
+	require.Len(t, out, 2)
+	require.Equal(t, []string{"visible", "mapping-only"}, []string{out[0].Name, out[1].Name})
+}
+
 func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	// 通过序列化 userAvailableChannel 结构体验证响应形状：
 	// 只有 name / description / platforms；不含管理端字段。
@@ -107,7 +118,7 @@ func TestUserAvailableChannel_FieldWhitelist(t *testing.T) {
 	require.NoError(t, err)
 	var groupDecoded map[string]any
 	require.NoError(t, json.Unmarshal(rawGroup, &groupDecoded))
-	for _, key := range []string{"id", "name", "platform", "subscription_type", "rate_multiplier", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier", "is_exclusive"} {
+	for _, key := range []string{"id", "name", "platform", "subscription_type", "rate_multiplier", "is_free", "peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier", "is_exclusive"} {
 		_, exists := groupDecoded[key]
 		require.Truef(t, exists, "group DTO must expose %q", key)
 	}
