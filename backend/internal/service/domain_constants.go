@@ -235,6 +235,9 @@ const (
 	// 敏感操作 step-up 2FA 设置
 	SettingKeyStepUpEnabled = "step_up_enabled" // 敏感操作（导出/备份/S3配置/提升管理员等）要求 step-up 2FA，默认关闭
 
+	// 面板 API 限流设置（JSON：PanelRateLimitSettings）
+	SettingKeyPanelRateLimitSettings = "panel_rate_limit_settings"
+
 	// 操作审计日志设置
 	SettingKeyAuditLogRetentionDays = "audit_log_retention_days" // 审计日志保留天数（<=0 永久保留），默认 180
 
@@ -323,7 +326,6 @@ const (
 	SettingKeyAPIBaseURL                  = "api_base_url"                  // API端点地址（用于客户端配置和导入）
 	SettingKeyContactInfo                 = "contact_info"                  // 客服联系方式
 	SettingKeyDocURL                      = "doc_url"                       // 文档链接
-	SettingKeyImageSiteURL                = "image_site_url"                // 独立生图站链接
 	SettingKeyHomeContent                 = "home_content"                  // 首页内容（支持 Markdown/HTML，或 URL 作为 iframe src）
 	SettingKeyHideCcsImportButton         = "hide_ccs_import_button"        // 是否隐藏 API Keys 页面的导入 CCS 按钮
 	SettingKeyPurchaseSubscriptionEnabled = "purchase_subscription_enabled" // 是否展示"购买订阅"页面入口

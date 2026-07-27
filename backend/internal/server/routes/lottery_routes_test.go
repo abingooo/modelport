@@ -27,10 +27,10 @@ func TestLotteryRoutesAreRegistered(t *testing.T) {
 	router := gin.New()
 	allow := func(context *gin.Context) { context.Next() }
 	RegisterUserRoutes(router.Group("/api/v1"), lotteryRouteHandlers(),
-		servermiddleware.JWTAuthMiddleware(allow), servermiddleware.AuditLogMiddleware(allow), nil)
+		servermiddleware.JWTAuthMiddleware(allow), servermiddleware.AuditLogMiddleware(allow), nil, nil)
 	RegisterAdminRoutes(router.Group("/api/v1"), lotteryRouteHandlers(),
 		servermiddleware.AdminAuthMiddleware(allow), servermiddleware.AuditLogMiddleware(allow),
-		servermiddleware.StepUpAuthMiddleware(allow), nil)
+		servermiddleware.StepUpAuthMiddleware(allow), nil, nil)
 
 	registered := make(map[string]bool)
 	for _, route := range router.Routes() {
@@ -56,10 +56,10 @@ func TestLotteryRoutesEnforceAuthentication(t *testing.T) {
 	}
 	allow := func(context *gin.Context) { context.Next() }
 	RegisterUserRoutes(router.Group("/api/v1"), lotteryRouteHandlers(),
-		servermiddleware.JWTAuthMiddleware(reject), servermiddleware.AuditLogMiddleware(allow), nil)
+		servermiddleware.JWTAuthMiddleware(reject), servermiddleware.AuditLogMiddleware(allow), nil, nil)
 	RegisterAdminRoutes(router.Group("/api/v1"), lotteryRouteHandlers(),
 		servermiddleware.AdminAuthMiddleware(reject), servermiddleware.AuditLogMiddleware(allow),
-		servermiddleware.StepUpAuthMiddleware(allow), nil)
+		servermiddleware.StepUpAuthMiddleware(allow), nil, nil)
 
 	for _, path := range []string{"/api/v1/lottery", "/api/v1/admin/lottery"} {
 		recorder := httptest.NewRecorder()
@@ -79,7 +79,7 @@ func TestLotteryWritesUseAuditMiddleware(t *testing.T) {
 	}
 	RegisterAdminRoutes(router.Group("/api/v1"), lotteryRouteHandlers(),
 		servermiddleware.AdminAuthMiddleware(allow), servermiddleware.AuditLogMiddleware(audit),
-		servermiddleware.StepUpAuthMiddleware(allow), nil)
+		servermiddleware.StepUpAuthMiddleware(allow), nil, nil)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/lottery", strings.NewReader("{"))
 	request.Header.Set("Content-Type", "application/json")

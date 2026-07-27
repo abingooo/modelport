@@ -129,9 +129,28 @@ describe('feature route guard', () => {
 
   it.each([
     ['/lottery', 'Lottery'],
-    ['/image-site', 'ImageSite'],
-    ['/store', 'ModelPortStore'],
   ])('registers protected feature route %s', (path, name) => {
+    const route = routerHarness.routes.find((item) => item.path === path)
+    expect(route).toMatchObject({
+      path,
+      name,
+      meta: {
+        requiresAuth: true,
+        requiresAdmin: false,
+      },
+    })
+  })
+
+  it.each(['/image-site', '/store'])('does not register retired product route %s', (path) => {
+    expect(routerHarness.routes.some((item) => item.path === path)).toBe(false)
+  })
+
+  it.each([
+    ['/redeem', 'Redeem'],
+    ['/subscriptions', 'Subscriptions'],
+    ['/purchase', 'PurchaseSubscription'],
+    ['/orders', 'OrderList'],
+  ])('keeps native account route %s', (path, name) => {
     const route = routerHarness.routes.find((item) => item.path === path)
     expect(route).toMatchObject({
       path,

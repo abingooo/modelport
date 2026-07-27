@@ -4,7 +4,6 @@ import dashboard from './dashboard'
 import batchImage from './batchImage'
 import admin from './admin'
 import misc from './misc'
-import marketplace from './marketplace'
 import lottery from './lottery'
 
 export default {
@@ -14,6 +13,5 @@ export default {
   ...batchImage,
   admin,
   ...misc,
-  ...marketplace,
   ...lottery,
 }

@@ -89,29 +89,37 @@ function renderedPaths(wrapper: ReturnType<typeof mountSidebar>) {
   return wrapper.findAll('[data-to]').map((link) => link.attributes('data-to'))
 }
 
-describe('AppSidebar marketplace navigation', () => {
+describe('AppSidebar user navigation', () => {
   beforeEach(() => {
     stores.auth.isAdmin = false
     stores.auth.isSimpleMode = false
   })
 
-  it('shows marketplace and lottery links to regular users', () => {
+  it('keeps native account flows and omits retired product links for regular users', () => {
     const paths = renderedPaths(mountSidebar())
-    expect(paths).toContain('/image-site')
-    expect(paths).toContain('/store')
+    expect(paths).not.toContain('/image-site')
+    expect(paths).not.toContain('/store')
+    expect(paths).toContain('/purchase')
+    expect(paths).toContain('/subscriptions')
+    expect(paths).toContain('/redeem')
+    expect(paths).toContain('/orders')
     expect(paths).toContain('/lottery')
   })
 
-  it('shows image studio and store links in the admin personal section', () => {
+  it('omits retired product links from the admin personal section', () => {
     stores.auth.isAdmin = true
     const paths = renderedPaths(mountSidebar())
-    expect(paths).toContain('/image-site')
-    expect(paths).toContain('/store')
+    expect(paths).not.toContain('/image-site')
+    expect(paths).not.toContain('/store')
+    expect(paths).toContain('/purchase')
+    expect(paths).toContain('/subscriptions')
+    expect(paths).toContain('/redeem')
+    expect(paths).toContain('/orders')
     expect(paths).toContain('/lottery')
     expect(paths).toContain('/admin/lottery')
   })
 
-  it('hides both links in simple mode', () => {
+  it('keeps existing simple-mode visibility rules', () => {
     stores.auth.isSimpleMode = true
     const paths = renderedPaths(mountSidebar())
     expect(paths).not.toContain('/image-site')

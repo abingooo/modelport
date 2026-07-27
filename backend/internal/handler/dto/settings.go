@@ -137,7 +137,6 @@ type SystemSettings struct {
 	APIBaseURL                  string           `json:"api_base_url"`
 	ContactInfo                 string           `json:"contact_info"`
 	DocURL                      string           `json:"doc_url"`
-	ImageSiteURL                string           `json:"image_site_url"`
 	HomeContent                 string           `json:"home_content"`
 	HideCcsImportButton         bool             `json:"hide_ccs_import_button"`
 	PurchaseSubscriptionEnabled bool             `json:"purchase_subscription_enabled"`
@@ -334,7 +333,6 @@ type PublicSettings struct {
 	APIBaseURL                       string                   `json:"api_base_url"`
 	ContactInfo                      string                   `json:"contact_info"`
 	DocURL                           string                   `json:"doc_url"`
-	ImageSiteURL                     string                   `json:"image_site_url"`
 	HomeContent                      string                   `json:"home_content"`
 	HideCcsImportButton              bool                     `json:"hide_ccs_import_button"`
 	PurchaseSubscriptionEnabled      bool                     `json:"purchase_subscription_enabled"`
@@ -394,6 +392,15 @@ type OverloadCooldownSettings struct {
 type RateLimit429CooldownSettings struct {
 	Enabled         bool `json:"enabled"`
 	CooldownSeconds int  `json:"cooldown_seconds"`
+}
+
+// PanelRateLimitSettings 面板 API 限流配置 DTO
+type PanelRateLimitSettings struct {
+	Enabled     bool `json:"enabled"`
+	UserRPM     int  `json:"user_rpm"`
+	HeavyRPM    int  `json:"heavy_rpm"`
+	ExemptAdmin bool `json:"exempt_admin"`
+	PublicIPRPM int  `json:"public_ip_rpm"`
 }
 
 // StreamTimeoutSettings 流超时处理配置 DTO

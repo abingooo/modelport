@@ -378,6 +378,7 @@ func TestAPIContracts(t *testing.T) {
 						"video_rate_multiplier": 0,
 						"claude_code_only": false,
 						"allow_messages_dispatch": false,
+						"allow_live": false,
 						"fallback_group_id": null,
 						"fallback_group_id_on_invalid_request": null,
 						"require_oauth_only": false,
@@ -675,7 +676,6 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingKeyAPIBaseURL:   "https://api.example.com",
 					service.SettingKeyContactInfo:  "support",
 					service.SettingKeyDocURL:       "https://docs.example.com",
-					service.SettingKeyImageSiteURL: "https://images.example.com/create",
 
 					service.SettingKeyDefaultConcurrency:   "5",
 					service.SettingKeyDefaultBalance:       "1.25",
@@ -798,7 +798,6 @@ func TestAPIContracts(t *testing.T) {
 					"forwarded_client_ip_headers": [],
 					"contact_info": "support",
 					"doc_url": "https://docs.example.com",
-					"image_site_url": "https://images.example.com/create",
 					"auth_source_default_email_balance": 0,
 					"auth_source_default_email_concurrency": 5,
 					"auth_source_default_email_subscriptions": [],
@@ -1112,7 +1111,6 @@ func TestAPIContracts(t *testing.T) {
 					"forwarded_client_ip_headers": [],
 					"contact_info": "",
 					"doc_url": "",
-					"image_site_url": "",
 					"home_content": "",
 					"hide_ccs_import_button": false,
 					"purchase_subscription_enabled": false,
@@ -1498,6 +1496,10 @@ func (r *stubUserRepo) Create(ctx context.Context, user *service.User) error {
 	return errors.New("not implemented")
 }
 
+func (r *stubUserRepo) CreateWithEmailAliasGuard(ctx context.Context, user *service.User) error {
+	return errors.New("not implemented")
+}
+
 func (r *stubUserRepo) GetByID(ctx context.Context, id int64) (*service.User, error) {
 	user, ok := r.users[id]
 	if !ok {
@@ -1574,6 +1576,10 @@ func (r *stubUserRepo) BatchUpdateLimits(context.Context, []int64, *int, *int) (
 }
 
 func (r *stubUserRepo) ExistsByEmail(ctx context.Context, email string) (bool, error) {
+	return false, errors.New("not implemented")
+}
+
+func (r *stubUserRepo) ExistsByEmailAlias(ctx context.Context, email string) (bool, error) {
 	return false, errors.New("not implemented")
 }
 

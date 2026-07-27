@@ -154,8 +154,6 @@ export default {
     announcements: '公告',
     apiKeys: 'API 密钥',
     batchImage: '批量生图',
-    imageSite: '生图站',
-    modelPortStore: 'ModelPort 小铺',
     lottery: '幸运抽奖',
     lotteryManagement: '抽奖管理',
     usage: '使用记录',

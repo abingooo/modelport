@@ -58,6 +58,7 @@ const messages: Record<string, string> = {
   'keys.rateLimitColumn': 'Rate Limit',
   'keys.searchPlaceholder': 'Search name or key...',
   'keys.selectGroup': 'Select group',
+  'keys.testKey': 'Test',
   'keys.status.active': 'Active',
   'keys.status.expired': 'Expired',
   'keys.status.inactive': 'Inactive',
@@ -199,6 +200,9 @@ const DataTableStub = {
         <div data-test="key-group">
           <slot name="cell-group" :value="row.group" :row="row" />
         </div>
+        <div data-test="key-actions">
+          <slot name="cell-actions" :value="row" :row="row" />
+        </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
           data-test="last-used-ip"
@@ -269,6 +273,12 @@ const mountView = async () => {
         SearchInput: SearchInputStub,
         Icon: IconStub,
         UseKeyModal: true,
+        KeyTestModal: {
+          name: 'KeyTestModal',
+          props: ['show', 'apiKey', 'baseUrl'],
+          emits: ['close', 'tested'],
+          template: '<div v-if="show" data-test="key-test-modal">{{ apiKey?.name }}</div>',
+        },
         EndpointPopover: true,
         GroupBadge: GroupBadgeStub,
         GroupOptionItem: true,
@@ -433,6 +443,18 @@ describe('user KeysView column settings', () => {
     const wrapper = await mountView()
 
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
+  })
+
+  it('opens the downstream test modal for the selected API key', async () => {
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Test').trigger('click')
+    await nextTick()
+
+    const modal = wrapper.get('[data-test="key-test-modal"]')
+    expect(modal.text()).toBe('test-key')
+    const component = wrapper.findComponent({ name: 'KeyTestModal' })
+    expect(component.props('apiKey')).toMatchObject({ id: 1, key: 'sk-test-key' })
   })
 
   it('passes the free billing state to the API key group badge', async () => {

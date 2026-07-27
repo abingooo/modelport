@@ -715,7 +715,6 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
   items.push(
     { path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon },
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
-    { path: '/image-site', label: t('nav.imageSite'), icon: GlobeIcon, hideInSimpleMode: true },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
     { path: '/lottery', label: t('nav.lottery'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/model-pricing', label: t('nav.modelPricing'), icon: PriceTagIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
@@ -724,7 +723,6 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     { path: '/purchase', label: t('nav.buySubscription'), icon: RechargeSubscriptionIcon, hideInSimpleMode: true, featureFlag: flagPayment },
     { path: '/orders', label: t('nav.myOrders'), icon: OrderListIcon, hideInSimpleMode: true, featureFlag: flagPayment },
     { path: '/redeem', label: t('nav.redeem'), icon: GiftIcon, hideInSimpleMode: true },
-    { path: '/store', label: t('nav.modelPortStore'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/affiliate', label: t('nav.affiliate'), icon: UsersIcon, hideInSimpleMode: true, featureFlag: flagAffiliate },
     { path: '/profile', label: t('nav.profile'), icon: UserIcon },
     ...customMenuItemsForUser.value.map((item): NavItem => ({
