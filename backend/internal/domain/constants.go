@@ -28,8 +28,6 @@ const (
 	PlatformGLM         = "glm"
 	PlatformKimi        = "kimi"
 	PlatformDoubao      = "doubao"
-	PlatformSiliconFlow = "siliconflow"
-	PlatformOpenRouter  = "openrouter"
 	PlatformMiniMax     = "minimax"
 	PlatformMiMo        = "mimo"
 	PlatformComposite   = "composite"

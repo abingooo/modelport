@@ -8,7 +8,7 @@ import (
 
 func TestProviderRegistryCoversDedicatedOpenAICompatiblePlatforms(t *testing.T) {
 	require.Equal(t, []string{
-		"deepseek", "qwen", "glm", "kimi", "siliconflow", "openrouter", "doubao", "minimax", "mimo",
+		"deepseek", "qwen", "glm", "kimi", "doubao", "minimax", "mimo",
 	}, ProviderIDs())
 
 	for _, id := range ProviderIDs() {
@@ -28,20 +28,18 @@ func TestProviderRegistryCoversDedicatedOpenAICompatiblePlatforms(t *testing.T) 
 }
 
 func TestProviderRegistryReturnsDefensiveCopies(t *testing.T) {
-	preset, ok := LookupProvider("openrouter")
+	preset, ok := LookupProvider("qwen")
 	require.True(t, ok)
 	preset.DefaultModelIDs[0] = "changed"
-	preset.DefaultHeaders["X-Title"] = "changed"
 	preset.RequestParameterRules["stream_options"] = ParameterReject
 	preset.RequestIDHeaders[0] = "changed"
 	minimax, ok := LookupProvider("minimax")
 	require.True(t, ok)
 	minimax.AllowedIntegerParameters["n"][0] = 2
 
-	again, ok := LookupProvider("openrouter")
+	again, ok := LookupProvider("qwen")
 	require.True(t, ok)
-	require.Equal(t, "openai/gpt-4o-mini", again.DefaultModelIDs[0])
-	require.Equal(t, "ModelPort", again.DefaultHeaders["X-Title"])
+	require.Equal(t, "qwen3.8-max-preview", again.DefaultModelIDs[0])
 	require.Equal(t, ParameterPass, again.RequestParameterRules["stream_options"])
 	require.Equal(t, "x-request-id", again.RequestIDHeaders[0])
 	minimaxAgain, ok := LookupProvider("minimax")
@@ -56,11 +54,6 @@ func TestProviderSpecificContracts(t *testing.T) {
 	require.Equal(t, "volcengine-ark", doubao.ProtocolAdapter)
 	require.False(t, doubao.Capabilities.ModelList)
 	require.Empty(t, doubao.DefaultTestModel)
-
-	openRouter, ok := LookupProvider("openrouter")
-	require.True(t, ok)
-	require.Equal(t, "https://modelport.link", openRouter.DefaultHeaders["HTTP-Referer"])
-	require.Equal(t, "ModelPort", openRouter.DefaultHeaders["X-Title"])
 
 	minimax, ok := LookupProvider("minimax")
 	require.True(t, ok)

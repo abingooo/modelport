@@ -87,7 +87,7 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 type CreateGroupRequest struct {
 	Name             string             `json:"name" binding:"required"`
 	Description      string             `json:"description"`
-	Platform         string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok deepseek qwen glm kimi doubao siliconflow openrouter minimax mimo composite"`
+	Platform         string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok deepseek qwen glm kimi doubao minimax mimo composite"`
 	RateMultiplier   float64            `json:"rate_multiplier"`
 	IsFree           bool               `json:"is_free"`
 	IsExclusive      bool               `json:"is_exclusive"`
@@ -145,7 +145,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name             string             `json:"name"`
 	Description      *string            `json:"description"`
-	Platform         string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok deepseek qwen glm kimi doubao siliconflow openrouter minimax mimo composite"`
+	Platform         string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok deepseek qwen glm kimi doubao minimax mimo composite"`
 	RateMultiplier   *float64           `json:"rate_multiplier"`
 	IsFree           *bool              `json:"is_free"`
 	IsExclusive      *bool              `json:"is_exclusive"`
@@ -203,7 +203,7 @@ type UpdateGroupRequest struct {
 type CompositeRouteRequest struct {
 	PublicModel    string `json:"public_model" binding:"required"`
 	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
-	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok deepseek qwen glm kimi doubao siliconflow openrouter minimax mimo"`
+	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok deepseek qwen glm kimi doubao minimax mimo"`
 	UpstreamModel  string `json:"upstream_model"`
 	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
 	Priority       int    `json:"priority"`

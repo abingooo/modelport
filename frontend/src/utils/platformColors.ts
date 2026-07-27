@@ -16,8 +16,6 @@ export type Platform =
   | 'glm'
   | 'kimi'
   | 'doubao'
-  | 'siliconflow'
-  | 'openrouter'
   | 'minimax'
   | 'mimo'
   | 'composite'
@@ -34,8 +32,6 @@ const BADGE: Record<Platform, string> = {
   glm: 'bg-cyan-500/10 text-cyan-800 border-cyan-500/30 dark:text-cyan-300',
   kimi: 'bg-teal-500/10 text-teal-800 border-teal-500/30 dark:text-teal-300',
   doubao: 'bg-sky-500/10 text-sky-800 border-sky-500/30 dark:text-sky-300',
-  siliconflow: 'bg-fuchsia-500/10 text-fuchsia-800 border-fuchsia-500/30 dark:text-fuchsia-300',
-  openrouter: 'bg-slate-500/10 text-slate-700 border-slate-500/30 dark:text-slate-300',
   minimax: 'bg-rose-500/10 text-rose-700 border-rose-500/30 dark:text-rose-300',
   mimo: 'bg-orange-500/10 text-orange-700 border-orange-500/30 dark:text-orange-300',
   composite: 'bg-lime-500/10 text-lime-800 border-lime-500/30 dark:text-lime-300',
@@ -54,8 +50,6 @@ const BADGE_LIGHT: Record<Platform, string> = {
   glm: 'bg-cyan-500/10 text-cyan-800 dark:bg-cyan-500/10 dark:text-cyan-300',
   kimi: 'bg-teal-500/10 text-teal-800 dark:bg-teal-500/10 dark:text-teal-300',
   doubao: 'bg-sky-500/10 text-sky-800 dark:bg-sky-500/10 dark:text-sky-300',
-  siliconflow: 'bg-fuchsia-500/10 text-fuchsia-800 dark:bg-fuchsia-500/10 dark:text-fuchsia-300',
-  openrouter: 'bg-slate-500/10 text-slate-700 dark:bg-slate-500/10 dark:text-slate-300',
   minimax: 'bg-rose-500/10 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300',
   mimo: 'bg-orange-500/10 text-orange-700 dark:bg-orange-500/10 dark:text-orange-300',
   composite: 'bg-lime-500/10 text-lime-800 dark:bg-lime-500/10 dark:text-lime-300',
@@ -73,8 +67,6 @@ const BORDER: Record<Platform, string> = {
   glm: 'border-cyan-500/20 dark:border-cyan-500/20',
   kimi: 'border-teal-500/20 dark:border-teal-500/20',
   doubao: 'border-sky-500/20 dark:border-sky-500/20',
-  siliconflow: 'border-fuchsia-500/20 dark:border-fuchsia-500/20',
-  openrouter: 'border-slate-500/20 dark:border-slate-500/20',
   minimax: 'border-rose-500/20 dark:border-rose-500/20',
   mimo: 'border-orange-500/20 dark:border-orange-500/20',
   composite: 'border-lime-500/20 dark:border-lime-500/20',
@@ -93,8 +85,6 @@ const ACCENT_BAR: Record<Platform, string> = {
   glm: 'bg-gradient-to-r from-cyan-500 to-cyan-700',
   kimi: 'bg-gradient-to-r from-teal-500 to-teal-800',
   doubao: 'bg-gradient-to-r from-sky-500 to-sky-700',
-  siliconflow: 'bg-gradient-to-r from-fuchsia-500 to-fuchsia-700',
-  openrouter: 'bg-gradient-to-r from-slate-500 to-slate-700',
   minimax: 'bg-gradient-to-r from-rose-500 to-orange-500',
   mimo: 'bg-gradient-to-r from-orange-500 to-orange-600',
   composite: 'bg-gradient-to-r from-lime-500 to-lime-700',
@@ -113,8 +103,6 @@ const ACCENT_DOT: Record<Platform, string> = {
   glm: 'bg-cyan-600 dark:bg-cyan-400',
   kimi: 'bg-teal-600 dark:bg-teal-400',
   doubao: 'bg-sky-600 dark:bg-sky-400',
-  siliconflow: 'bg-fuchsia-600 dark:bg-fuchsia-400',
-  openrouter: 'bg-slate-600 dark:bg-slate-400',
   minimax: 'bg-rose-600 dark:bg-rose-400',
   mimo: 'bg-orange-600 dark:bg-orange-400',
   composite: 'bg-lime-600 dark:bg-lime-400',
@@ -133,8 +121,6 @@ const TEXT: Record<Platform, string> = {
   glm: 'text-cyan-800 dark:text-cyan-300',
   kimi: 'text-teal-800 dark:text-teal-300',
   doubao: 'text-sky-800 dark:text-sky-300',
-  siliconflow: 'text-fuchsia-800 dark:text-fuchsia-300',
-  openrouter: 'text-slate-700 dark:text-slate-300',
   minimax: 'text-rose-700 dark:text-rose-300',
   mimo: 'text-orange-700 dark:text-orange-300',
   composite: 'text-lime-800 dark:text-lime-300',
@@ -153,8 +139,6 @@ const ICON: Record<Platform, string> = {
   glm: 'text-cyan-700 dark:text-cyan-300',
   kimi: 'text-teal-700 dark:text-teal-300',
   doubao: 'text-sky-700 dark:text-sky-300',
-  siliconflow: 'text-fuchsia-700 dark:text-fuchsia-300',
-  openrouter: 'text-slate-600 dark:text-slate-300',
   minimax: 'text-rose-600 dark:text-rose-300',
   mimo: 'text-orange-600 dark:text-orange-300',
   composite: 'text-lime-700 dark:text-lime-300',
@@ -172,8 +156,6 @@ const ACCENT_HEX: Record<Platform, string> = {
   glm: '#0899b8',
   kimi: '#0f8b8d',
   doubao: '#168cff',
-  siliconflow: '#d946a1',
-  openrouter: '#64748b',
   minimax: '#e54868',
   mimo: '#f26822',
   composite: '#65a30d',
@@ -192,8 +174,6 @@ const BUTTON: Record<Platform, string> = {
   glm: 'bg-cyan-700 text-white hover:bg-cyan-800 active:bg-cyan-900 dark:bg-cyan-600 dark:hover:bg-cyan-500',
   kimi: 'bg-teal-700 text-white hover:bg-teal-800 active:bg-teal-900 dark:bg-teal-600 dark:hover:bg-teal-500',
   doubao: 'bg-sky-700 text-white hover:bg-sky-800 active:bg-sky-900 dark:bg-sky-600 dark:hover:bg-sky-500',
-  siliconflow: 'bg-fuchsia-700 text-white hover:bg-fuchsia-800 active:bg-fuchsia-900 dark:bg-fuchsia-600 dark:hover:bg-fuchsia-500',
-  openrouter: 'bg-slate-700 text-white hover:bg-slate-800 active:bg-slate-900 dark:bg-slate-600 dark:hover:bg-slate-500',
   minimax: 'bg-rose-600 text-white hover:bg-rose-700 active:bg-rose-800 dark:bg-rose-500 dark:hover:bg-rose-400',
   mimo: 'bg-orange-600 text-white hover:bg-orange-700 active:bg-orange-800 dark:bg-orange-500 dark:hover:bg-orange-400',
   composite: 'bg-lime-700 text-white hover:bg-lime-800 active:bg-lime-900 dark:bg-lime-600 dark:hover:bg-lime-500',
@@ -212,8 +192,6 @@ const DISCOUNT: Record<Platform, string> = {
   glm: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300',
   kimi: 'bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-300',
   doubao: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-300',
-  siliconflow: 'bg-fuchsia-100 text-fuchsia-800 dark:bg-fuchsia-900/40 dark:text-fuchsia-300',
-  openrouter: 'bg-slate-100 text-slate-800 dark:bg-slate-900/40 dark:text-slate-300',
   minimax: 'bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300',
   mimo: 'bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300',
   composite: 'bg-lime-100 text-lime-800 dark:bg-lime-900/40 dark:text-lime-300',
@@ -232,8 +210,6 @@ const GRADIENT: Record<Platform, string> = {
   glm: 'from-cyan-600 to-cyan-800',
   kimi: 'from-teal-600 to-teal-800',
   doubao: 'from-sky-600 to-sky-800',
-  siliconflow: 'from-fuchsia-600 to-fuchsia-800',
-  openrouter: 'from-slate-600 to-slate-800',
   minimax: 'from-rose-600 to-orange-600',
   mimo: 'from-orange-500 to-orange-700',
   composite: 'from-lime-600 to-lime-800',
@@ -252,8 +228,6 @@ const GRADIENT_TEXT: Record<Platform, string> = {
   glm: 'text-cyan-100',
   kimi: 'text-teal-100',
   doubao: 'text-sky-100',
-  siliconflow: 'text-fuchsia-100',
-  openrouter: 'text-slate-100',
   minimax: 'text-rose-100',
   mimo: 'text-orange-100',
   composite: 'text-lime-100',
@@ -271,8 +245,6 @@ const GRADIENT_SUBTEXT: Record<Platform, string> = {
   glm: 'text-cyan-200',
   kimi: 'text-teal-200',
   doubao: 'text-sky-200',
-  siliconflow: 'text-fuchsia-200',
-  openrouter: 'text-slate-200',
   minimax: 'text-rose-200',
   mimo: 'text-orange-200',
   composite: 'text-lime-200',
@@ -284,7 +256,7 @@ const GRADIENT_SUBTEXT_DEFAULT = 'text-primary-200'
 function isPlatform(p: string): p is Platform {
   return p === 'anthropic' || p === 'openai' || p === 'antigravity' || p === 'gemini' ||
     p === 'grok' || p === 'deepseek' || p === 'qwen' || p === 'glm' || p === 'kimi' ||
-    p === 'doubao' || p === 'siliconflow' || p === 'openrouter' || p === 'minimax' ||
+    p === 'doubao' || p === 'minimax' ||
     p === 'mimo' || p === 'composite'
 }
 
@@ -352,8 +324,6 @@ export function platformLabel(p: string): string {
     case 'glm': return '智谱AI'
     case 'kimi': return 'Kimi'
     case 'doubao': return 'ByteDance'
-    case 'siliconflow': return 'SiliconFlow'
-    case 'openrouter': return 'OpenRouter'
     case 'minimax': return 'MiniMax'
     case 'mimo': return 'MiMo'
     case 'composite': return 'Composite'

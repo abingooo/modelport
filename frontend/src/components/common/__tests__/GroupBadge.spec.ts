@@ -11,8 +11,6 @@ const providerCases = [
   ['glm', 'cyan'],
   ['kimi', 'teal'],
   ['doubao', 'sky'],
-  ['siliconflow', 'fuchsia'],
-  ['openrouter', 'slate'],
   ['minimax', 'rose'],
   ['mimo', 'orange']
 ] as const satisfies ReadonlyArray<readonly [GroupPlatform, string]>

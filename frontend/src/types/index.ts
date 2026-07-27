@@ -499,8 +499,6 @@ export type OpenAICompatibleProviderPlatform =
   | 'glm'
   | 'kimi'
   | 'doubao'
-  | 'siliconflow'
-  | 'openrouter'
   | 'minimax'
   | 'mimo'
 

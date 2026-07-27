@@ -49,8 +49,6 @@ const (
 	PlatformGLM         = domain.PlatformGLM
 	PlatformKimi        = domain.PlatformKimi
 	PlatformDoubao      = domain.PlatformDoubao
-	PlatformSiliconFlow = domain.PlatformSiliconFlow
-	PlatformOpenRouter  = domain.PlatformOpenRouter
 	PlatformMiniMax     = domain.PlatformMiniMax
 	PlatformMiMo        = domain.PlatformMiMo
 	PlatformComposite   = domain.PlatformComposite
@@ -70,8 +68,6 @@ var AllowedQuotaPlatforms = []string{
 	PlatformGLM,
 	PlatformKimi,
 	PlatformDoubao,
-	PlatformSiliconFlow,
-	PlatformOpenRouter,
 	PlatformMiniMax,
 	PlatformMiMo,
 }
@@ -87,10 +83,21 @@ var ConcretePlatforms = []string{
 	PlatformGLM,
 	PlatformKimi,
 	PlatformDoubao,
-	PlatformSiliconFlow,
-	PlatformOpenRouter,
 	PlatformMiniMax,
 	PlatformMiMo,
+}
+
+func IsConcretePlatform(platform string) bool {
+	for _, candidate := range ConcretePlatforms {
+		if candidate == platform {
+			return true
+		}
+	}
+	return false
+}
+
+func IsSupportedGroupPlatform(platform string) bool {
+	return platform == PlatformComposite || IsConcretePlatform(platform)
 }
 
 func IsDedicatedOpenAICompatiblePlatform(platform string) bool {

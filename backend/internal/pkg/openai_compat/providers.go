@@ -58,8 +58,6 @@ var providerOrder = []string{
 	"qwen",
 	"glm",
 	"kimi",
-	"siliconflow",
-	"openrouter",
 	"doubao",
 	"minimax",
 	"mimo",
@@ -102,31 +100,6 @@ var providerPresets = map[string]ProviderPreset{
 			PromptCache: CapabilityModelDependent,
 		},
 	),
-	"siliconflow": newPreset(
-		"siliconflow", "SiliconFlow", "https://api.siliconflow.cn/v1", "deepseek-ai/DeepSeek-V3.2",
-		[]string{"deepseek-ai/DeepSeek-V3.2", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen3-Coder-480B-A35B-Instruct"}, true,
-		ProviderCapabilities{
-			Reasoning: CapabilityModelDependent, Tools: CapabilityModelDependent,
-			Vision: CapabilityModelDependent, JSONSchema: CapabilityModelDependent,
-			PromptCache: CapabilityModelDependent,
-		},
-	),
-	"openrouter": func() ProviderPreset {
-		preset := newPreset(
-			"openrouter", "OpenRouter", "https://openrouter.ai/api/v1", "openai/gpt-4o-mini",
-			[]string{"openai/gpt-4o-mini", "anthropic/claude-sonnet-4.5", "google/gemini-2.5-pro", "deepseek/deepseek-r1"}, true,
-			ProviderCapabilities{
-				Reasoning: CapabilityModelDependent, Tools: CapabilityModelDependent,
-				Vision: CapabilityModelDependent, JSONSchema: CapabilityModelDependent,
-				PromptCache: CapabilityModelDependent,
-			},
-		)
-		preset.DefaultHeaders = map[string]string{
-			"HTTP-Referer": "https://modelport.link",
-			"X-Title":      "ModelPort",
-		}
-		return preset
-	}(),
 	"doubao": func() ProviderPreset {
 		preset := newPreset(
 			"doubao", "ByteDance", "https://ark.cn-beijing.volces.com/api/v3", "",

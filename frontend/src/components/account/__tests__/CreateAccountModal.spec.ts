@@ -161,12 +161,28 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
   })
 
   it.each([
+    ['anthropic', 'text-amber-600', 'dark:text-amber-300'],
+    ['openai', 'text-emerald-500', 'dark:text-emerald-400'],
+    ['gemini', 'text-blue-500', 'dark:text-blue-400'],
+    ['antigravity', 'text-purple-500', 'dark:text-purple-400'],
+    ['grok', 'text-zinc-800', 'dark:text-zinc-200']
+  ] as const)('applies the centralized %s icon palette', (platform, lightClass, darkClass) => {
+    const wrapper = mountModal()
+    const icon = wrapper
+      .findAllComponents({ name: 'PlatformIcon' })
+      .find((candidate) => candidate.props('platform') === platform)
+
+    expect(icon).toBeDefined()
+    expect(icon?.classes()).toContain(lightClass)
+    expect(icon?.classes()).toContain(darkClass)
+    wrapper.unmount()
+  })
+
+  it.each([
     ['通义千问'],
     ['智谱AI'],
     ['Kimi'],
     ['ByteDance'],
-    ['SiliconFlow'],
-    ['OpenRouter'],
     ['MiniMax'],
     ['小米 MiMo']
   ])('uses a neutral API key placeholder when creating a %s account', async (platformLabel) => {

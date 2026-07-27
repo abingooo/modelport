@@ -249,7 +249,7 @@ func defaultModelsListCandidateIDs(platform string) []string {
 	case PlatformGrok:
 		return xai.DefaultModelIDs()
 	case PlatformDeepSeek, PlatformQwen, PlatformGLM, PlatformKimi, PlatformDoubao,
-		PlatformSiliconFlow, PlatformOpenRouter, PlatformMiniMax, PlatformMiMo:
+		PlatformMiniMax, PlatformMiMo:
 		return openai_compat.DefaultModelIDs(platform)
 	case PlatformComposite:
 		return compositeDefaultModelsListCandidateIDs()
@@ -307,6 +307,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	platform := input.Platform
 	if platform == "" {
 		platform = PlatformAnthropic
+	}
+	if !IsSupportedGroupPlatform(platform) {
+		return nil, infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", platform))
 	}
 	maxReasoningEffort, err := normalizeMaxReasoningEffortForPlatform(platform, input.MaxReasoningEffort)
 	if err != nil {
@@ -620,6 +623,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.Description = *input.Description
 	}
 	if input.Platform != "" {
+		if !IsSupportedGroupPlatform(input.Platform) {
+			return nil, infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", input.Platform))
+		}
 		group.Platform = input.Platform
 	}
 	if input.RateMultiplier != nil {

@@ -17,8 +17,6 @@ const providerCases = [
   ['glm', 'cyan'],
   ['kimi', 'teal'],
   ['doubao', 'sky'],
-  ['siliconflow', 'fuchsia'],
-  ['openrouter', 'slate'],
   ['minimax', 'rose'],
   ['mimo', 'orange'],
   ['composite', 'lime']

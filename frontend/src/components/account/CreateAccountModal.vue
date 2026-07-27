@@ -83,7 +83,11 @@
                 : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
             ]"
           >
-            <PlatformIcon :platform="option.value" size="sm" />
+            <PlatformIcon
+              :platform="option.value"
+              size="sm"
+              :class="platformIconClass(option.value)"
+            />
             <span class="truncate">{{ option.label }}</span>
           </button>
         </div>
@@ -3494,6 +3498,7 @@ import {
   isDedicatedOpenAICompatibleProvider,
   platformDisplayName
 } from '@/utils/providerPresets'
+import { platformIconClass } from '@/utils/platformColors'
 
 // Type for exposed OAuthAuthorizationFlow component
 // Note: defineExpose automatically unwraps refs, so we use the unwrapped types

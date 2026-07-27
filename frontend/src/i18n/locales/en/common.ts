@@ -170,8 +170,6 @@ export default {
     groups: 'Groups',
     channels: 'Channels',
     availableChannels: 'Available Channels',
-    modelCatalog: 'Model Catalog',
-    modelCatalogManagement: 'Model Catalog',
     modelPricing: 'Model Pricing',
     subscriptions: 'Subscriptions',
     accounts: 'Accounts',

@@ -699,7 +699,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// composite 分组的公开别名（如 all/claude）会经 OriginalModel/ChannelMappedModel
 	// 进入上面的来源覆盖：任意别名查无价会静默落 $0，含家族词的别名则被价格表的
 	// 家族模糊匹配错计（如 Opus 流量按 Sonnet 兜底价）。除非管理员为别名显式配置了
-	// 渠道定价（OpenRouter 式自定价），composite 请求一律按实际转发的具体模型计费。
+	// 渠道自定义定价下，composite 请求一律按实际转发的具体模型计费。
 	if apiKey.Group != nil && apiKey.Group.Platform == PlatformComposite {
 		billingModel = s.compositeBillableModel(ctx, apiKey, billingModel, concreteBillingModel)
 	}
@@ -808,7 +808,7 @@ func (s *GatewayService) calculateRecordUsageCost(
 
 // compositeBillableModel 决定 composite 分组请求的计费模型：来源覆盖把计费模型
 // 换成公开别名等非具体模型时，只有管理员为该名字显式配置了渠道定价才按其计费
-// （OpenRouter 式自定价），否则回退到实际转发的具体模型，避免别名落入价格表的
+// （渠道自定义定价），否则回退到实际转发的具体模型，避免别名落入价格表的
 // 家族模糊匹配（错价）或查无价（$0）。未发生来源覆盖时原样返回。
 func (s *GatewayService) compositeBillableModel(ctx context.Context, apiKey *APIKey, billingModel, concreteBillingModel string) string {
 	if concreteBillingModel == "" || billingModel == concreteBillingModel {

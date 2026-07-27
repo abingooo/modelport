@@ -113,7 +113,6 @@ describe('HomeView graphic harbor', () => {
     const destinations = routes(wrapper)
     expect(destinations).toContain('/dashboard')
     expect(destinations).toContain('/model-pricing')
-    expect(destinations).not.toContain('/model-catalog')
     expect(destinations).not.toContain('/keys')
     expect(destinations).not.toContain('/lottery')
     expect(wrapper.find('.hero-image').exists()).toBe(false)
@@ -159,8 +158,6 @@ describe('HomeView graphic harbor', () => {
     expect(visibleProviders).toContain('anthropic')
     expect(visibleProviders).toContain('deepseek')
     expect(visibleProviders).toContain('mimo')
-    expect(visibleProviders).not.toContain('siliconflow')
-    expect(visibleProviders).not.toContain('openrouter')
     expect(wrapper.findAll('.lane-east [role="listitem"]')).toHaveLength(11)
     expect(wrapper.findAll('.provider-chip.needs-dark-icon')).not.toHaveLength(0)
     expect(wrapper.get('.model-current').attributes('aria-label')).toBe(

@@ -301,6 +301,19 @@ func TestAdminService_CreateAndUpdateGroup_FreeBilling(t *testing.T) {
 	require.InDelta(t, 1.25, updated.RateMultiplier, 1e-12)
 }
 
+func TestAdminService_CreateAndUpdateGroup_RejectUnsupportedPlatform(t *testing.T) {
+	repo := &groupRepoStubForAdmin{getByID: &Group{ID: 9, Platform: PlatformAnthropic, RateMultiplier: 1}}
+	svc := &adminServiceImpl{groupRepo: repo}
+
+	_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+		Name: "unsupported", Platform: "retired-provider", RateMultiplier: 1,
+	})
+	require.ErrorContains(t, err, "unsupported platform")
+
+	_, err = svc.UpdateGroup(context.Background(), 9, &UpdateGroupInput{Platform: "retired-provider"})
+	require.ErrorContains(t, err, "unsupported platform")
+}
+
 func TestAdminService_CreateGroup_WithVideoPricing(t *testing.T) {
 	repo := &groupRepoStubForAdmin{}
 	svc := &adminServiceImpl{groupRepo: repo}
@@ -1655,7 +1668,7 @@ func TestAdminService_PreviewCompositeRouteUsesExplicitRoutes(t *testing.T) {
 			{
 				ID:             11,
 				GroupID:        7,
-				PublicModel:    "openrouter/claude",
+				PublicModel:    "gateway/claude",
 				MatchType:      CompositeRouteMatchExact,
 				TargetPlatform: PlatformAnthropic,
 				UpstreamModel:  "claude-sonnet-4-6",
@@ -1668,7 +1681,7 @@ func TestAdminService_PreviewCompositeRouteUsesExplicitRoutes(t *testing.T) {
 	svc := &adminServiceImpl{groupRepo: groupRepo, compositeRouteRepo: routeRepo}
 
 	decision, err := svc.PreviewCompositeRoute(context.Background(), 7, CompositeRoutePreviewRequest{
-		Model:    "openrouter/claude",
+		Model:    "gateway/claude",
 		Endpoint: CompositeRouteEndpointMessages,
 	})
 

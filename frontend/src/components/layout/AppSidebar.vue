@@ -717,7 +717,6 @@ function buildSelfNavItems(withDashboard: boolean): NavItem[] {
     { path: '/batch-image', label: t('nav.batchImage'), icon: BatchImageIcon, hideInSimpleMode: true, featureFlag: flagBatchImageAccess },
     { path: '/image-site', label: t('nav.imageSite'), icon: GlobeIcon, hideInSimpleMode: true },
     { path: '/usage', label: t('nav.usage'), icon: ChartIcon, hideInSimpleMode: true },
-    { path: '/model-catalog', label: t('nav.modelCatalog'), icon: ChannelIcon, hideInSimpleMode: true },
     { path: '/lottery', label: t('nav.lottery'), icon: GiftIcon, hideInSimpleMode: true },
     { path: '/model-pricing', label: t('nav.modelPricing'), icon: PriceTagIcon, hideInSimpleMode: true, featureFlag: flagAvailableChannels },
     { path: '/monitor', label: t('nav.channelStatus'), icon: SignalIcon, featureFlag: flagChannelMonitor },
@@ -773,7 +772,6 @@ const adminNavItems = computed((): NavItem[] => {
     { path: '/admin/ops', label: t('nav.ops'), icon: ChartIcon, featureFlag: flagOpsMonitoring },
     { path: '/admin/users', label: t('nav.users'), icon: UsersIcon, hideInSimpleMode: true },
     { path: '/admin/groups', label: t('nav.groups'), icon: FolderIcon, hideInSimpleMode: true },
-    { path: '/admin/model-catalog', label: t('nav.modelCatalogManagement'), icon: PriceTagIcon, hideInSimpleMode: true },
     { path: '/admin/lottery', label: t('nav.lotteryManagement'), icon: GiftIcon, hideInSimpleMode: true },
     {
       path: '/admin/channels',

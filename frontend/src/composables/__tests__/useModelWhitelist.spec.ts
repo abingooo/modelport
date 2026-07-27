@@ -12,8 +12,6 @@ describe('useModelWhitelist', () => {
     ['glm', 'glm-5.2'],
     ['kimi', 'kimi-k3'],
     ['doubao', 'doubao-seed-1.8'],
-    ['siliconflow', 'deepseek-ai/DeepSeek-V3.2'],
-    ['openrouter', 'openai/gpt-4o-mini'],
     ['minimax', 'MiniMax-M3'],
     ['mimo', 'mimo-v2.5']
   ])('%s 建议模型进入平台列表和全局白名单选项', (platform, suggestion) => {

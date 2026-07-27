@@ -298,7 +298,7 @@ func (s *stubAdminService) ListCompositeRoutes(ctx context.Context, groupID int6
 		{
 			ID:             1,
 			GroupID:        groupID,
-			PublicModel:    "openrouter/gpt-5",
+			PublicModel:    "gateway/gpt-5",
 			MatchType:      service.CompositeRouteMatchExact,
 			TargetPlatform: service.PlatformOpenAI,
 			UpstreamModel:  "gpt-5",
