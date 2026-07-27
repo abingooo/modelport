@@ -250,6 +250,25 @@ psql -X -v ON_ERROR_STOP=1 "$MODELPORT_DATABASE_URL" \
 备份、内容风控和上游探测，并把原值保存到 `modelport_cutover_guard` schema。若有待处理支付
 或后台作业，脚本会失败并回滚。
 
+然后把旧站数据库中的 TokensHub 品牌和周边菜单切换到 ModelPort。`MODELPORT_PUBLIC_URL`
+必须是已经通过 DNS、证书和 Nginx 验证的实际生产 HTTPS origin，不含路径；首次切换若继续
+沿用旧域名，也必须填写用户当时实际访问的旧 origin，不能提前写入尚未可用的新域名。
+
+```bash
+export MODELPORT_PUBLIC_URL=https://modelport.link
+psql -X -v ON_ERROR_STOP=1 \
+  -v modelport_public_url="$MODELPORT_PUBLIC_URL" \
+  "$MODELPORT_DATABASE_URL" \
+  < custom/migration/apply-modelport-deployment-settings.sql
+```
+
+脚本会把原设置完整保存到 `modelport_cutover_guard.deployment_setting_state`，再设置内置
+ModelPort 品牌、公开地址和充值回跳地址，并清空 TokensHub 小铺、生图、旧模型广场、抽奖等
+自定义菜单。联系人、文档、支付、订阅和其他业务设置不变。验收输出必须显示 `PASS`。若在
+接收用户流量前放弃绿色候选，应先停止绿色应用；仅当期间没有新增设置时，可在绿色库执行
+`restore-source-deployment-settings.sql` 精确恢复原设置和 `settings_id_seq`。序列发生额外
+变化时脚本会拒绝倒退，常规回滚仍应恢复从未改动的旧 TokensHub 栈。
+
 首次启动 Compose 必须设置：
 
 ```text
@@ -271,7 +290,8 @@ fi
 
 应用只绑定回环地址，不接公网流量。完成以下只读或可回滚验证：
 
-- `/health` 正常，版本和品牌为 ModelPort `0.1.166.2`。
+- `/health` 正常，版本为 ModelPort `0.1.166.2`；公开设置中的 `site_name` 为 `ModelPort`，
+  `api_base_url` 与实际生产 origin 一致，`custom_menu_items` 为空。
 - 管理员和普通用户登录、refresh-token 刷新正常。
 - 用户数、余额、API Key、订阅、兑换码、账号、分组和价格读取正常。
 - 管理员账号凭据、监控 API Key、支付配置和备份配置可解密。
