@@ -150,3 +150,57 @@ func TestBuildDatabaseConnectionDSNsUsesPostgresForBootstrap(t *testing.T) {
 		t.Fatalf("target DSN = %q, want configured database", targetDSN)
 	}
 }
+
+func TestSetupConfigFromEnv(t *testing.T) {
+	t.Setenv("DATABASE_HOST", "migration-postgres")
+	t.Setenv("DATABASE_PORT", "55432")
+	t.Setenv("DATABASE_USER", "migration-user")
+	t.Setenv("DATABASE_PASSWORD", "migration-password")
+	t.Setenv("DATABASE_DBNAME", "migration-db")
+	t.Setenv("DATABASE_SSLMODE", "require")
+	t.Setenv("REDIS_HOST", "migration-redis")
+	t.Setenv("REDIS_USERNAME", "redis-user")
+	t.Setenv("REDIS_ENABLE_TLS", "true")
+	t.Setenv("TZ", "UTC")
+	t.Setenv("SETUP_MIGRATION_TIMEOUT_SECONDS", "600")
+
+	cfg := setupConfigFromEnv()
+	if cfg.Database.Host != "migration-postgres" || cfg.Database.Port != 55432 {
+		t.Fatalf("database address = %s:%d", cfg.Database.Host, cfg.Database.Port)
+	}
+	if cfg.Database.User != "migration-user" || cfg.Database.Password != "migration-password" {
+		t.Fatalf("database credentials were not loaded from environment")
+	}
+	if cfg.Database.DBName != "migration-db" || cfg.Database.SSLMode != "require" {
+		t.Fatalf("database target = %s sslmode=%s", cfg.Database.DBName, cfg.Database.SSLMode)
+	}
+	if cfg.Redis.Host != "migration-redis" || cfg.Redis.Username != "redis-user" || !cfg.Redis.EnableTLS {
+		t.Fatalf("redis configuration was not loaded from environment")
+	}
+	if cfg.Timezone != "UTC" || cfg.MigrationTimeoutSeconds != 600 {
+		t.Fatalf("timezone=%s migration timeout=%d", cfg.Timezone, cfg.MigrationTimeoutSeconds)
+	}
+}
+
+func TestDatabaseConfigFromEnvDoesNotDependOnServiceConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_HOST", "postgres-green")
+	t.Setenv("DATABASE_PORT", "55436")
+	t.Setenv("DATABASE_USER", "modelport")
+	t.Setenv("DATABASE_PASSWORD", "database-secret")
+	t.Setenv("DATABASE_DBNAME", "modelport")
+	t.Setenv("DATABASE_SSLMODE", "verify-full")
+	t.Setenv("REDIS_HOST", "unreachable-redis")
+	t.Setenv("ADMIN_EMAIL", "must-not-be-used@example.com")
+	t.Setenv("JWT_SECRET", "must-not-be-used")
+
+	cfg := databaseConfigFromEnv()
+	if cfg.Host != "postgres-green" || cfg.Port != 55436 {
+		t.Fatalf("database address = %s:%d", cfg.Host, cfg.Port)
+	}
+	if cfg.User != "modelport" || cfg.Password != "database-secret" {
+		t.Fatalf("database credentials were not loaded from environment")
+	}
+	if cfg.DBName != "modelport" || cfg.SSLMode != "verify-full" {
+		t.Fatalf("database target = %s sslmode=%s", cfg.DBName, cfg.SSLMode)
+	}
+}

@@ -37,6 +37,8 @@ var (
 	BuildType = "source" // "source" for manual builds, "release" for CI builds (set by ldflags)
 )
 
+const productName = "ModelPort"
+
 func init() {
 	// 如果 Version 已通过 ldflags 注入（例如 -X main.Version=...），则不要覆盖。
 	if strings.TrimSpace(Version) != "" {
@@ -58,11 +60,23 @@ func main() {
 
 	// Parse command line flags
 	setupMode := flag.Bool("setup", false, "Run setup wizard in CLI mode")
+	migrateOnly := flag.Bool("migrate-only", false, "Apply database migrations and exit without starting the application")
 	showVersion := flag.Bool("version", false, "Show version information")
 	flag.Parse()
+	if *setupMode && *migrateOnly {
+		log.Fatal("--setup and --migrate-only cannot be used together")
+	}
 
 	if *showVersion {
-		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		log.Printf("%s %s (commit: %s, built: %s)\n", productName, Version, Commit, Date)
+		return
+	}
+	if *migrateOnly {
+		log.Println("Migration-only mode enabled; application services and workers will not start")
+		if err := setup.MigrateOnlyFromEnv(); err != nil {
+			log.Fatalf("Database migration failed: %v", err)
+		}
+		log.Println("Database migrations completed successfully")
 		return
 	}
 
@@ -112,7 +126,7 @@ func runSetupServer() {
 	// This allows users to run setup on a different address if needed
 	addr := config.GetServerAddress()
 	log.Printf("Setup wizard available at http://%s", addr)
-	log.Println("Complete the setup wizard to configure Sub2API")
+	log.Printf("Complete the setup wizard to configure %s", productName)
 
 	protocols := new(http.Protocols)
 	protocols.SetHTTP1(true)

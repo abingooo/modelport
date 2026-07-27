@@ -138,6 +138,7 @@ docs/*
 !docs/ASYNC_IMAGE_TASKS.md
 !docs/MODELPORT_OPENAI_COMPATIBLE_PROVIDERS.md
 !docs/MODELPORT_WORKFLOW_CN.md
+!docs/MODELPORT_PRODUCTION_CUTOVER_CN.md
 !docs/releases/
 !docs/releases/*.md
 !docs/legal/
