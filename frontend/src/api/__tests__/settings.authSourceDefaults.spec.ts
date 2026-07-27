@@ -9,7 +9,7 @@ import {
   type DefaultPlatformQuotasMap,
 } from "@/api/admin/settings";
 
-/** 全 null 的 14 平台 map，用于断言归一化默认值 */
+/** 全 null 的 12 平台 map，用于断言归一化默认值 */
 const allNullQuotas: DefaultPlatformQuotasMap = {
   anthropic: { daily: null, weekly: null, monthly: null },
   openai:    { daily: null, weekly: null, monthly: null },
@@ -21,8 +21,6 @@ const allNullQuotas: DefaultPlatformQuotasMap = {
   glm: { daily: null, weekly: null, monthly: null },
   kimi: { daily: null, weekly: null, monthly: null },
   doubao: { daily: null, weekly: null, monthly: null },
-  siliconflow: { daily: null, weekly: null, monthly: null },
-  openrouter: { daily: null, weekly: null, monthly: null },
   minimax: { daily: null, weekly: null, monthly: null },
   mimo: { daily: null, weekly: null, monthly: null },
 }
@@ -250,9 +248,9 @@ describe("normalizePlatformQuotasMap", () => {
     expect(result.deepseek).toEqual({ daily: null, weekly: null, monthly: null });
   });
 
-  it("无参数时返回全 14 平台全 null", () => {
+  it("无参数时返回全 12 平台全 null", () => {
     const result = normalizePlatformQuotasMap();
-    expect(Object.keys(result)).toHaveLength(14);
+    expect(Object.keys(result)).toHaveLength(12);
     for (const v of Object.values(result)) {
       expect(v).toEqual({ daily: null, weekly: null, monthly: null });
     }
@@ -300,7 +298,7 @@ describe("sanitizePlatformQuotasMap", () => {
 
   it("缺失平台填充为全 null", () => {
     const result = sanitizePlatformQuotasMap({});
-    expect(Object.keys(result)).toHaveLength(14);
+    expect(Object.keys(result)).toHaveLength(12);
     for (const v of Object.values(result)) {
       expect(v).toEqual({ daily: null, weekly: null, monthly: null });
     }

@@ -33,16 +33,16 @@ func TestRateLimiterFailureModes(t *testing.T) {
 
 	limiter := NewRateLimiter(rdb)
 
-	failOpenRouter := gin.New()
-	failOpenRouter.Use(limiter.Limit("test", 1, time.Second))
-	failOpenRouter.GET("/test", func(c *gin.Context) {
+	failOpenEngine := gin.New()
+	failOpenEngine.Use(limiter.Limit("test", 1, time.Second))
+	failOpenEngine.GET("/test", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	recorder := httptest.NewRecorder()
-	failOpenRouter.ServeHTTP(recorder, req)
+	failOpenEngine.ServeHTTP(recorder, req)
 	require.Equal(t, http.StatusOK, recorder.Code)
 
 	failCloseRouter := gin.New()

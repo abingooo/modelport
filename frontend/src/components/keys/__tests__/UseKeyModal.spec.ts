@@ -734,8 +734,6 @@ describe('UseKeyModal', () => {
     ['glm', 'glm-5.2', 'glm-5.2'],
     ['kimi', 'kimi-k3', 'kimi-k3'],
     ['doubao', 'YOUR_ARK_ENDPOINT_ID', 'doubao-seed-1.8'],
-    ['siliconflow', 'deepseek-ai/DeepSeek-V3.2', 'deepseek-ai/DeepSeek-V3.2'],
-    ['openrouter', 'openai/gpt-4o-mini', 'openai/gpt-4o-mini'],
     ['minimax', 'MiniMax-M3', 'MiniMax-M3'],
     ['mimo', 'mimo-v2.5', 'mimo-v2.5-pro']
   ])('renders the full compatible client matrix for %s', async (platform, defaultModel, suggestion) => {

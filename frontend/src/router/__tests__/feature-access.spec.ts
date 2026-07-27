@@ -128,7 +128,6 @@ describe('feature route guard', () => {
   })
 
   it.each([
-    ['/model-catalog', 'ModelCatalog'],
     ['/lottery', 'Lottery'],
     ['/image-site', 'ImageSite'],
     ['/store', 'ModelPortStore'],
@@ -146,7 +145,6 @@ describe('feature route guard', () => {
 
   it.each([
     ['/admin/lottery', 'AdminLottery'],
-    ['/admin/model-catalog', 'AdminModelCatalog'],
   ])('registers protected administrator route %s', (path, name) => {
     const route = routerHarness.routes.find((item) => item.path === path)
     expect(route).toMatchObject({

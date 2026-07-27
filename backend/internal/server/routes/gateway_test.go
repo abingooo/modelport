@@ -339,7 +339,7 @@ func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
 func TestGatewayRoutesDedicatedOpenAICompatibleProvidersRejectResponsesWebSocket(t *testing.T) {
 	platforms := []string{
 		service.PlatformDeepSeek, service.PlatformQwen, service.PlatformGLM, service.PlatformKimi,
-		service.PlatformDoubao, service.PlatformSiliconFlow, service.PlatformOpenRouter,
+		service.PlatformDoubao,
 		service.PlatformMiniMax, service.PlatformMiMo,
 	}
 	for _, platform := range platforms {

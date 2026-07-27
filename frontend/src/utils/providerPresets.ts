@@ -38,18 +38,6 @@ export const OPENAI_COMPATIBLE_PROVIDER_PRESETS: readonly OpenAICompatibleProvid
     supportsModelList: true, modelReferenceMode: 'model_id'
   },
   {
-    id: 'siliconflow', name: 'SiliconFlow', shortName: 'SF', defaultBaseUrl: 'https://api.siliconflow.cn/v1',
-    defaultModel: 'deepseek-ai/DeepSeek-V3.2', modelSuggestions: ['deepseek-ai/DeepSeek-V3.2', 'deepseek-ai/DeepSeek-R1', 'Qwen/Qwen3-Coder-480B-A35B-Instruct'],
-    apiKeyPlaceholder: 'Enter API key',
-    supportsModelList: true, modelReferenceMode: 'model_id'
-  },
-  {
-    id: 'openrouter', name: 'OpenRouter', shortName: 'OR', defaultBaseUrl: 'https://openrouter.ai/api/v1',
-    defaultModel: 'openai/gpt-4o-mini', modelSuggestions: ['openai/gpt-4o-mini', 'anthropic/claude-sonnet-4.5', 'google/gemini-2.5-pro', 'deepseek/deepseek-r1'],
-    apiKeyPlaceholder: 'Enter API key',
-    supportsModelList: true, modelReferenceMode: 'model_id'
-  },
-  {
     id: 'doubao', name: 'ByteDance', shortName: 'BD', defaultBaseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
     defaultModel: '', modelSuggestions: ['doubao-seed-1.8', 'doubao-seed-code', 'doubao-seed-1.6-vision'],
     apiKeyPlaceholder: 'Enter API key',

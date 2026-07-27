@@ -64,6 +64,9 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		// 无分组时只使用原生 anthropic 平台
 		platform = PlatformAnthropic
 	}
+	if err := validateConcreteGatewayPlatform(platform, requestedModel); err != nil {
+		return nil, err
+	}
 
 	// Claude Code 限制可能已将 groupID 解析为 fallback group，
 	// 渠道限制预检查必须使用解析后的分组。
@@ -908,10 +911,10 @@ func (s *GatewayService) checkClaudeCodeRestriction(ctx context.Context, groupID
 func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, group *Group, requestedModel string) (string, bool, error) {
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
 	if hasForcePlatform && forcePlatform != "" {
-		return forcePlatform, true, nil
+		return validatedGatewayPlatform(forcePlatform, true, requestedModel)
 	}
 	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok {
-		return platform, false, nil
+		return validatedGatewayPlatform(platform, false, requestedModel)
 	}
 	if group != nil {
 		if group.Platform == PlatformComposite {
@@ -922,9 +925,9 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 			if !ok {
 				return "", false, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
 			}
-			return decision.TargetPlatform, false, nil
+			return validatedGatewayPlatform(decision.TargetPlatform, false, requestedModel)
 		}
-		return group.Platform, false, nil
+		return validatedGatewayPlatform(group.Platform, false, requestedModel)
 	}
 	if groupID != nil {
 		group, err := s.resolveGroupByID(ctx, *groupID)
@@ -939,11 +942,25 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 			if !ok {
 				return "", false, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
 			}
-			return decision.TargetPlatform, false, nil
+			return validatedGatewayPlatform(decision.TargetPlatform, false, requestedModel)
 		}
-		return group.Platform, false, nil
+		return validatedGatewayPlatform(group.Platform, false, requestedModel)
 	}
 	return PlatformAnthropic, false, nil
+}
+
+func validatedGatewayPlatform(platform string, forced bool, requestedModel string) (string, bool, error) {
+	if err := validateConcreteGatewayPlatform(platform, requestedModel); err != nil {
+		return "", false, err
+	}
+	return platform, forced, nil
+}
+
+func validateConcreteGatewayPlatform(platform, requestedModel string) error {
+	if IsConcretePlatform(platform) {
+		return nil
+	}
+	return fmt.Errorf("%w supporting model: %s (unsupported platform: %s)", ErrNoAvailableAccounts, requestedModel, platform)
 }
 
 func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {

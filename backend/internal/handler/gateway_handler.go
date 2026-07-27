@@ -1314,7 +1314,7 @@ func defaultModelIDsForPlatform(platform string) []string {
 	case service.PlatformGrok:
 		return xai.DefaultModelIDs()
 	case service.PlatformDeepSeek, service.PlatformQwen, service.PlatformGLM, service.PlatformKimi,
-		service.PlatformDoubao, service.PlatformSiliconFlow, service.PlatformOpenRouter,
+		service.PlatformDoubao,
 		service.PlatformMiniMax, service.PlatformMiMo:
 		return openai_compat.DefaultModelIDs(platform)
 	case service.PlatformComposite:

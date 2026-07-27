@@ -454,6 +454,9 @@ func normalizeGrokMediaEligibilityUpdateExtra(account *Account, input *UpdateAcc
 }
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if !IsConcretePlatform(input.Platform) {
+		return nil, infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", input.Platform))
+	}
 	if IsDedicatedOpenAICompatiblePlatform(input.Platform) {
 		if err := validateDedicatedProviderCredentials(input.Platform, input.Type, input.Credentials); err != nil {
 			return nil, err

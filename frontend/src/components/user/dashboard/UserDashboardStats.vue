@@ -258,8 +258,6 @@ const PLATFORM_LABELS: Record<string, string> = {
   glm: '智谱AI',
   kimi: 'Kimi',
   doubao: 'ByteDance',
-  siliconflow: 'SiliconFlow',
-  openrouter: 'OpenRouter',
   minimax: 'MiniMax',
   mimo: 'MiMo'
 }
@@ -288,7 +286,7 @@ const platformCards = computed<FusedPlatformCard[]>(() => {
   // 无需显式排除；__other__ 由下方差值补差逻辑单独追加。
   const platforms = new Set<string>([...byPlat.keys(), ...byQuota.keys()])
 
-  const PLATFORM_ORDER = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'deepseek', 'qwen', 'glm', 'kimi', 'doubao', 'siliconflow', 'openrouter', 'minimax', 'mimo']
+  const PLATFORM_ORDER = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'deepseek', 'qwen', 'glm', 'kimi', 'doubao', 'minimax', 'mimo']
   const cards: FusedPlatformCard[] = []
 
   for (const p of platforms) {

@@ -9,8 +9,6 @@ const providers = [
   'glm',
   'kimi',
   'doubao',
-  'siliconflow',
-  'openrouter',
   'minimax',
   'mimo'
 ] as const

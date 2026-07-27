@@ -116,10 +116,6 @@ func DetectModelPlatform(model string) (string, bool) {
 			return PlatformKimi, true
 		case "doubao", "ark", "volcengine":
 			return PlatformDoubao, true
-		case "siliconflow":
-			return PlatformSiliconFlow, true
-		case "openrouter":
-			return PlatformOpenRouter, true
 		case "minimax":
 			return PlatformMiniMax, true
 		case "mimo", "xiaomi":

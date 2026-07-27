@@ -742,6 +742,21 @@ func TestGatewayService_SelectAccountForModelWithExclusions_ForcePlatform(t *tes
 	require.Equal(t, PlatformAntigravity, acc.Platform)
 }
 
+func TestGatewayService_SelectAccountForModelWithExclusions_RejectsUnsupportedGroupPlatform(t *testing.T) {
+	groupID := int64(10)
+	svc := &GatewayService{
+		groupRepo: &mockGroupRepoForGateway{groups: map[int64]*Group{
+			groupID: {ID: groupID, Platform: "retired-provider"},
+		}},
+		cfg: testConfig(),
+	}
+
+	account, err := svc.SelectAccountForModelWithExclusions(context.Background(), &groupID, "", "test-model", nil)
+	require.Nil(t, account)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.ErrorContains(t, err, "unsupported platform")
+}
+
 func TestGatewayService_SelectAccountForModelWithPlatform_RoutedStickySessionClears(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10)

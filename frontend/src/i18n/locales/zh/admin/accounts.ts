@@ -308,8 +308,6 @@ export default {
         glm: '智谱AI',
         kimi: 'Kimi',
         doubao: 'ByteDance',
-        siliconflow: 'SiliconFlow',
-        openrouter: 'OpenRouter',
         minimax: 'MiniMax',
         mimo: '小米 MiMo',
       },

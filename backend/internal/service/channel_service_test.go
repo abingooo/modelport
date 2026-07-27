@@ -326,6 +326,19 @@ func TestReplaceModelInBody(t *testing.T) {
 // 3. validateNoConflictingModels + validateNoConflictingMappings
 // ===========================================================================
 
+func TestValidateChannelConfigRejectsUnsupportedPlatforms(t *testing.T) {
+	err := validateChannelConfig([]ChannelModelPricing{{
+		Platform: "retired-provider",
+		Models:   []string{"model-a"},
+	}}, nil)
+	require.ErrorContains(t, err, "unsupported platform")
+
+	err = validateChannelConfig(nil, map[string]map[string]string{
+		"retired-provider": {"model-a": "model-b"},
+	})
+	require.ErrorContains(t, err, "unsupported platform")
+}
+
 func TestValidateNoConflictingModels(t *testing.T) {
 	tests := []struct {
 		name        string

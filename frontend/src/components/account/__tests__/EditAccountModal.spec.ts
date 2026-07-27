@@ -321,8 +321,6 @@ describe('EditAccountModal', () => {
     ['glm'],
     ['kimi'],
     ['doubao'],
-    ['siliconflow'],
-    ['openrouter'],
     ['minimax'],
     ['mimo']
   ])('uses a neutral API key placeholder when editing a %s account', async (platform) => {

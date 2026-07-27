@@ -271,18 +271,6 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
-    path: '/model-catalog',
-    name: 'ModelCatalog',
-    component: () => import('@/views/user/ModelCatalogView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: false,
-      title: 'Model Catalog',
-      titleKey: 'modelCatalog.title',
-      descriptionKey: 'modelCatalog.description'
-    }
-  },
-  {
     path: '/lottery',
     name: 'Lottery',
     component: () => import('@/views/user/LotteryView.vue'),
@@ -541,18 +529,6 @@ const routes: RouteRecordRaw[] = [
       title: 'Lottery Management',
       titleKey: 'lottery.admin.title',
       descriptionKey: 'lottery.admin.description'
-    }
-  },
-  {
-    path: '/admin/model-catalog',
-    name: 'AdminModelCatalog',
-    component: () => import('@/views/admin/ModelCatalogView.vue'),
-    meta: {
-      requiresAuth: true,
-      requiresAdmin: true,
-      title: 'Model Catalog Management',
-      titleKey: 'modelCatalog.admin.title',
-      descriptionKey: 'modelCatalog.admin.description'
     }
   },
   {

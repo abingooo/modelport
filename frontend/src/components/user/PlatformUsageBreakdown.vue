@@ -101,8 +101,6 @@ const PLATFORM_LABELS: Record<string, string> = {
   glm: '智谱AI',
   kimi: 'Kimi',
   doubao: 'ByteDance',
-  siliconflow: 'SiliconFlow',
-  openrouter: 'OpenRouter',
   minimax: 'MiniMax',
   mimo: 'MiMo'
 }

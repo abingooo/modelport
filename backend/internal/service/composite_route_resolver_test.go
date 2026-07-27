@@ -47,7 +47,7 @@ func TestCompositeRouteResolverExplicitExactRouteRewritesModel(t *testing.T) {
 			{
 				ID:             10,
 				GroupID:        7,
-				PublicModel:    "openrouter/gpt-5",
+				PublicModel:    "gateway/gpt-5",
 				MatchType:      CompositeRouteMatchExact,
 				TargetPlatform: PlatformOpenAI,
 				UpstreamModel:  "gpt-5",
@@ -58,7 +58,7 @@ func TestCompositeRouteResolverExplicitExactRouteRewritesModel(t *testing.T) {
 		},
 	})
 
-	decision, err := resolver.Resolve(context.Background(), 7, "openrouter/gpt-5", CompositeRouteEndpointChatCompletions)
+	decision, err := resolver.Resolve(context.Background(), 7, "gateway/gpt-5", CompositeRouteEndpointChatCompletions)
 
 	require.NoError(t, err)
 	require.True(t, decision.Matched)

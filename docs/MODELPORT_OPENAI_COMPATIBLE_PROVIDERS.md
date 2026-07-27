@@ -1,8 +1,8 @@
 # ModelPort OpenAI-Compatible Providers
 
-This document is the capability contract for the eight dedicated
+This document is the capability contract for the six dedicated
 OpenAI-compatible provider presets added by ModelPort. DeepSeek is an existing
-provider and is outside this eight-provider matrix.
+provider and is outside this six-provider matrix.
 
 All official sources listed here were accessed on **2026-07-25**. Capability
 labels have these meanings:
@@ -29,8 +29,6 @@ upstream account.
 | Zhipu AI / GLM | `glm` | `https://open.bigmodel.cn/api/paas/v4` | `Authorization: Bearer <key>` | Enabled: `GET /models` |
 | Moonshot AI / Kimi | `kimi` | `https://api.moonshot.cn/v1` | `Authorization: Bearer <key>` | Enabled: `GET /models` |
 | ByteDance | `doubao` | `https://ark.cn-beijing.volces.com/api/v3` | `Authorization: Bearer <key>` | Disabled; enter an Ark model or Endpoint ID manually |
-| SiliconFlow | `siliconflow` | `https://api.siliconflow.cn/v1` | `Authorization: Bearer <key>` | Enabled: `GET /models` |
-| OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` | `Authorization: Bearer <key>` | Enabled: `GET /models` |
 | MiniMax | `minimax` | `https://api.minimaxi.com/v1` | `Authorization: Bearer <key>` | Disabled; use registry suggestions or enter a model manually |
 | Xiaomi MiMo | `mimo` | `https://api.xiaomimimo.com/v1` | ModelPort uses `Authorization: Bearer <key>`; the official API also accepts `api-key` | Disabled; use registry suggestions or enter a model manually |
 
@@ -50,12 +48,10 @@ the saved model whitelist.
 | GLM | Confirmed | Not confirmed; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Parses OpenAI-style Chat `usage` |
 | Kimi | Confirmed | Not confirmed; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Parses OpenAI-style Chat `usage` |
 | ByteDance | Confirmed | Not confirmed; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Parses OpenAI-style Chat `usage` |
-| SiliconFlow | Confirmed | Not confirmed; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Parses OpenAI-style Chat `usage` |
-| OpenRouter | Confirmed | Not confirmed for every routed provider; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Parses OpenAI-style Chat `usage` |
 | MiniMax | Confirmed | Not confirmed; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Parses OpenAI-style Chat `usage` |
 | Xiaomi MiMo | Confirmed | Not confirmed; not used | Not confirmed; not used | ModelPort adapter | ModelPort adapter | Confirmed Chat SSE; adapter streaming supported | Confirmed Chat `usage`; ModelPort parses it |
 
-For all eight presets, ModelPort's upstream transport is
+For all six presets, ModelPort's upstream transport is
 `POST /chat/completions`. It does not call an upstream Responses API, Messages
 API, or Responses WebSocket. Responses WebSocket is unsupported by these
 presets. ModelPort forces `stream_options.include_usage=true` on upstream Chat
@@ -71,8 +67,6 @@ the first non-usage output chunk.
 | GLM | Confirmed, with model-specific limits | Model-dependent | Not confirmed as a uniform capability across models |
 | Kimi | Confirmed, with model-specific limits | Model-dependent | Not confirmed as a uniform capability across models |
 | ByteDance | Model-dependent by Ark model or endpoint | Model-dependent by Ark model or endpoint | Model-dependent; no preset-wide guarantee |
-| SiliconFlow | Model-dependent | Model-dependent | Model-dependent |
-| OpenRouter | Model- and routed-provider-dependent | Model- and routed-provider-dependent | Model- and routed-provider-dependent |
 | MiniMax | Confirmed for current text models | Confirmed for MiniMax-M3 image/video input; audio input is explicitly unsupported by the cited OpenAI-compatible page | Not confirmed by the cited OpenAI-compatible page |
 | Xiaomi MiMo | Confirmed; `tool_choice` effectively supports `auto` | Model-dependent; the official page names the models accepting image/audio/video | Confirmed only for strict tool parameters, using a subset of JSON Schema; response-schema support is not confirmed |
 
@@ -89,8 +83,6 @@ unsupported without a newer official source and a provider-specific test.
 | GLM | `x-request-id`, then `request-id` | Common extractor; provider-specific schema is not fully normalized | Request JSON is passed through; model-specific rejection remains upstream behavior |
 | Kimi | `x-request-id`, then `request-id` | Common extractor; provider-specific schema is not fully normalized | Request JSON is passed through; model-specific rejection remains upstream behavior |
 | ByteDance | `x-request-id`, `x-tt-logid`, then `request-id` | Common extractor; provider-specific schema is not fully normalized | Stored `endpoint_id`, when present, replaces the downstream `model` value |
-| SiliconFlow | `x-request-id`, then `request-id` | Common extractor; provider-specific schema is not fully normalized | Request JSON is passed through; model-specific rejection remains upstream behavior |
-| OpenRouter | `x-request-id`, then `request-id` | Common extractor; final error semantics can depend on the routed provider | Adds `HTTP-Referer: https://modelport.link` and `X-Title: ModelPort`; account overrides take precedence |
 | MiniMax | `x-request-id`, `trace-id`, then `request-id` | Common extractor; provider-specific schema is not fully normalized | Drops `presence_penalty`, `frequency_penalty`, and `logit_bias`; accepts `n` only when it is `1` |
 | Xiaomi MiMo | `x-request-id`, then `request-id` | Common extractor; official HTTP error codes are documented separately | In thinking mode some models override `temperature` and `top_p`; non-`auto` `tool_choice` is removed by the upstream service |
 
@@ -114,15 +106,13 @@ acceptance and semantics remain the responsibility of the upstream model.
 | GLM | Zhipu AI current model documentation or console | Use maintained model pricing when available; administrators may configure model/channel pricing | No numeric price is asserted here |
 | Kimi | Kimi official pricing page | Use maintained model pricing when available; administrators may configure model/channel pricing | No numeric price is asserted here |
 | ByteDance | Ark official model pricing page and the account's endpoint configuration | Configure the callable model/endpoint price explicitly when maintained data has no match | No Chat model default price is asserted here |
-| SiliconFlow | SiliconFlow live model catalog | Use the selected catalog model's current price or an administrator override | No numeric price is asserted here |
-| OpenRouter | OpenRouter live model catalog; price depends on model/provider route | Use maintained routed-model pricing or an administrator override | No provider-wide price exists |
 | MiniMax | MiniMax official pricing page | Use maintained model pricing when available; administrators may configure model/channel pricing | No numeric price is asserted here |
 | Xiaomi MiMo | Xiaomi MiMo pay-as-you-go pricing page | Use maintained model pricing when available; administrators may configure model/channel pricing | No numeric price is asserted here |
 
 Prices change independently of ModelPort releases. This document intentionally
-contains no copied numeric prices. Unknown models, aliases, Ark Endpoint IDs,
-and OpenRouter routes require an administrator-verified billing configuration;
-never infer a price from a similar model name.
+contains no copied numeric prices. Unknown models, aliases, and Ark Endpoint IDs
+require an administrator-verified billing configuration; never infer a price
+from a similar model name.
 
 ## Explicit limitations by provider
 
@@ -135,10 +125,6 @@ never infer a price from a similar model name.
 - **ByteDance:** model sync is disabled in the current adapter; an Ark
   `endpoint_id` can override `model`; no preset-wide multimodal or schema claim
   is made.
-- **SiliconFlow:** capabilities and pricing follow the selected hosted model;
-  the platform preset does not guarantee tools, vision, or schema support.
-- **OpenRouter:** behavior, errors, limits, and pricing can change with the
-  routed model/provider; ModelPort does not use an upstream Responses route.
 - **MiniMax:** model sync is disabled; deprecated `function_call` is explicitly
   unsupported by the cited page, `n` only accepts `1`, three penalty/bias fields
   are removed, and the cited MiniMax-M3 route does not support audio input.
@@ -159,10 +145,6 @@ All references below were accessed on **2026-07-25**.
 | K2 | Kimi | [Pricing](https://platform.kimi.com/docs/pricing) |
 | B1 | ByteDance | [Ark OpenAI compatibility](https://docs.volcengine.com/docs/82379/1330626?lang=zh) |
 | B2 | ByteDance | [Ark model pricing](https://docs.volcengine.com/docs/82379/1099320) |
-| S1 | SiliconFlow | [Chat Completions](https://docs.siliconflow.cn/cn/api-reference/chat-completions/chat-completions) |
-| S2 | SiliconFlow | [Live model catalog](https://cloud.siliconflow.cn/models) |
-| O1 | OpenRouter | [API overview](https://openrouter.ai/docs/api_reference/overview.md) |
-| O2 | OpenRouter | [Live model catalog](https://openrouter.ai/models) |
 | M1 | MiniMax | [OpenAI-compatible text API](https://platform.minimax.io/docs/api-reference/text-openai-api) |
 | M2 | MiniMax | [Pricing](https://platform.minimax.io/docs/pricing) |
 | X1 | Xiaomi MiMo | [Documentation index](https://platform.xiaomimimo.com/llms.txt) |

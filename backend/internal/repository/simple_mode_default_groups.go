@@ -31,8 +31,6 @@ func ensureSimpleModeDefaultGroups(ctx context.Context, client *dbent.Client) er
 		service.PlatformGLM:         1,
 		service.PlatformKimi:        1,
 		service.PlatformDoubao:      1,
-		service.PlatformSiliconFlow: 1,
-		service.PlatformOpenRouter:  1,
 		service.PlatformMiniMax:     1,
 		service.PlatformMiMo:        1,
 	}

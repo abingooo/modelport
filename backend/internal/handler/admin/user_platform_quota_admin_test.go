@@ -107,8 +107,6 @@ func TestUpdateUserPlatformQuotas_Success(t *testing.T) {
 		{"platform":"glm","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"kimi","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"doubao","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
-		{"platform":"siliconflow","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
-		{"platform":"openrouter","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"minimax","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null},
 		{"platform":"mimo","daily_limit_usd":null,"weekly_limit_usd":null,"monthly_limit_usd":null}
 	]}`

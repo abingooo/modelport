@@ -57,6 +57,16 @@ func TestDedicatedOpenAICompatibleAccountCreateValidation(t *testing.T) {
 	}
 }
 
+func TestAccountCreateRejectsUnsupportedPlatform(t *testing.T) {
+	_, err := buildAccountForCreate(&CreateAccountInput{
+		Platform:    "retired-provider",
+		Type:        AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-test"},
+	}, nil)
+
+	require.ErrorContains(t, err, "unsupported platform")
+}
+
 func TestDedicatedProviderCredentialValidationAppliesToEdits(t *testing.T) {
 	for _, platform := range openai_compat.ProviderIDs() {
 		t.Run(platform, func(t *testing.T) {
@@ -145,14 +155,12 @@ func TestAccountTestServiceDedicatedProviderErrorsAreRedacted(t *testing.T) {
 
 func TestDedicatedProviderOfficialErrorShapes(t *testing.T) {
 	tests := map[string]string{
-		PlatformQwen:        `{"code":"InvalidApiKey","message":"invalid qwen key"}`,
-		PlatformGLM:         `{"error":{"code":"1210","message":"invalid glm key"}}`,
-		PlatformKimi:        `{"error":{"type":"invalid_authentication_error","message":"invalid kimi key"}}`,
-		PlatformDoubao:      `{"error":{"code":"AuthenticationError","message":"invalid ByteDance key"}}`,
-		PlatformSiliconFlow: `{"code":30001,"message":"invalid SiliconFlow key"}`,
-		PlatformOpenRouter:  `{"error":{"code":401,"message":"invalid OpenRouter key"}}`,
-		PlatformMiniMax:     `{"base_resp":{"status_code":1004,"status_msg":"invalid MiniMax key"}}`,
-		PlatformMiMo:        `{"error":{"message":"invalid MiMo key"}}`,
+		PlatformQwen:    `{"code":"InvalidApiKey","message":"invalid qwen key"}`,
+		PlatformGLM:     `{"error":{"code":"1210","message":"invalid glm key"}}`,
+		PlatformKimi:    `{"error":{"type":"invalid_authentication_error","message":"invalid kimi key"}}`,
+		PlatformDoubao:  `{"error":{"code":"AuthenticationError","message":"invalid ByteDance key"}}`,
+		PlatformMiniMax: `{"base_resp":{"status_code":1004,"status_msg":"invalid MiniMax key"}}`,
+		PlatformMiMo:    `{"error":{"message":"invalid MiMo key"}}`,
 	}
 	for platform, body := range tests {
 		t.Run(platform, func(t *testing.T) {

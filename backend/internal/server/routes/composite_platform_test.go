@@ -90,7 +90,7 @@ func TestCompositeTargetPlatformMiddlewareUsesExplicitRouteAndRewritesBody(t *te
 			{
 				ID:             1,
 				GroupID:        1,
-				PublicModel:    "openrouter/gpt-5",
+				PublicModel:    "gateway/gpt-5",
 				MatchType:      service.CompositeRouteMatchExact,
 				TargetPlatform: service.PlatformOpenAI,
 				UpstreamModel:  "gpt-5",
@@ -124,7 +124,7 @@ func TestCompositeTargetPlatformMiddlewareUsesExplicitRouteAndRewritesBody(t *te
 		c.Status(http.StatusNoContent)
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"openrouter/gpt-5","messages":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gateway/gpt-5","messages":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -202,7 +202,7 @@ func TestCompositeGeminiTargetPlatformMiddlewareUsesPathRoute(t *testing.T) {
 			{
 				ID:             1,
 				GroupID:        1,
-				PublicModel:    "openrouter/gemini-pro",
+				PublicModel:    "gateway/gemini-pro",
 				MatchType:      service.CompositeRouteMatchExact,
 				TargetPlatform: service.PlatformGemini,
 				UpstreamModel:  "gemini-2.5-pro",
@@ -232,7 +232,7 @@ func TestCompositeGeminiTargetPlatformMiddlewareUsesPathRoute(t *testing.T) {
 		c.Status(http.StatusNoContent)
 	})
 
-	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/openrouter/gemini-pro:generateContent", strings.NewReader(`{"contents":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1beta/models/gateway/gemini-pro:generateContent", strings.NewReader(`{"contents":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 

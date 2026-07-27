@@ -3796,7 +3796,7 @@
                 type="text"
                 class="input"
                 required
-                placeholder="openrouter/gpt-5"
+                placeholder="gateway/gpt-5"
               />
             </div>
 
@@ -3902,7 +3902,7 @@
                 v-model.trim="compositePreviewModel"
                 type="text"
                 class="input"
-                placeholder="openrouter/gpt-5"
+                placeholder="gateway/gpt-5"
                 @keyup.enter="previewCompositeRoute"
               />
               <div class="flex gap-2">

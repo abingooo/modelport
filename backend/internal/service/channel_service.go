@@ -627,12 +627,22 @@ func validateChannelConfig(pricing []ChannelModelPricing, mapping map[string]map
 	if err := validatePricingEntries(pricing); err != nil {
 		return err
 	}
+	for platform := range mapping {
+		if platform != "" && !IsConcretePlatform(platform) {
+			return infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", platform))
+		}
+	}
 	return validateNoConflictingMappings(mapping)
 }
 
 // validatePricingEntries 校验定价条目（冲突检测 + 区间校验 + 计费模式校验），
 // 同时用于主渠道定价和 account_stats_pricing_rules 的内部定价。
 func validatePricingEntries(pricing []ChannelModelPricing) error {
+	for _, entry := range pricing {
+		if entry.Platform != "" && !IsConcretePlatform(entry.Platform) {
+			return infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", entry.Platform))
+		}
+	}
 	if err := validateNoConflictingModels(pricing); err != nil {
 		return err
 	}
