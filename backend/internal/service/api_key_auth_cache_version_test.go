@@ -74,3 +74,18 @@ func TestAPIKeyService_RejectsV16AuthSnapshotWithoutFreeBillingMode(t *testing.T
 		t.Fatalf("expected v16 auth snapshot to be rejected, got ok=%v key=%#v", ok, apiKey)
 	}
 }
+
+func TestAPIKeyService_RejectsV17AuthSnapshotWithoutCombinedGroupFlags(t *testing.T) {
+	svc := &APIKeyService{}
+
+	apiKey, ok, err := svc.applyAuthCacheEntry("k-legacy-group-flags", &APIKeyAuthCacheEntry{
+		Snapshot: &APIKeyAuthSnapshot{Version: 17},
+	})
+
+	if err != nil {
+		t.Fatalf("expected stale snapshot to be ignored without error, got %v", err)
+	}
+	if ok || apiKey != nil {
+		t.Fatalf("expected v17 auth snapshot to be rejected, got ok=%v key=%#v", ok, apiKey)
+	}
+}
