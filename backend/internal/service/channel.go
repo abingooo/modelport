@@ -87,7 +87,6 @@ type ChannelModelPricing struct {
 	ChannelID        int64
 	Platform         string            // 所属平台（anthropic/openai/gemini/...）
 	Models           []string          // 绑定的模型列表
-	UserVisible      bool              // 是否展示在用户侧模型定价页面；不影响计费和路由
 	BillingMode      BillingMode       // 计费模式
 	InputPrice       *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
 	OutputPrice      *float64          // 每 token 输出价格（USD）

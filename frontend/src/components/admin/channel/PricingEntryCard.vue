@@ -39,12 +39,6 @@
         </div>
 
         <span
-          class="flex-shrink-0 rounded px-2 py-0.5 text-xs font-medium"
-          :class="entry.user_visible ? 'bg-cyan-50 text-cyan-700 dark:bg-cyan-900/25 dark:text-cyan-300' : 'bg-gray-200 text-gray-500 dark:bg-dark-600 dark:text-gray-400'"
-        >
-          {{ entry.user_visible ? t('admin.channels.form.userVisible') : t('admin.channels.form.userHidden') }}
-        </span>
-        <span
           class="flex-shrink-0 rounded bg-primary-100 px-2 py-0.5 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
         >
           {{ billingModeLabel }}
@@ -100,21 +94,6 @@
               class="mt-1"
             />
           </div>
-        </div>
-
-        <div class="mt-3 flex items-center justify-between border-y border-gray-200 py-2 dark:border-dark-600">
-          <div>
-            <div class="text-sm font-medium text-gray-700 dark:text-gray-200">
-              {{ t('admin.channels.form.showInUserPricing') }}
-            </div>
-            <div class="text-xs text-gray-400">
-              {{ t('admin.channels.form.showInUserPricingHint') }}
-            </div>
-          </div>
-          <Toggle
-            :model-value="entry.user_visible"
-            @update:model-value="emit('update', { ...entry, user_visible: $event })"
-          />
         </div>
 
         <!-- Token mode -->
@@ -274,7 +253,6 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
-import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'

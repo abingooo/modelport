@@ -112,7 +112,7 @@ describe('HomeView graphic harbor', () => {
 
     const destinations = routes(wrapper)
     expect(destinations).toContain('/dashboard')
-    expect(destinations).toContain('/model-pricing')
+    expect(destinations).toContain('/available-channels')
     expect(destinations).not.toContain('/keys')
     expect(destinations).not.toContain('/lottery')
     expect(wrapper.find('.hero-image').exists()).toBe(false)

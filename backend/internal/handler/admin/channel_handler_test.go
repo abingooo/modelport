@@ -29,19 +29,6 @@ func TestChannelToResponse_NilInput(t *testing.T) {
 	require.Nil(t, channelToResponse(nil))
 }
 
-func TestPricingUserVisibilityRoundTrip(t *testing.T) {
-	hidden := false
-	converted := pricingRequestToService([]channelModelPricingRequest{
-		{Models: []string{"hidden-model"}, UserVisible: &hidden},
-		{Models: []string{"default-visible"}},
-	})
-	require.Len(t, converted, 2)
-	require.False(t, converted[0].UserVisible)
-	require.True(t, converted[1].UserVisible)
-	require.False(t, pricingToResponse(&converted[0]).UserVisible)
-	require.True(t, pricingToResponse(&converted[1]).UserVisible)
-}
-
 func TestChannelToResponse_FullChannel(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	ch := &service.Channel{

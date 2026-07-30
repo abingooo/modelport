@@ -591,42 +591,6 @@ export default {
     }
   },
 
-  modelPricing: {
-    title: '模型定价',
-    description: '查看您可访问分组中的模型基础价格',
-    searchPlaceholder: '搜索模型、渠道或分组...',
-    resultCount: '{count} 个模型',
-    filters: {
-      allPlatforms: '全部平台',
-      allGroups: '全部可用分组',
-      allBillingMethods: '全部计费方式'
-    },
-    billing: {
-      usage: '按量计费',
-      request: '按次计费',
-      unconfigured: '未配置'
-    },
-    columns: {
-      model: '模型',
-      platform: '平台',
-      channel: '渠道',
-      groups: '可用分组',
-      billingMethod: '计费方式',
-      input: '输入 ￥/MTok',
-      output: '输出 ￥/MTok',
-      cacheWrite: '缓存写入 ￥/MTok',
-      cacheRead: '缓存读取 ￥/MTok',
-      perRequest: '单次价格'
-    },
-	tiers: {
-	  default: '默认'
-	},
-    empty: {
-      unconfigured: '暂无可查看的模型定价',
-      filtered: '没有符合当前筛选条件的模型'
-    }
-  },
-
   affiliate: {
     title: '邀请返利',
     description: '分享模型港邀请链接，查看好友注册、首充与持续返利进度',
