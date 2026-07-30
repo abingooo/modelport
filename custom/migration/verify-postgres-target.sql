@@ -10,6 +10,7 @@ DECLARE
         '189_add_usage_log_billing_model.sql',
         '190_create_model_catalog_metadata.sql',
         '191_create_lottery_system.sql',
+        '191_passkey_credentials.sql',
         '192_add_free_group_billing.sql',
         '193_add_channel_pricing_user_visibility.sql',
         '194_remove_image_site_setting.sql',
@@ -21,14 +22,16 @@ DECLARE
         'lottery_prizes',
         'lottery_entries',
         'lottery_draw_runs',
-        'lottery_events'
+        'lottery_events',
+        'passkey_user_handles',
+        'passkey_credentials'
     ];
     actual_count bigint;
     object_name text;
 BEGIN
     SELECT count(*) INTO actual_count FROM public.schema_migrations;
-    IF actual_count <> 245 THEN
-        RAISE EXCEPTION 'expected 245 schema migrations, found %', actual_count;
+    IF actual_count <> 246 THEN
+        RAISE EXCEPTION 'expected 246 schema migrations, found %', actual_count;
     END IF;
 
     FOREACH object_name IN ARRAY expected_migrations LOOP

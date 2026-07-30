@@ -66,12 +66,13 @@ WITH normalized_tables AS (
                    '''189_add_usage_log_billing_model.sql'',' ||
                    '''190_create_model_catalog_metadata.sql'',' ||
                    '''191_create_lottery_system.sql'',' ||
+                   '''191_passkey_credentials.sql'',' ||
                    '''192_add_free_group_billing.sql'',' ||
                    '''193_add_channel_pricing_user_visibility.sql'',' ||
                    '''194_remove_image_site_setting.sql'',' ||
                    '''195_affiliate_reward_review_program.sql'')'
                WHEN n.nspname = 'public' AND c.relname = 'settings'
-                   THEN ' WHERE key NOT IN (''image_site_url'', ''affiliate_reward_program_config'')'
+                   THEN ' WHERE key NOT IN (''image_site_url'', ''affiliate_reward_program_config'', ''passkey_enabled'', ''model_plaza_enabled'', ''model_plaza_require_auth'', ''model_plaza_description'')'
                ELSE ''
            END AS row_filter
     FROM pg_class AS c
@@ -86,7 +87,9 @@ WITH normalized_tables AS (
               'lottery_prizes',
               'lottery_entries',
               'lottery_draw_runs',
-              'lottery_events'
+              'lottery_events',
+              'passkey_user_handles',
+              'passkey_credentials'
           )
       )
 )
@@ -126,7 +129,8 @@ WHERE sequence_schema NOT IN ('pg_catalog', 'information_schema')
           'lottery_prizes_id_seq',
           'lottery_entries_id_seq',
           'lottery_draw_runs_id_seq',
-          'lottery_events_id_seq'
+          'lottery_events_id_seq',
+          'passkey_credentials_id_seq'
       )
   )
 ORDER BY sequence_schema, sequence_name
@@ -153,7 +157,9 @@ WITH column_state AS (
               'lottery_prizes',
               'lottery_entries',
               'lottery_draw_runs',
-              'lottery_events'
+              'lottery_events',
+              'passkey_user_handles',
+              'passkey_credentials'
           )
       )
       AND NOT (
@@ -198,7 +204,9 @@ WITH constraint_state AS (
               'lottery_prizes',
               'lottery_entries',
               'lottery_draw_runs',
-              'lottery_events'
+              'lottery_events',
+              'passkey_user_handles',
+              'passkey_credentials'
           )
       )
 )
@@ -232,7 +240,9 @@ WITH index_state AS (
               'lottery_prizes',
               'lottery_entries',
               'lottery_draw_runs',
-              'lottery_events'
+              'lottery_events',
+              'passkey_user_handles',
+              'passkey_credentials'
           )
       )
 )
