@@ -192,7 +192,9 @@ func (s *PaymentService) alreadyProcessed(ctx context.Context, o *dbent.PaymentO
 		return nil
 	}
 	switch cur.Status {
-	case OrderStatusCompleted, OrderStatusRefunded:
+	case OrderStatusCompleted:
+		return s.ensureFirstRechargeRewardReviews(ctx, cur)
+	case OrderStatusRefunded:
 		return nil
 	case OrderStatusFailed, OrderStatusPaid, OrderStatusRecharging:
 		return s.executeFulfillment(ctx, o.ID)
@@ -230,7 +232,7 @@ func (s *PaymentService) ExecuteBalanceFulfillment(ctx context.Context, oid int6
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
 	if o.Status == OrderStatusCompleted {
-		return nil
+		return s.ensureFirstRechargeRewardReviews(ctx, o)
 	}
 	if psIsRefundStatus(o.Status) {
 		return infraerrors.BadRequest("INVALID_STATUS", "refund-related order cannot fulfill")
@@ -338,7 +340,7 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 			return err
 		}
 		// Code already created and redeemed — just mark completed
-		return s.markCompleted(ctx, o, lease, "RECHARGE_SUCCESS")
+		return s.completeBalanceFulfillment(ctx, o, lease)
 	case redeemActionCreate:
 		rc := &RedeemCode{Code: o.RechargeCode, Type: RedeemTypeBalance, Value: o.Amount, Status: StatusUnused}
 		if err := s.redeemService.CreateCode(ctx, rc); err != nil {
@@ -353,7 +355,25 @@ func (s *PaymentService) doBalance(ctx context.Context, o *dbent.PaymentOrder, l
 	if err := s.applyAffiliateRebateForOrder(ctx, o); err != nil {
 		return err
 	}
-	return s.markCompleted(ctx, o, lease, "RECHARGE_SUCCESS")
+	return s.completeBalanceFulfillment(ctx, o, lease)
+}
+
+func (s *PaymentService) completeBalanceFulfillment(ctx context.Context, order *dbent.PaymentOrder, lease *paymentFulfillmentLease) error {
+	if err := s.markCompleted(ctx, order, lease, "RECHARGE_SUCCESS"); err != nil {
+		return err
+	}
+	return s.ensureFirstRechargeRewardReviews(ctx, order)
+}
+
+func (s *PaymentService) ensureFirstRechargeRewardReviews(ctx context.Context, order *dbent.PaymentOrder) error {
+	if s == nil || s.affiliateService == nil || order == nil || order.OrderType != payment.OrderTypeBalance {
+		return nil
+	}
+	if _, err := s.affiliateService.CreateFirstRechargeRewardReviews(ctx, order.ID); err != nil {
+		s.writeAuditLog(ctx, order.ID, "AFFILIATE_REWARD_REVIEW_FAILED", "system", map[string]any{"error": err.Error()})
+		return fmt.Errorf("create first recharge reward reviews: %w", err)
+	}
+	return nil
 }
 
 func (s *PaymentService) markCompleted(ctx context.Context, o *dbent.PaymentOrder, lease *paymentFulfillmentLease, auditAction string) error {

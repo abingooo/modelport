@@ -624,7 +624,7 @@ export default {
 
   affiliate: {
     title: 'Affiliate Rebates',
-    description: 'Invite new users and convert your rebate quota into account balance',
+    description: 'Share your ModelPort invite link and track signup, first top-up, and ongoing rebates',
     yourCode: 'Your Affiliate Code',
     inviteLink: 'Invite Link',
     copyCode: 'Copy Code',
@@ -637,10 +637,49 @@ export default {
       rebateRate: 'My Rebate Rate',
       rebateRateHint: 'What you earn each time an invitee recharges',
       invitedUsers: 'Invited Users',
+      firstRechargeUsers: 'First Top-ups',
+      pendingReward: 'Pending Review',
+      paidReward: 'Rewards Paid',
       availableQuota: 'Available Rebate Quota',
       frozenQuota: 'Frozen',
       frozenQuotaHint: 'Recently earned rebates pending release',
       totalQuota: 'Historical Rebate Quota'
+    },
+    program: {
+      title: 'Signup & First Top-up Rewards',
+      description: 'Fixed rewards are credited directly after risk review',
+      active: 'Reward program active',
+      inactive: 'Reward program inactive',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      legacyOnly: 'Only ongoing recharge rebates are currently enabled.',
+      reviewNotice: 'New rewards enter manual review and are credited automatically when approved. Fixed rewards do not need a balance transfer.',
+      registration: {
+        title: 'Invited Signup',
+        rule: 'The inviter receives {inviter}; the invitee receives a {days}-day trial worth {invitee}'
+      },
+      firstRecharge: {
+        title: 'Invitee First Top-up',
+        rule: 'The inviter receives {inviter}; the invitee receives {percent}% of the amount paid as balance'
+      }
+    },
+    continuous: {
+      title: 'Ongoing Recharge Rebate',
+      description: 'Accumulates from later invitee recharges and can be transferred to balance'
+    },
+    progress: {
+      title: 'Invite Reward Progress',
+      description: 'Signup and first top-up reward status for each invitee',
+      masked: 'User details are masked',
+      registration: 'Signup Reward',
+      firstRecharge: 'First Top-up Reward'
+    },
+    status: {
+      pending: 'Pending',
+      approved: 'Processing',
+      paid: 'Paid',
+      rejected: 'Rejected',
+      none: 'Not Triggered'
     },
     transfer: {
       title: 'Transfer Rebate Quota',

@@ -12,7 +12,8 @@ DECLARE
         '191_create_lottery_system.sql',
         '192_add_free_group_billing.sql',
         '193_add_channel_pricing_user_visibility.sql',
-        '194_remove_image_site_setting.sql'
+        '194_remove_image_site_setting.sql',
+        '195_affiliate_reward_review_program.sql'
     ];
     expected_tables text[] := ARRAY[
         'model_catalog_metadata',
@@ -26,8 +27,8 @@ DECLARE
     object_name text;
 BEGIN
     SELECT count(*) INTO actual_count FROM public.schema_migrations;
-    IF actual_count <> 244 THEN
-        RAISE EXCEPTION 'expected 244 schema migrations, found %', actual_count;
+    IF actual_count <> 245 THEN
+        RAISE EXCEPTION 'expected 245 schema migrations, found %', actual_count;
     END IF;
 
     FOREACH object_name IN ARRAY expected_migrations LOOP
@@ -96,6 +97,53 @@ BEGIN
         RAISE EXCEPTION 'TokensHub custom schemas were not preserved';
     END IF;
 
+    IF to_regclass('referral.reward_reviews') IS NULL
+       OR to_regclass('referral.balance_grants') IS NULL
+       OR to_regclass('referral.user_registration_ip_proxy') IS NULL THEN
+        RAISE EXCEPTION 'referral history tables were not preserved';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.settings
+        WHERE key = 'affiliate_reward_program_config'
+          AND COALESCE((value::jsonb->>'enabled')::boolean, false)
+          AND COALESCE((value::jsonb->>'version')::integer, 0) = 1
+          AND value::jsonb->>'legacy_approval_cutoff' = '2026-07-05T22:00:00Z'
+    ) THEN
+        RAISE EXCEPTION 'affiliate reward program was not adopted from referral history';
+    END IF;
+    IF (
+        SELECT count(*)
+        FROM pg_trigger
+        WHERE tgname IN (
+            'trg_referral_first_recharge_insert',
+            'trg_referral_first_recharge_update',
+            'trg_referral_registration_rewards_insert',
+            'trg_referral_registration_rewards_update',
+            'trg_reward_reviews_notify_changed',
+            'trg_referral_refresh_admin_registration_ip_risk_flags'
+        )
+          AND NOT tgisinternal
+    ) <> 6 THEN
+        RAISE EXCEPTION 'legacy referral trigger definitions were not preserved';
+    END IF;
+    IF EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgname IN (
+            'trg_referral_first_recharge_insert',
+            'trg_referral_first_recharge_update',
+            'trg_referral_registration_rewards_insert',
+            'trg_referral_registration_rewards_update',
+            'trg_reward_reviews_notify_changed',
+            'trg_referral_refresh_admin_registration_ip_risk_flags'
+        )
+          AND NOT tgisinternal
+          AND tgenabled <> 'D'
+    ) THEN
+        RAISE EXCEPTION 'a legacy referral trigger remains enabled';
+    END IF;
+
     IF (
         SELECT count(*)
         FROM pg_constraint AS con
@@ -130,3 +178,5 @@ SELECT 'schema_migrations', count(*) FROM public.schema_migrations;
 SELECT 'users', count(*) FROM public.users;
 SELECT 'api_keys', count(*) FROM public.api_keys;
 SELECT 'usage_logs', count(*) FROM public.usage_logs;
+SELECT 'referral_reward_reviews', count(*) FROM referral.reward_reviews;
+SELECT 'referral_balance_grants', count(*) FROM referral.balance_grants;

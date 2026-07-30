@@ -90,8 +90,9 @@ type AffiliateDetail struct {
 	// EffectiveRebateRatePercent 是当前用户作为邀请人时实际生效的返利比例：
 	// 优先用户自己的专属比例（aff_rebate_rate_percent），否则回退到全局比例。
 	// 用于在用户的 /affiliate 页面直观展示「分享后能拿到多少」。
-	EffectiveRebateRatePercent float64            `json:"effective_rebate_rate_percent"`
-	Invitees                   []AffiliateInvitee `json:"invitees"`
+	EffectiveRebateRatePercent float64                   `json:"effective_rebate_rate_percent"`
+	Invitees                   []AffiliateInvitee        `json:"invitees"`
+	RewardProgram              *AffiliateRewardDashboard `json:"reward_program,omitempty"`
 }
 
 type AffiliateRepository interface {
@@ -253,7 +254,7 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 	if err != nil {
 		return nil, err
 	}
-	return &AffiliateDetail{
+	detail := &AffiliateDetail{
 		UserID:                     summary.UserID,
 		AffCode:                    summary.AffCode,
 		InviterID:                  summary.InviterID,
@@ -263,7 +264,16 @@ func (s *AffiliateService) GetAffiliateDetail(ctx context.Context, userID int64)
 		AffHistoryQuota:            summary.AffHistoryQuota,
 		EffectiveRebateRatePercent: s.resolveRebateRatePercent(ctx, summary),
 		Invitees:                   invitees,
-	}, nil
+	}
+	if rewardRepo := s.rewardRepository(); rewardRepo != nil {
+		dashboard, err := rewardRepo.GetAffiliateRewardDashboard(ctx, userID)
+		if err != nil {
+			return nil, err
+		}
+		dashboard.Program = s.affiliateRewardProgramConfig(ctx)
+		detail.RewardProgram = dashboard
+	}
+	return detail, nil
 }
 
 func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, rawCode string) error {
@@ -301,7 +311,18 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 		return ErrAffiliateCodeInvalid
 	}
 
-	bound, err := s.repo.BindInviter(ctx, userID, inviterSummary.UserID)
+	var bound bool
+	if rewardRepo := s.rewardRepository(); rewardRepo != nil {
+		bound, err = rewardRepo.BindInviterWithRewardProgram(
+			ctx,
+			userID,
+			inviterSummary.UserID,
+			s.affiliateRewardProgramConfig(ctx),
+			AffiliateRegistrationMetaFromContext(ctx),
+		)
+	} else {
+		bound, err = s.repo.BindInviter(ctx, userID, inviterSummary.UserID)
+	}
 	if err != nil {
 		return err
 	}
@@ -309,6 +330,102 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 		return ErrAffiliateAlreadyBound
 	}
 	return nil
+}
+
+func (s *AffiliateService) rewardRepository() AffiliateRewardRepository {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	repo, _ := s.repo.(AffiliateRewardRepository)
+	return repo
+}
+
+func (s *AffiliateService) affiliateRewardProgramConfig(ctx context.Context) AffiliateRewardProgramConfig {
+	if s == nil || s.settingService == nil {
+		return DefaultAffiliateRewardProgramConfig()
+	}
+	return s.settingService.GetAffiliateRewardProgramConfig(ctx)
+}
+
+func (s *AffiliateService) CreateFirstRechargeRewardReviews(ctx context.Context, orderID int64) (bool, error) {
+	rewardRepo := s.rewardRepository()
+	if rewardRepo == nil || orderID <= 0 {
+		return false, nil
+	}
+	return rewardRepo.CreateFirstRechargeRewardReviews(ctx, orderID, s.affiliateRewardProgramConfig(ctx))
+}
+
+func (s *AffiliateService) AdminGetAffiliateRewardProgram(ctx context.Context) AffiliateRewardProgramConfig {
+	return s.affiliateRewardProgramConfig(ctx)
+}
+
+func (s *AffiliateService) AdminSetAffiliateRewardProgram(ctx context.Context, config AffiliateRewardProgramConfig) (AffiliateRewardProgramConfig, error) {
+	rewardRepo := s.rewardRepository()
+	if rewardRepo == nil || s == nil || s.settingService == nil {
+		return AffiliateRewardProgramConfig{}, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate reward service unavailable")
+	}
+	normalized, err := NormalizeAffiliateRewardProgramConfig(config)
+	if err != nil {
+		return AffiliateRewardProgramConfig{}, err
+	}
+	// The cutoff is migration safety metadata, not an administrator-editable rule.
+	normalized.LegacyApprovalCutoff = s.affiliateRewardProgramConfig(ctx).LegacyApprovalCutoff
+	if err := rewardRepo.ValidateAffiliateRewardProgram(ctx, normalized); err != nil {
+		return AffiliateRewardProgramConfig{}, err
+	}
+	return s.settingService.SetAffiliateRewardProgramConfig(ctx, normalized)
+}
+
+func (s *AffiliateService) AdminListAffiliateRewardReviews(ctx context.Context, filter AffiliateRewardReviewFilter) ([]AffiliateRewardReview, int64, error) {
+	rewardRepo := s.rewardRepository()
+	if rewardRepo == nil {
+		return nil, 0, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate reward service unavailable")
+	}
+	filter.Search = strings.TrimSpace(filter.Search)
+	filter.Status = strings.TrimSpace(filter.Status)
+	filter.RewardType = strings.TrimSpace(filter.RewardType)
+	filter.Risk = strings.TrimSpace(filter.Risk)
+	items, total, err := rewardRepo.ListAffiliateRewardReviews(ctx, filter)
+	if err != nil {
+		return nil, 0, err
+	}
+	if cutoff := s.affiliateRewardProgramConfig(ctx).LegacyApprovalCutoff; cutoff != nil {
+		for index := range items {
+			if items[index].CreatedAt.Before(*cutoff) {
+				items[index].ApprovalBlockedReason = "legacy_cutoff"
+			}
+		}
+	}
+	return items, total, nil
+}
+
+func (s *AffiliateService) AdminGetAffiliateRewardStats(ctx context.Context) (*AffiliateRewardReviewStats, error) {
+	rewardRepo := s.rewardRepository()
+	if rewardRepo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate reward service unavailable")
+	}
+	return rewardRepo.GetAffiliateRewardStats(ctx)
+}
+
+func (s *AffiliateService) AdminReviewAffiliateReward(ctx context.Context, reviewID, adminID int64, action, note string) (*AffiliateRewardReviewResult, error) {
+	rewardRepo := s.rewardRepository()
+	if rewardRepo == nil {
+		return nil, infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate reward service unavailable")
+	}
+	config := s.affiliateRewardProgramConfig(ctx)
+	result, err := rewardRepo.ReviewAffiliateReward(ctx, reviewID, adminID, action, note, config.LegacyApprovalCutoff)
+	if err != nil {
+		return nil, err
+	}
+	for _, effect := range result.Effects {
+		s.invalidateAffiliateCaches(ctx, effect.UserID)
+		if effect.Kind == "subscription" && effect.GroupID > 0 && s.billingCacheService != nil {
+			if err := s.billingCacheService.InvalidateSubscription(ctx, effect.UserID, effect.GroupID); err != nil {
+				logger.LegacyPrintf("service.affiliate", "[Affiliate] Failed to invalidate subscription cache for user %d group %d: %v", effect.UserID, effect.GroupID, err)
+			}
+		}
+	}
+	return result, nil
 }
 
 func (s *AffiliateService) AccrueInviteRebate(ctx context.Context, inviteeUserID int64, baseRechargeAmount float64) (float64, error) {

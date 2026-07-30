@@ -68,9 +68,10 @@ WITH normalized_tables AS (
                    '''191_create_lottery_system.sql'',' ||
                    '''192_add_free_group_billing.sql'',' ||
                    '''193_add_channel_pricing_user_visibility.sql'',' ||
-                   '''194_remove_image_site_setting.sql'')'
+                   '''194_remove_image_site_setting.sql'',' ||
+                   '''195_affiliate_reward_review_program.sql'')'
                WHEN n.nspname = 'public' AND c.relname = 'settings'
-                   THEN ' WHERE key <> ''image_site_url'''
+                   THEN ' WHERE key NOT IN (''image_site_url'', ''affiliate_reward_program_config'')'
                ELSE ''
            END AS row_filter
     FROM pg_class AS c
@@ -118,9 +119,10 @@ FROM information_schema.sequences
 WHERE sequence_schema NOT IN ('pg_catalog', 'information_schema')
   AND NOT (
       sequence_schema = 'public'
-      AND sequence_name IN (
-          'model_catalog_metadata_id_seq',
-          'lottery_campaigns_id_seq',
+          AND sequence_name IN (
+              'settings_id_seq',
+              'model_catalog_metadata_id_seq',
+              'lottery_campaigns_id_seq',
           'lottery_prizes_id_seq',
           'lottery_entries_id_seq',
           'lottery_draw_runs_id_seq',
@@ -214,8 +216,14 @@ WITH index_state AS (
     ) AS state
     FROM pg_index AS i
     JOIN pg_class AS c ON c.oid = i.indrelid
+    JOIN pg_class AS index_class ON index_class.oid = i.indexrelid
     JOIN pg_namespace AS n ON n.oid = c.relnamespace
     WHERE n.nspname NOT IN ('pg_catalog', 'pg_toast', 'information_schema')
+      AND index_class.relname NOT IN (
+          'idx_referral_reward_reviews_reward_user',
+          'idx_referral_reward_reviews_inviter_invitee',
+          'idx_referral_balance_grants_user'
+      )
       AND NOT (
           n.nspname = 'public'
           AND c.relname IN (
@@ -247,6 +255,14 @@ WITH trigger_state AS (
     JOIN pg_namespace AS n ON n.oid = c.relnamespace
     WHERE NOT t.tgisinternal
       AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+      AND t.tgname NOT IN (
+          'trg_referral_first_recharge_insert',
+          'trg_referral_first_recharge_update',
+          'trg_referral_registration_rewards_insert',
+          'trg_referral_registration_rewards_update',
+          'trg_reward_reviews_notify_changed',
+          'trg_referral_refresh_admin_registration_ip_risk_flags'
+      )
 )
 SELECT 'schema_object', 'triggers', count(*)::text,
        COALESCE(sum(hashtextextended(state, 0)::numeric), 0)::text,
