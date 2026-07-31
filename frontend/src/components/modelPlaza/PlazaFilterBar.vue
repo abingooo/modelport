@@ -1,215 +1,194 @@
 <template>
-  <div class="space-y-3">
-    <!-- 一级:平台 -->
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="w-10 shrink-0 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-dark-500">
-        {{ t('modelPlaza.filters.platformLabel') }}
-      </span>
-      <button
-        v-for="p in ['all', ...platforms]"
-        :key="`platform-${p}`"
-        type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 disabled:grayscale"
-        :class="p === 'all' ? chipClass(platform === 'all') : platform === p ? 'chip-tinted-active' : 'chip-tinted'"
-        :style="p === 'all' ? undefined : { '--chip-accent': platformAccentColor(p) }"
-        :disabled="p !== 'all' && !platformEnabled(p)"
-        @click="$emit('update:platform', p)"
-      >
-        <PlatformIcon v-if="p !== 'all'" :platform="p as GroupPlatform" size="xs" />
-        {{ p === 'all' ? t('modelPlaza.filters.all') : p }}
-      </button>
-    </div>
-
-    <!-- 二级:分组(按所属平台着色,当前组合下无结果的置灰) -->
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="w-10 shrink-0 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-dark-500">
-        {{ t('modelPlaza.filters.groupLabel') }}
-      </span>
-      <button
-        type="button"
-        class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
-        :class="chipClass(groupId === 'all')"
-        @click="$emit('update:groupId', 'all')"
-      >
-        {{ t('modelPlaza.filters.all') }}
-      </button>
-      <button
-        v-for="g in groups"
-        :key="`group-${g.id}`"
-        type="button"
-        class="rounded-lg px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 disabled:grayscale"
-        :class="groupId === g.id ? 'chip-tinted-active' : 'chip-tinted'"
-        :style="{ '--chip-accent': platformAccentColor(g.platform) }"
-        :disabled="!groupEnabled(g)"
-        @click="$emit('update:groupId', g.id)"
-      >
-        {{ g.name }}
-      </button>
-    </div>
-
-    <!-- 三级:倍率(当前组合下不存在的置灰) -->
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="w-10 shrink-0 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-dark-500">
-        {{ t('modelPlaza.filters.rateLabel') }}
-      </span>
-      <button
-        type="button"
-        class="rounded-lg px-3 py-1.5 text-sm font-medium transition"
-        :class="chipClass(rate === 'all')"
-        @click="$emit('update:rate', 'all')"
-      >
-        {{ t('modelPlaza.filters.all') }}
-      </button>
-      <button
-        v-for="r in rates"
-        :key="`rate-${r}`"
-        type="button"
-        class="rounded-lg px-3 py-1.5 font-mono text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 disabled:grayscale"
-        :class="chipClass(rate === r)"
-        :disabled="!rateEnabled(r)"
-        @click="$emit('update:rate', r)"
-      >
-        {{ r }}x
-      </button>
-    </div>
-
-    <!-- 四级:模型名搜索(纯前端过滤) -->
-    <div class="flex flex-wrap items-center gap-2">
-      <span class="w-10 shrink-0 text-xs font-semibold uppercase tracking-wider text-gray-400 dark:text-dark-500">
-        {{ t('modelPlaza.filters.modelLabel') }}
-      </span>
-      <div class="relative w-full sm:w-72">
+  <div class="plaza-filter-shell sticky top-[65px] z-20 rounded-lg border border-gray-200 bg-white/95 p-3 shadow-sm backdrop-blur dark:border-dark-700 dark:bg-dark-900/95">
+    <div class="flex flex-wrap items-center gap-2.5">
+      <div class="relative min-w-0 flex-1 md:max-w-sm">
         <Icon
           name="search"
           size="sm"
-          class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-dark-500"
+          class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-dark-500"
         />
         <input
           :value="search"
-          type="text"
+          type="search"
           :placeholder="t('modelPlaza.filters.searchPlaceholder')"
-          class="input rounded-lg py-1.5 pl-9 pr-9"
+          class="input h-10 rounded-lg pl-9 pr-9 text-sm"
           @input="$emit('update:search', ($event.target as HTMLInputElement).value)"
         />
         <button
           v-if="search"
           type="button"
-          class="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 transition-colors hover:text-gray-600 dark:text-dark-500 dark:hover:text-gray-300"
+          class="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+          :title="t('modelPlaza.filters.clear')"
           @click="$emit('update:search', '')"
         >
-          <Icon name="x" size="xs" class="h-3.5 w-3.5" />
+          <Icon name="x" size="xs" />
         </button>
+      </div>
+
+      <button
+        type="button"
+        class="relative inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-600 transition hover:border-gray-300 hover:text-gray-900 md:hidden dark:border-dark-600 dark:bg-dark-800 dark:text-dark-300 dark:hover:text-white"
+        :aria-expanded="mobileFiltersOpen"
+        :title="t('modelPlaza.filters.more')"
+        @click="mobileFiltersOpen = !mobileFiltersOpen"
+      >
+        <Icon name="filter" size="sm" />
+        <span
+          v-if="activeFilterCount > 0"
+          class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary-600 px-1 text-[10px] font-semibold text-white"
+        >
+          {{ activeFilterCount }}
+        </span>
+      </button>
+
+      <div
+        class="w-full flex-wrap items-center gap-2.5 md:flex md:w-auto md:min-w-0 md:flex-1"
+        :class="mobileFiltersOpen ? 'flex' : 'hidden'"
+      >
+        <Select
+          :model-value="platform"
+          :options="platformOptions"
+          :aria-label="t('modelPlaza.filters.platformLabel')"
+          class="min-w-0 flex-1 md:w-44 md:flex-none"
+          @update:model-value="updatePlatform"
+        >
+          <template #selected="{ option }">
+            <span class="flex min-w-0 items-center gap-2">
+              <PlatformIcon
+                v-if="option?.platform"
+                :platform="option.platform as GroupPlatform"
+                size="sm"
+                class="flex-shrink-0"
+              />
+              <span class="truncate">{{ option?.label }}</span>
+            </span>
+          </template>
+          <template #option="{ option }">
+            <PlatformIcon
+              v-if="option.platform"
+              :platform="option.platform as GroupPlatform"
+              size="sm"
+              class="flex-shrink-0"
+            />
+            <span class="select-option-label truncate">{{ option.label }}</span>
+          </template>
+        </Select>
+
+        <Select
+          :model-value="groupId"
+          :options="groupOptions"
+          :aria-label="t('modelPlaza.filters.groupLabel')"
+          class="min-w-0 flex-1 md:w-44 md:flex-none"
+          @update:model-value="updateGroup"
+        />
+
+        <Select
+          :model-value="billingMode"
+          :options="billingModeOptions"
+          :aria-label="t('modelPlaza.filters.billingModeLabel')"
+          class="min-w-0 flex-1 md:w-36 md:flex-none"
+          @update:model-value="updateBillingMode"
+        />
+
+        <button
+          v-if="hasFilters"
+          type="button"
+          class="inline-flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 dark:text-dark-500 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+          :title="t('modelPlaza.filters.clear')"
+          @click="clearFilters"
+        >
+          <Icon name="x" size="sm" />
+        </button>
+
+        <div class="ml-auto hidden items-center gap-3 text-xs text-gray-400 lg:flex dark:text-dark-500">
+          <span>{{ t('modelPlaza.filters.resultCount', { count: resultCount }) }}</span>
+          <span class="h-4 w-px bg-gray-200 dark:bg-dark-700"></span>
+          <span class="whitespace-nowrap font-medium text-gray-500 dark:text-dark-300">USD · $ / 1M tokens</span>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
-import { platformAccentColor } from '@/utils/platformColors'
+import Select, { type SelectOption } from '@/components/common/Select.vue'
 import type { GroupPlatform } from '@/types'
+import { plazaProviderLabel } from './modelPlazaPresentation'
 
 const props = defineProps<{
-  /** 数据中出现的平台(去重排序后)。 */
   platforms: string[]
-  /** 全量分组(含平台与生效倍率),三个维度的置灰联动由此推导。 */
-  groups: Array<{ id: number; name: string; platform: string; rate: number }>
-  /** 全量生效倍率去重升序。 */
-  rates: number[]
+  groups: Array<{ id: number; name: string; platforms: string[] }>
+  billingModes: string[]
   platform: string
   groupId: number | 'all'
-  rate: number | 'all'
-  /** 模型名搜索词(纯前端过滤)。 */
+  billingMode: string
   search: string
+  resultCount: number
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   'update:platform': [value: string]
   'update:groupId': [value: number | 'all']
-  'update:rate': [value: number | 'all']
+  'update:billingMode': [value: string]
   'update:search': [value: string]
 }>()
 
 const { t } = useI18n()
+const mobileFiltersOpen = ref(false)
 
-/**
- * 三个维度互为约束(faceted):某选项可点 ⟺ 在「其他两维」当前选择下仍有分组命中。
- * 「全部」永远可点,作为解除本维约束的出口;可点项组合恒有结果,无需选择修正。
- */
-function platformEnabled(p: string): boolean {
-  return props.groups.some(
-    (g) =>
-      g.platform === p &&
-      (props.groupId === 'all' || g.id === props.groupId) &&
-      (props.rate === 'all' || g.rate === props.rate)
-  )
+const platformOptions = computed<SelectOption[]>(() => [
+  { value: 'all', label: t('modelPlaza.filters.all') },
+  ...props.platforms.map((platform) => ({
+    value: platform,
+    label: plazaProviderLabel(platform),
+    platform: platform as GroupPlatform
+  }))
+])
+
+const visibleGroups = computed(() =>
+  props.platform === 'all'
+    ? props.groups
+    : props.groups.filter((group) => group.platforms.includes(props.platform))
+)
+
+const groupOptions = computed<SelectOption[]>(() => [
+  { value: 'all', label: t('modelPlaza.filters.allGroups') },
+  ...visibleGroups.value.map((group) => ({ value: group.id, label: group.name }))
+])
+
+const billingModeOptions = computed<SelectOption[]>(() => [
+  { value: 'all', label: t('modelPlaza.filters.allBillingModes') },
+  ...props.billingModes.map((mode) => ({
+    value: mode,
+    label: t(`modelPlaza.billingModes.${mode}`)
+  }))
+])
+
+const activeFilterCount = computed(
+  () => Number(props.platform !== 'all') + Number(props.groupId !== 'all') + Number(props.billingMode !== 'all')
+)
+const hasFilters = computed(() => activeFilterCount.value > 0 || props.search.trim() !== '')
+
+function updatePlatform(value: string | number | boolean | null) {
+  emit('update:platform', typeof value === 'string' ? value : 'all')
 }
 
-function groupEnabled(g: { platform: string; rate: number }): boolean {
-  return (
-    (props.platform === 'all' || g.platform === props.platform) &&
-    (props.rate === 'all' || g.rate === props.rate)
-  )
+function updateGroup(value: string | number | boolean | null) {
+  emit('update:groupId', typeof value === 'number' ? value : 'all')
 }
 
-function rateEnabled(r: number): boolean {
-  return props.groups.some(
-    (g) =>
-      g.rate === r &&
-      (props.platform === 'all' || g.platform === props.platform) &&
-      (props.groupId === 'all' || g.id === props.groupId)
-  )
+function updateBillingMode(value: string | number | boolean | null) {
+  emit('update:billingMode', typeof value === 'string' ? value : 'all')
 }
 
-function chipClass(active: boolean): string {
-  return active
-    ? 'bg-gradient-to-r from-primary-500 to-primary-600 text-white shadow-sm shadow-primary-500/30'
-    : 'bg-white text-gray-600 ring-1 ring-inset ring-gray-200 enabled:hover:bg-gray-50 enabled:hover:text-gray-900 enabled:hover:ring-gray-300 dark:bg-dark-800/60 dark:text-dark-300 dark:ring-dark-700 dark:enabled:hover:bg-dark-800 dark:enabled:hover:text-white'
+function clearFilters() {
+  emit('update:platform', 'all')
+  emit('update:groupId', 'all')
+  emit('update:billingMode', 'all')
+  emit('update:search', '')
 }
 </script>
-
-<style scoped>
-/* 平台/分组 chip 的配色统一从 --chip-accent(平台主色)派生,新增平台无需扩展样式。
-   激活态与非激活态在模板上互斥挂载,避免选择器优先级互相覆盖。 */
-.chip-tinted {
-  color: var(--chip-accent);
-  color: color-mix(in srgb, var(--chip-accent) 78%, black);
-  background-color: color-mix(in srgb, var(--chip-accent) 9%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chip-accent) 25%, transparent);
-}
-
-.chip-tinted:not(:disabled):hover {
-  background-color: color-mix(in srgb, var(--chip-accent) 16%, transparent);
-}
-
-.dark .chip-tinted {
-  color: color-mix(in srgb, var(--chip-accent) 72%, white);
-  background-color: color-mix(in srgb, var(--chip-accent) 12%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chip-accent) 30%, transparent);
-}
-
-.dark .chip-tinted:not(:disabled):hover {
-  background-color: color-mix(in srgb, var(--chip-accent) 18%, transparent);
-}
-
-.chip-tinted-active {
-  color: #fff;
-  background-color: var(--chip-accent);
-  background-color: color-mix(in srgb, var(--chip-accent) 85%, black);
-  box-shadow: 0 1px 2px 0 color-mix(in srgb, var(--chip-accent) 35%, transparent);
-}
-
-.chip-tinted-active:not(:disabled):hover {
-  background-color: color-mix(in srgb, var(--chip-accent) 75%, black);
-}
-
-.dark .chip-tinted-active {
-  background-color: color-mix(in srgb, var(--chip-accent) 80%, transparent);
-}
-
-.dark .chip-tinted-active:not(:disabled):hover {
-  background-color: var(--chip-accent);
-}
-</style>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // PlazaOfficialPricing 模型广场展示用的 LiteLLM 官方参考价（USD per token）。
@@ -30,19 +31,35 @@ type PlazaModel struct {
 // 与 AvailableGroupRef 相比多了 Description 与 Models；Models 来自该分组关联渠道的
 // 支持模型（按分组平台隔离，防跨平台泄漏），与「可用渠道」页口径一致。
 type PlazaGroup struct {
-	ID                 int64
-	Name               string
-	Description        string
-	Platform           string
-	SubscriptionType   string
-	RateMultiplier     float64
-	PeakRateEnabled    bool
-	PeakStart          string
-	PeakEnd            string
-	PeakRateMultiplier float64
-	IsFree             bool
-	IsExclusive        bool
-	Models             []PlazaModel
+	ID                   int64
+	Name                 string
+	Description          string
+	Platform             string
+	SubscriptionType     string
+	RateMultiplier       float64
+	PeakRateEnabled      bool
+	PeakStart            string
+	PeakEnd              string
+	PeakRateMultiplier   float64
+	ImageRateIndependent bool
+	ImageRateMultiplier  float64
+	IsFree               bool
+	IsExclusive          bool
+	Models               []PlazaModel
+}
+
+func (g *PlazaGroup) PeakMultiplierAt(now time.Time) float64 {
+	if g == nil {
+		return 1
+	}
+	group := Group{
+		SubscriptionType:   g.SubscriptionType,
+		PeakRateEnabled:    g.PeakRateEnabled,
+		PeakStart:          g.PeakStart,
+		PeakEnd:            g.PeakEnd,
+		PeakRateMultiplier: g.PeakRateMultiplier,
+	}
+	return group.PeakMultiplierAt(now)
 }
 
 // ListPlazaGroups 返回模型广场数据：每个活跃分组附带其可用模型与定价。
@@ -75,18 +92,20 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 	for i := range groups {
 		g := groups[i]
 		byGroup[g.ID] = &PlazaGroup{
-			ID:                 g.ID,
-			Name:               g.Name,
-			Description:        g.Description,
-			Platform:           g.Platform,
-			SubscriptionType:   g.SubscriptionType,
-			RateMultiplier:     g.RateMultiplier,
-			PeakRateEnabled:    g.PeakRateEnabled,
-			PeakStart:          g.PeakStart,
-			PeakEnd:            g.PeakEnd,
-			PeakRateMultiplier: g.PeakRateMultiplier,
-			IsFree:             g.IsFree,
-			IsExclusive:        g.IsExclusive,
+			ID:                   g.ID,
+			Name:                 g.Name,
+			Description:          g.Description,
+			Platform:             g.Platform,
+			SubscriptionType:     g.SubscriptionType,
+			RateMultiplier:       g.RateMultiplier,
+			PeakRateEnabled:      g.PeakRateEnabled,
+			PeakStart:            g.PeakStart,
+			PeakEnd:              g.PeakEnd,
+			PeakRateMultiplier:   g.PeakRateMultiplier,
+			ImageRateIndependent: g.ImageRateIndependent,
+			ImageRateMultiplier:  g.ImageRateMultiplier,
+			IsFree:               g.IsFree,
+			IsExclusive:          g.IsExclusive,
 		}
 		order = append(order, g.ID)
 	}
@@ -114,7 +133,7 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 			}
 			for j := range supported {
 				m := supported[j]
-				if m.Platform != pg.Platform {
+				if m.Platform != pg.Platform || m.Pricing == nil || !m.Pricing.UserVisible {
 					continue
 				}
 				if at, seen := idx[m.Name]; seen {
@@ -155,6 +174,14 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+// PlazaOfficialPricingUpdatedAt 返回模型广场参考价格数据的更新时间。
+func (s *ChannelService) PlazaOfficialPricingUpdatedAt() time.Time {
+	if s == nil || s.pricingService == nil {
+		return time.Time{}
+	}
+	return s.pricingService.LastUpdated()
 }
 
 // lookupOfficialPricing 查询模型的 LiteLLM 官方参考价，带 memo 避免同名模型重复转换。

@@ -589,7 +589,7 @@ export default {
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
     title: 'Model Plaza',
-    description: 'Browse available models and pricing by group',
+    description: 'Compare models, available groups, and the prices applied to your account',
     loading: 'Loading...',
     empty: 'No groups to display',
     loadFailed: 'Failed to load model plaza',
@@ -601,12 +601,41 @@ export default {
       rateLabel: 'Rate',
       modelLabel: 'Model',
       searchPlaceholder: 'Search models',
-      all: 'All'
+      all: 'All providers',
+      allGroups: 'All groups',
+      billingModeLabel: 'Billing mode',
+      allBillingModes: 'All billing modes',
+      more: 'More filters',
+      clear: 'Clear filters',
+      resultCount: '{count} models'
     },
     badges: {
       free: 'Free',
       exclusive: 'Exclusive',
-      subscription: 'Subscription'
+      subscription: 'Subscription',
+      peak: 'Peak price'
+    },
+    billingModes: {
+      token: 'Usage based',
+      per_request: 'Per request',
+      image: 'Per image'
+    },
+    provider: {
+      modelCount: '{count} models'
+    },
+    card: {
+      group: 'Available group',
+      copyModel: 'Copy model name',
+      copied: 'Copied',
+      officialShort: 'Official',
+      noOfficialReference: 'No official reference',
+      contextPricing: '{count} context tiers',
+      defaultSpecification: 'Default specification',
+      tiered: 'Tiered'
+    },
+    source: {
+      name: 'Official reference source: {source}',
+      withDate: 'Official reference: {source} · Updated {date}'
     },
     detail: {
       noModels: 'No models configured for this group',
@@ -618,8 +647,8 @@ export default {
       input: 'Input',
       output: 'Output',
       cache: 'Cache',
-      cacheWrite: 'Write',
-      cacheRead: 'Read',
+      cacheWrite: 'Cache write',
+      cacheRead: 'Cache read',
       paidPrice: 'Your Price (Discounted)',
       officialPrice: 'Official Price',
       rate: 'Rate',

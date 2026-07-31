@@ -1,63 +1,79 @@
 <template>
   <div class="space-y-5">
-    <!-- 页头(独立形态下展示标题;后台形态 AppHeader 已有页面标题) -->
-    <div v-if="!embedded">
-      <h1 class="text-2xl font-bold tracking-tight text-gray-900 dark:text-white sm:text-3xl">{{ t('modelPlaza.title') }}</h1>
-      <p class="mt-1.5 text-sm text-gray-500 dark:text-dark-400">{{ t('modelPlaza.description') }}</p>
+    <div v-if="!embedded" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-950 dark:text-white sm:text-3xl">{{ t('modelPlaza.title') }}</h1>
+        <p class="mt-1.5 max-w-2xl text-sm text-gray-500 dark:text-dark-400">{{ t('modelPlaza.description') }}</p>
+      </div>
+      <p v-if="pricingSourceLabel" class="text-xs text-gray-400 dark:text-dark-500">
+        {{ pricingSourceLabel }}
+      </p>
     </div>
 
-    <!-- 全局价格说明(管理员配置,Markdown) -->
     <div
       v-if="descriptionHtml"
-      class="plaza-description rounded-2xl border border-gray-100 bg-white px-5 py-4 text-sm shadow-card dark:border-dark-700/50 dark:bg-dark-800/50"
+      class="plaza-description border-l-2 border-primary-500 bg-primary-50/50 px-4 py-3 text-sm dark:bg-primary-500/5"
       v-html="descriptionHtml"
     ></div>
 
-    <!-- 未登录提示 -->
-    <p
-      v-if="!isAuthenticated"
-      class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-dark-500"
-    >
-      <Icon name="infoCircle" size="xs" class="h-3.5 w-3.5" />
+    <p v-if="!isAuthenticated" class="flex items-center gap-1.5 text-xs text-gray-400 dark:text-dark-500">
+      <Icon name="infoCircle" size="xs" />
       {{ t('modelPlaza.anonymousHint') }}
     </p>
 
-    <!-- 加载/错误/空 -->
     <div v-if="loading" class="flex min-h-[240px] items-center justify-center">
       <div class="h-8 w-8 animate-spin rounded-full border-2 border-primary-600/25 border-t-primary-600 dark:border-primary-400/25 dark:border-t-primary-400"></div>
     </div>
     <div
       v-else-if="error"
-      class="rounded-2xl border border-red-200 bg-red-50 px-5 py-8 text-center text-sm text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300"
+      class="rounded-lg border border-red-200 bg-red-50 px-5 py-8 text-center text-sm text-red-600 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300"
     >
       {{ t('modelPlaza.loadFailed') }}
     </div>
     <template v-else>
-      <!-- 筛选区:平台 → 分组 → 倍率 -->
       <PlazaFilterBar
         :platforms="platforms"
         :groups="groupOptions"
-        :rates="rates"
+        :billing-modes="billingModes"
         :platform="selectedPlatform"
         :group-id="selectedGroupId"
-        :rate="selectedRate"
+        :billing-mode="selectedBillingMode"
         :search="searchQuery"
+        :result-count="resultCount"
         @update:platform="selectedPlatform = $event"
         @update:group-id="selectedGroupId = $event"
-        @update:rate="selectedRate = $event"
+        @update:billing-mode="selectedBillingMode = $event"
         @update:search="searchQuery = $event"
       />
 
-      <!-- 分组分节的模型清单(默认按生效倍率升序) -->
-      <div v-if="filteredGroups.length > 0" class="space-y-5">
-        <PlazaGroupSection v-for="g in filteredGroups" :key="g.id" :group="g" />
+      <div v-if="providerSections.length > 0" class="space-y-8">
+        <section v-for="section in providerSections" :key="section.platform" class="min-w-0">
+          <header class="mb-3 flex items-center gap-2.5">
+            <span class="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-100 text-gray-700 dark:bg-dark-800 dark:text-gray-200">
+              <PlatformIcon :platform="section.platform as GroupPlatform" size="md" />
+            </span>
+            <h2 class="text-base font-semibold text-gray-900 dark:text-white">{{ section.label }}</h2>
+            <span class="text-xs tabular-nums text-gray-400 dark:text-dark-500">
+              {{ t('modelPlaza.provider.modelCount', { count: section.cards.length }) }}
+            </span>
+            <span class="h-px min-w-6 flex-1 bg-gray-200 dark:bg-dark-700"></span>
+          </header>
+
+          <div class="grid min-w-0 grid-cols-1 items-stretch gap-4 md:grid-cols-2 2xl:grid-cols-3">
+            <PlazaModelCard v-for="card in section.cards" :key="card.key" :card="card" />
+          </div>
+        </section>
       </div>
       <div
         v-else
-        class="rounded-2xl border border-dashed border-gray-300 px-5 py-12 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-dark-400"
+        class="rounded-lg border border-dashed border-gray-300 px-5 py-12 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-dark-400"
       >
-        {{ searchActive ? t('modelPlaza.noSearchResult') : t('modelPlaza.empty') }}
+        {{ filtersActive ? t('modelPlaza.noSearchResult') : t('modelPlaza.empty') }}
       </div>
+
+      <p v-if="embedded && pricingSourceLabel" class="text-right text-xs text-gray-400 dark:text-dark-500">
+        {{ pricingSourceLabel }}
+      </p>
     </template>
   </div>
 </template>
@@ -68,88 +84,118 @@ import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import Icon from '@/components/icons/Icon.vue'
+import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import PlazaFilterBar from './PlazaFilterBar.vue'
-import PlazaGroupSection from './PlazaGroupSection.vue'
-import type { ModelPlazaGroup, ModelPlazaResponse } from '@/api/modelPlaza'
+import PlazaModelCard from './PlazaModelCard.vue'
+import type { GroupPlatform } from '@/types'
+import type { ModelPlazaResponse } from '@/api/modelPlaza'
 import { useAuthStore } from '@/stores/auth'
+import {
+  buildPlazaProviderSections,
+  plazaBillingMode,
+  plazaProviderLabel
+} from './modelPlazaPresentation'
 
 const props = defineProps<{
   response: ModelPlazaResponse | null
   loading: boolean
   error?: boolean
-  /** 后台内嵌形态(AppLayout 内):隐藏页头。 */
   embedded?: boolean
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 
-const selectedPlatform = ref<string>('all')
+const selectedPlatform = ref('all')
 const selectedGroupId = ref<number | 'all'>('all')
-const selectedRate = ref<number | 'all'>('all')
+const selectedBillingMode = ref('all')
 const searchQuery = ref('')
 
-const searchActive = computed(() => searchQuery.value.trim() !== '')
-
 const descriptionHtml = computed(() => {
-  const md = props.response?.description?.trim()
-  if (!md) return ''
-  return DOMPurify.sanitize(marked.parse(md) as string)
+  const markdown = props.response?.description?.trim()
+  if (!markdown) return ''
+  return DOMPurify.sanitize(marked.parse(markdown) as string)
 })
 
-/** 生效倍率 = 用户专属倍率 ?? 分组默认倍率。 */
-function effectiveRate(g: ModelPlazaGroup): number {
-  return g.is_free ? 0 : (g.user_rate_multiplier ?? g.rate_multiplier)
-}
-
-const platforms = computed(() =>
-  [...new Set((props.response?.groups ?? []).map((g) => g.platform).filter(Boolean))].sort()
-)
+const platforms = computed(() => {
+  const values = (props.response?.groups ?? []).flatMap((group) =>
+    group.models.map((model) => model.platform || group.platform).filter(Boolean)
+  )
+  return [...new Set(values)].sort((left, right) =>
+    plazaProviderLabel(left).localeCompare(plazaProviderLabel(right), locale.value)
+  )
+})
 
 const groupOptions = computed(() =>
-  (props.response?.groups ?? []).map((g) => ({
-    id: g.id,
-    name: g.name,
-    platform: g.platform,
-    rate: effectiveRate(g)
+  (props.response?.groups ?? []).map((group) => ({
+    id: group.id,
+    name: group.name,
+    platforms: [...new Set(group.models.map((model) => model.platform || group.platform))]
   }))
 )
 
-/** 全量生效倍率;当前组合下不可用的项由 FilterBar 置灰而非隐藏。 */
-const rates = computed(() =>
-  [...new Set((props.response?.groups ?? []).map(effectiveRate))].sort((a, b) => a - b)
-)
+const billingModes = computed(() => {
+  const modes = (props.response?.groups ?? []).flatMap((group) => group.models.map(plazaBillingMode))
+  return [...new Set(modes)]
+})
 
-/** 数据刷新后选中的倍率可能不复存在,重置为全部。 */
-watch(rates, (list) => {
-  if (selectedRate.value !== 'all' && !list.includes(selectedRate.value)) {
-    selectedRate.value = 'all'
+watch(selectedPlatform, (platform) => {
+  if (selectedGroupId.value === 'all' || platform === 'all') return
+  const selectedGroup = groupOptions.value.find((group) => group.id === selectedGroupId.value)
+  if (!selectedGroup?.platforms.includes(platform)) selectedGroupId.value = 'all'
+})
+
+watch(groupOptions, (groups) => {
+  if (selectedGroupId.value !== 'all' && !groups.some((group) => group.id === selectedGroupId.value)) {
+    selectedGroupId.value = 'all'
   }
 })
 
 const filteredGroups = computed(() => {
-  let groups = props.response?.groups ?? []
-  if (selectedPlatform.value !== 'all') {
-    groups = groups.filter((g) => g.platform === selectedPlatform.value)
-  }
-  if (selectedGroupId.value !== 'all') {
-    groups = groups.filter((g) => g.id === selectedGroupId.value)
-  }
-  if (selectedRate.value !== 'all') {
-    groups = groups.filter((g) => effectiveRate(g) === selectedRate.value)
-  }
-  // 模型名搜索:分组内只留命中的模型,整组无命中则隐藏该分组。
-  const q = searchQuery.value.trim().toLowerCase()
-  if (q) {
-    groups = groups
-      .map((g) => ({ ...g, models: g.models.filter((m) => m.name.toLowerCase().includes(q)) }))
-      .filter((g) => g.models.length > 0)
-  }
-  // 专属倍率会改变生效值,不能只依赖后端按默认倍率的排序。
-  return [...groups].sort(
-    (a, b) => effectiveRate(a) - effectiveRate(b) || a.name.localeCompare(b.name)
-  )
+  const query = searchQuery.value.trim().toLocaleLowerCase()
+  return (props.response?.groups ?? [])
+    .filter((group) => selectedGroupId.value === 'all' || group.id === selectedGroupId.value)
+    .map((group) => {
+      const groupMatches = [group.name, group.description, plazaProviderLabel(group.platform)]
+        .join(' ')
+        .toLocaleLowerCase()
+        .includes(query)
+      const models = group.models.filter((model) => {
+        const platform = model.platform || group.platform
+        if (selectedPlatform.value !== 'all' && platform !== selectedPlatform.value) return false
+        if (selectedBillingMode.value !== 'all' && plazaBillingMode(model) !== selectedBillingMode.value) return false
+        if (!query || groupMatches) return true
+        return `${model.name} ${plazaProviderLabel(platform)}`.toLocaleLowerCase().includes(query)
+      })
+      return { ...group, models }
+    })
+    .filter((group) => group.models.length > 0)
+})
+
+const providerSections = computed(() => buildPlazaProviderSections(filteredGroups.value))
+const resultCount = computed(() =>
+  providerSections.value.reduce((count, section) => count + section.cards.length, 0)
+)
+const filtersActive = computed(
+  () =>
+    selectedPlatform.value !== 'all' ||
+    selectedGroupId.value !== 'all' ||
+    selectedBillingMode.value !== 'all' ||
+    searchQuery.value.trim() !== ''
+)
+
+const pricingSourceLabel = computed(() => {
+  const response = props.response
+  if (!response?.official_pricing_source) return ''
+  const updatedAt = response.official_pricing_updated_at
+    ? new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short', day: 'numeric' }).format(
+        new Date(response.official_pricing_updated_at)
+      )
+    : ''
+  return updatedAt
+    ? t('modelPlaza.source.withDate', { source: response.official_pricing_source, date: updatedAt })
+    : t('modelPlaza.source.name', { source: response.official_pricing_source })
 })
 </script>
 

@@ -32,6 +32,7 @@ func plazaPricedChannel(id int64, name string, groupIDs []int64, platform string
 			BillingMode: BillingModeToken,
 			InputPrice:  testPtrFloat64(3e-6),
 			OutputPrice: testPtrFloat64(1.5e-5),
+			UserVisible: true,
 		}},
 	}
 }
@@ -86,8 +87,8 @@ func TestListPlazaGroups_PlatformIsolation(t *testing.T) {
 	ch := Channel{
 		ID: 1, Name: "multi", Status: StatusActive, GroupIDs: []int64{10, 20},
 		ModelPricing: []ChannelModelPricing{
-			{Platform: "anthropic", Models: []string{"claude-sonnet"}, InputPrice: testPtrFloat64(3e-6)},
-			{Platform: "openai", Models: []string{"gpt-5"}, InputPrice: testPtrFloat64(2e-6)},
+			{Platform: "anthropic", Models: []string{"claude-sonnet"}, InputPrice: testPtrFloat64(3e-6), UserVisible: true},
+			{Platform: "openai", Models: []string{"gpt-5"}, InputPrice: testPtrFloat64(2e-6), UserVisible: true},
 		},
 	}
 	groups := []Group{
@@ -106,6 +107,24 @@ func TestListPlazaGroups_PlatformIsolation(t *testing.T) {
 	require.Equal(t, "claude-sonnet", byName["g-claude"][0].Name)
 	require.Len(t, byName["g-gpt"], 1)
 	require.Equal(t, "gpt-5", byName["g-gpt"][0].Name)
+}
+
+func TestListPlazaGroups_UserVisibleFiltersPricingEntries(t *testing.T) {
+	channel := plazaPricedChannel(1, "ch", []int64{10}, "anthropic", "visible-model")
+	channel.ModelPricing = append(channel.ModelPricing, ChannelModelPricing{
+		Platform:    "anthropic",
+		Models:      []string{"hidden-model"},
+		BillingMode: BillingModeToken,
+		InputPrice:  testPtrFloat64(1e-6),
+		UserVisible: false,
+	})
+	groups := []Group{{ID: 10, Name: "g", Platform: "anthropic", RateMultiplier: 1}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Models, 1)
+	require.Equal(t, "visible-model", out[0].Models[0].Name)
 }
 
 func TestListPlazaGroups_InactiveChannelSkipped(t *testing.T) {
