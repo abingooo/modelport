@@ -3,6 +3,7 @@ import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
 import {
   buildPlazaProviderSections,
   plazaHasOfficialPricing,
+  plazaModelSortPrice,
   plazaProviderLabel
 } from '../modelPlazaPresentation'
 
@@ -68,5 +69,38 @@ describe('model plaza presentation', () => {
 
     expect(plazaHasOfficialPricing(pricedModel)).toBe(true)
     expect(plazaHasOfficialPricing(model('no-price', 'openai', 1))).toBe(false)
+  })
+
+  it('sorts by displayed output price descending and keeps missing prices last', () => {
+    const cheap = model('gpt-cheap', 'openai', 1)
+    const expensive = model('gpt-expensive', 'openai', 1)
+    const unavailable = model('gpt-unavailable', 'openai', 1)
+    cheap.display_pricing = {
+      billing_mode: 'token',
+      input_price: 1e-6,
+      output_price: 2e-6,
+      cache_write_price: null,
+      cache_read_price: null,
+      image_input_price: null,
+      image_output_price: null,
+      per_request_price: null,
+      intervals: []
+    }
+    expensive.display_pricing = {
+      ...cheap.display_pricing,
+      output_price: 8e-6
+    }
+
+    const sections = buildPlazaProviderSections(
+      [group(1, 'Standard', 'openai', [cheap, unavailable, expensive])],
+      { sortMode: 'output' }
+    )
+
+    expect(sections[0].cards.map((card) => card.name)).toEqual([
+      'gpt-expensive',
+      'gpt-cheap',
+      'gpt-unavailable'
+    ])
+    expect(plazaModelSortPrice(expensive)).toBe(8e-6)
   })
 })

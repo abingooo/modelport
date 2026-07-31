@@ -39,11 +39,13 @@
         :group-id="selectedGroupId"
         :show-official-pricing="showOfficialPricing"
         :billing-mode="selectedBillingMode"
+        :sort-mode="selectedSortMode"
         :search="searchQuery"
         :result-count="resultCount"
-        @update:platform="selectedPlatform = $event"
+        @update:platform="selectPlatform"
         @update:group-id="selectGroup"
         @update:billing-mode="selectedBillingMode = $event"
+        @update:sort-mode="selectSortMode"
         @update:search="searchQuery = $event"
       />
 
@@ -103,7 +105,11 @@ import {
   plazaHasOfficialPricing,
   plazaProviderLabel
 } from './modelPlazaPresentation'
-import type { PlazaGroupFilterValue } from './modelPlazaPresentation'
+import type {
+  PlazaFilterGroupData,
+  PlazaGroupFilterValue,
+  PlazaSortMode
+} from './modelPlazaPresentation'
 
 const props = defineProps<{
   response: ModelPlazaResponse | null
@@ -116,9 +122,45 @@ const { t, locale } = useI18n()
 const authStore = useAuthStore()
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 
-const selectedPlatform = ref('all')
-const selectedGroupId = ref<PlazaGroupFilterValue>('all')
+const PLATFORM_STORAGE_KEY = 'modelport_model_plaza_platform'
+const SORT_STORAGE_KEY = 'modelport_model_plaza_sort'
+const GROUP_STORAGE_PREFIX = 'modelport_model_plaza_group_'
+
+function readStorage(key: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function writeStorage(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value)
+  } catch {
+    // Browsing preferences are optional when storage is unavailable.
+  }
+}
+
+function parseGroupSelection(value: string): PlazaGroupFilterValue {
+  if (value === PLAZA_OFFICIAL_GROUP_ID) return value
+  const groupId = Number(value)
+  return Number.isInteger(groupId) && groupId > 0 ? groupId : 'all'
+}
+
+function groupStorageKey(platform: string): string {
+  return `${GROUP_STORAGE_PREFIX}${platform || 'all'}`
+}
+
+const storedPlatform = readStorage(PLATFORM_STORAGE_KEY)
+const selectedPlatform = ref(storedPlatform || 'all')
+const selectedGroupId = ref<PlazaGroupFilterValue>(
+  parseGroupSelection(readStorage(groupStorageKey(selectedPlatform.value)))
+)
 const selectedBillingMode = ref('all')
+const selectedSortMode = ref<PlazaSortMode>(
+  readStorage(SORT_STORAGE_KEY) === 'output' ? 'output' : 'name'
+)
 const searchQuery = ref('')
 
 const descriptionHtml = computed(() => {
@@ -128,19 +170,21 @@ const descriptionHtml = computed(() => {
 })
 
 const platforms = computed(() => {
-  const values = (props.response?.groups ?? []).flatMap((group) =>
-    group.models.map((model) => model.platform || group.platform).filter(Boolean)
-  )
-  return [...new Set(values)].sort((left, right) =>
-    plazaProviderLabel(left).localeCompare(plazaProviderLabel(right), locale.value)
-  )
+  return buildPlazaProviderSections(props.response?.groups ?? []).map((section) => ({
+    id: section.platform,
+    count: section.cards.length
+  }))
 })
 
-const groupOptions = computed(() =>
+const groupOptions = computed<PlazaFilterGroupData[]>(() =>
   (props.response?.groups ?? []).map((group) => ({
     id: group.id,
     name: group.name,
-    platforms: [...new Set(group.models.map((model) => model.platform || group.platform))]
+    platforms: [...new Set(group.models.map((model) => model.platform || group.platform))],
+    subscriptionType: group.subscription_type,
+    effectiveMultiplier: group.effective_rate_multiplier,
+    isFree: group.is_free,
+    isExclusive: group.is_exclusive
   }))
 )
 
@@ -164,29 +208,48 @@ const isOfficialGroupSelected = computed(
   () => selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID
 )
 
-watch(selectedPlatform, (platform) => {
-  if (selectedGroupId.value === 'all' || platform === 'all') return
-  if (selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID) {
-    if (!showOfficialPricing.value) selectedGroupId.value = 'all'
-    return
-  }
-  const selectedGroup = groupOptions.value.find((group) => group.id === selectedGroupId.value)
-  if (!selectedGroup?.platforms.includes(platform)) selectedGroupId.value = 'all'
-})
+function hasOfficialPricingForPlatform(platform: string): boolean {
+  return (props.response?.groups ?? []).some((group) =>
+    group.models.some((model) => {
+      const modelPlatform = model.platform || group.platform
+      return (platform === 'all' || modelPlatform === platform) && plazaHasOfficialPricing(model)
+    })
+  )
+}
 
-watch(groupOptions, (groups) => {
-  if (
-    typeof selectedGroupId.value === 'number' &&
-    !groups.some((group) => group.id === selectedGroupId.value)
-  ) {
+function groupSelectionAvailable(value: PlazaGroupFilterValue, platform: string): boolean {
+  if (value === 'all') return true
+  if (value === PLAZA_OFFICIAL_GROUP_ID) return hasOfficialPricingForPlatform(platform)
+  const group = groupOptions.value.find((item) => item.id === value)
+  return Boolean(group && (platform === 'all' || group.platforms.includes(platform)))
+}
+
+watch(
+  platforms,
+  (availablePlatforms) => {
+    if (availablePlatforms.length === 0) return
+    if (
+      selectedPlatform.value !== 'all' &&
+      !availablePlatforms.some((item) => item.id === selectedPlatform.value)
+    ) {
+      selectPlatform('all')
+      return
+    }
+    if (!groupSelectionAvailable(selectedGroupId.value, selectedPlatform.value)) {
+      selectedGroupId.value = 'all'
+    }
+  },
+  { immediate: true }
+)
+
+watch(groupOptions, () => {
+  if (!groupSelectionAvailable(selectedGroupId.value, selectedPlatform.value)) {
     selectedGroupId.value = 'all'
   }
 })
 
 watch(showOfficialPricing, (available) => {
-  if (!available && selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID) {
-    selectedGroupId.value = 'all'
-  }
+  if (!available && selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID) selectedGroupId.value = 'all'
 })
 
 const filteredGroups = computed(() => {
@@ -215,7 +278,12 @@ const filteredGroups = computed(() => {
     .filter((group) => group.models.length > 0)
 })
 
-const providerSections = computed(() => buildPlazaProviderSections(filteredGroups.value))
+const providerSections = computed(() =>
+  buildPlazaProviderSections(filteredGroups.value, {
+    sortMode: selectedSortMode.value,
+    officialPricing: isOfficialGroupSelected.value
+  })
+)
 const resultCount = computed(() =>
   providerSections.value.reduce((count, section) => count + section.cards.length, 0)
 )
@@ -229,7 +297,20 @@ const filtersActive = computed(
 
 function selectGroup(value: PlazaGroupFilterValue) {
   selectedGroupId.value = value
+  writeStorage(groupStorageKey(selectedPlatform.value), String(value))
   if (value === PLAZA_OFFICIAL_GROUP_ID) selectedBillingMode.value = 'token'
+}
+
+function selectPlatform(value: string) {
+  selectedPlatform.value = value
+  writeStorage(PLATFORM_STORAGE_KEY, value)
+  const storedGroup = parseGroupSelection(readStorage(groupStorageKey(value)))
+  selectedGroupId.value = groupSelectionAvailable(storedGroup, value) ? storedGroup : 'all'
+}
+
+function selectSortMode(value: PlazaSortMode) {
+  selectedSortMode.value = value
+  writeStorage(SORT_STORAGE_KEY, value)
 }
 
 const pricingSourceLabel = computed(() => {

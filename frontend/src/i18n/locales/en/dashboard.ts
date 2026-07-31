@@ -598,13 +598,28 @@ export default {
     filters: {
       platformLabel: 'Platform',
       groupLabel: 'Group',
+      pricingPlanLabel: 'Pricing plan',
       rateLabel: 'Rate',
       modelLabel: 'Model',
       searchPlaceholder: 'Search models',
       all: 'All providers',
+      allShort: 'All',
       allGroups: 'All groups',
+      allGroupsHint: 'Switch available groups inside each model card',
+      officialPriceHint: 'Reference only; not used for actual billing',
       billingModeLabel: 'Billing mode',
       allBillingModes: 'All billing modes',
+      sortLabel: 'Sort',
+      sortByName: 'Name',
+      sortByOutput: 'Output ↓',
+      switchToNameSort: 'Sort by model name',
+      switchToOutputSort: 'Sort by output price, highest first',
+      groupSections: {
+        reference: 'Price reference',
+        exclusive: 'Exclusive groups',
+        subscription: 'Subscription groups',
+        standard: 'Usage groups'
+      },
       more: 'More filters',
       clear: 'Clear filters',
       resultCount: '{count} models'

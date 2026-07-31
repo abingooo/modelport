@@ -21,6 +21,18 @@ export interface PlazaProviderSectionData {
   cards: PlazaModelCardData[]
 }
 
+export interface PlazaFilterGroupData {
+  id: number
+  name: string
+  platforms: string[]
+  subscriptionType: string
+  effectiveMultiplier: number
+  isFree: boolean
+  isExclusive: boolean
+}
+
+export type PlazaSortMode = 'name' | 'output'
+
 export const PLAZA_OFFICIAL_GROUP_ID = '__official__' as const
 export type PlazaGroupFilterValue = number | 'all' | typeof PLAZA_OFFICIAL_GROUP_ID
 
@@ -61,8 +73,71 @@ export function plazaHasOfficialPricing(model: PlazaModel): boolean {
   )
 }
 
-export function buildPlazaProviderSections(groups: ModelPlazaGroup[]): PlazaProviderSectionData[] {
+function firstFinitePrice(values: Array<number | null | undefined>): number | null {
+  const value = values.find((candidate) => candidate != null && Number.isFinite(candidate))
+  return value == null ? null : value
+}
+
+export function plazaModelSortPrice(model: PlazaModel | undefined, officialPricing = false): number | null {
+  if (!model) return null
+  if (officialPricing) {
+    const pricing = model.official_pricing
+    if (!pricing) return null
+    return firstFinitePrice([
+      pricing.output_price,
+      pricing.input_price,
+      pricing.cache_write_price,
+      pricing.cache_read_price
+    ])
+  }
+
+  const pricing = model.display_pricing
+  if (!pricing) return null
+  if (plazaBillingMode(model) === BILLING_MODE_TOKEN) {
+    return firstFinitePrice([
+      pricing.output_price,
+      pricing.input_price,
+      pricing.cache_write_price,
+      pricing.cache_read_price
+    ])
+  }
+
+  const intervalPrices = pricing.intervals
+    .map((interval) => interval.per_request_price)
+    .filter((value): value is number => value != null && Number.isFinite(value))
+  return firstFinitePrice([
+    pricing.per_request_price,
+    ...(intervalPrices.length > 0 ? [Math.min(...intervalPrices)] : [])
+  ])
+}
+
+function compareCardNames(left: PlazaModelCardData, right: PlazaModelCardData): number {
+  return left.name.localeCompare(right.name, undefined, { numeric: true })
+}
+
+export function sortPlazaCards(
+  cards: PlazaModelCardData[],
+  sortMode: PlazaSortMode,
+  officialPricing = false
+): PlazaModelCardData[] {
+  return [...cards].sort((left, right) => {
+    if (sortMode === 'name') return compareCardNames(left, right)
+
+    const leftPrice = plazaModelSortPrice(left.offers[0]?.model, officialPricing)
+    const rightPrice = plazaModelSortPrice(right.offers[0]?.model, officialPricing)
+    if (leftPrice == null && rightPrice == null) return compareCardNames(left, right)
+    if (leftPrice == null) return 1
+    if (rightPrice == null) return -1
+    return rightPrice - leftPrice || compareCardNames(left, right)
+  })
+}
+
+export function buildPlazaProviderSections(
+  groups: ModelPlazaGroup[],
+  options: { sortMode?: PlazaSortMode; officialPricing?: boolean } = {}
+): PlazaProviderSectionData[] {
   const providers = new Map<string, Map<string, PlazaModelCardData>>()
+  const sortMode = options.sortMode ?? 'name'
 
   for (const group of groups) {
     for (const model of group.models) {
@@ -93,18 +168,19 @@ export function buildPlazaProviderSections(groups: ModelPlazaGroup[]): PlazaProv
       const rightOrder = platformOrder.get(right) ?? Number.MAX_SAFE_INTEGER
       return leftOrder - rightOrder || plazaProviderLabel(left).localeCompare(plazaProviderLabel(right))
     })
-    .map(([platform, models]) => ({
-      platform,
-      label: plazaProviderLabel(platform),
-      cards: [...models.values()]
-        .map((card) => ({
-          ...card,
-          offers: [...card.offers].sort(
-            (left, right) =>
-              left.model.effective_multiplier - right.model.effective_multiplier ||
-              left.group.name.localeCompare(right.group.name)
-          )
-        }))
-        .sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }))
-    }))
+    .map(([platform, models]) => {
+      const cards = [...models.values()].map((card) => ({
+        ...card,
+        offers: [...card.offers].sort(
+          (left, right) =>
+            left.model.effective_multiplier - right.model.effective_multiplier ||
+            left.group.name.localeCompare(right.group.name)
+        )
+      }))
+      return {
+        platform,
+        label: plazaProviderLabel(platform),
+        cards: sortPlazaCards(cards, sortMode, options.officialPricing)
+      }
+    })
 }

@@ -603,13 +603,28 @@ export default {
     filters: {
       platformLabel: '平台',
       groupLabel: '分组',
+      pricingPlanLabel: '计价方案',
       rateLabel: '倍率',
       modelLabel: '模型',
       searchPlaceholder: '搜索模型名称',
       all: '全部平台',
+      allShort: '全部',
       allGroups: '全部分组',
+      allGroupsHint: '在模型卡片中切换可用分组',
+      officialPriceHint: '参考价，不参与实际扣费',
       billingModeLabel: '计费方式',
       allBillingModes: '全部计费方式',
+      sortLabel: '排序',
+      sortByName: '按名称',
+      sortByOutput: '输出价 ↓',
+      switchToNameSort: '切换为按模型名称排序',
+      switchToOutputSort: '切换为按输出价格从高到低排序',
+      groupSections: {
+        reference: '价格参考',
+        exclusive: '专属分组',
+        subscription: '订阅分组',
+        standard: '按量分组'
+      },
       more: '更多筛选',
       clear: '清除筛选',
       resultCount: '{count} 个模型'
