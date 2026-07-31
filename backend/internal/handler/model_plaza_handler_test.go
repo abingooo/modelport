@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
@@ -91,6 +92,7 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 		"id", "name", "description", "platform", "subscription_type",
 		"rate_multiplier", "user_rate_multiplier", "is_free", "is_exclusive", "models",
 		"peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier",
+		"applied_peak_multiplier", "effective_rate_multiplier", "effective_image_rate_multiplier",
 	} {
 		_, exists := decoded[key]
 		require.Truef(t, exists, "plaza group DTO must expose %q", key)
@@ -103,6 +105,8 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	require.Len(t, models, 1)
 	model := models[0].(map[string]any)
 	require.Contains(t, model, "pricing")
+	require.Contains(t, model, "display_pricing")
+	require.Contains(t, model, "effective_multiplier")
 	require.Contains(t, model, "official_pricing")
 	official := model["official_pricing"].(map[string]any)
 	require.Contains(t, official, "input_price")
@@ -118,6 +122,28 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rawNoRate, &decodedNoRate))
 	_, hasRate := decodedNoRate["user_rate_multiplier"]
 	require.False(t, hasRate, "无专属倍率时 user_rate_multiplier 应 omitempty")
+}
+
+func TestToModelPlazaGroupDTOAt_AppliesUserPeakAndImageMultipliers(t *testing.T) {
+	group := service.PlazaGroup{
+		ID: 7, SubscriptionType: service.SubscriptionTypeSubscription, RateMultiplier: 1,
+		PeakRateEnabled: true, PeakStart: "08:00", PeakEnd: "18:00", PeakRateMultiplier: 2,
+		ImageRateIndependent: true, ImageRateMultiplier: 0.25,
+		Models: []service.PlazaModel{
+			{Name: "token-model", Pricing: &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(4e-6)}},
+			{Name: "image-model", Pricing: &service.ChannelModelPricing{BillingMode: service.BillingModeImage, PerRequestPrice: testPtr(0.04)}},
+		},
+	}
+	now := time.Date(2026, 7, 31, 10, 0, 0, 0, time.Local)
+	dto := toModelPlazaGroupDTOAt(&group, map[int64]float64{7: 0.5}, now)
+
+	require.InDelta(t, 0.5, dto.EffectiveRateMultiplier, 1e-12)
+	require.InDelta(t, 2, dto.AppliedPeakMultiplier, 1e-12)
+	require.InDelta(t, 0.25, dto.EffectiveImageRateMultiplier, 1e-12)
+	require.InDelta(t, 1, dto.Models[0].EffectiveMultiplier, 1e-12)
+	require.InDelta(t, 4e-6, *dto.Models[0].DisplayPricing.InputPrice, 1e-12)
+	require.InDelta(t, 0.25, dto.Models[1].EffectiveMultiplier, 1e-12)
+	require.InDelta(t, 0.01, *dto.Models[1].DisplayPricing.PerRequestPrice, 1e-12)
 }
 
 func TestToModelPlazaOfficialPricing_NilPassthrough(t *testing.T) {

@@ -67,6 +67,7 @@ type channelModelPricingRequest struct {
 	ImageInputPrice  *float64                 `json:"image_input_price" binding:"omitempty,min=0"`
 	ImageOutputPrice *float64                 `json:"image_output_price" binding:"omitempty,min=0"`
 	PerRequestPrice  *float64                 `json:"per_request_price" binding:"omitempty,min=0"`
+	UserVisible      *bool                    `json:"user_visible"`
 	Intervals        []pricingIntervalRequest `json:"intervals"`
 }
 
@@ -119,6 +120,7 @@ type channelModelPricingResponse struct {
 	ImageInputPrice  *float64                  `json:"image_input_price"`
 	ImageOutputPrice *float64                  `json:"image_output_price"`
 	PerRequestPrice  *float64                  `json:"per_request_price"`
+	UserVisible      bool                      `json:"user_visible"`
 	Intervals        []pricingIntervalResponse `json:"intervals"`
 }
 
@@ -227,6 +229,7 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		ImageInputPrice:  p.ImageInputPrice,
 		ImageOutputPrice: p.ImageOutputPrice,
 		PerRequestPrice:  p.PerRequestPrice,
+		UserVisible:      p.UserVisible,
 		Intervals:        intervals,
 	}
 }
@@ -254,6 +257,10 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			billingMode = service.BillingModeToken
 		}
 		platform := r.Platform
+		userVisible := true
+		if r.UserVisible != nil {
+			userVisible = *r.UserVisible
+		}
 		intervals := make([]service.PricingInterval, 0, len(r.Intervals))
 		for _, iv := range r.Intervals {
 			intervals = append(intervals, service.PricingInterval{
@@ -279,6 +286,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			ImageInputPrice:  r.ImageInputPrice,
 			ImageOutputPrice: r.ImageOutputPrice,
 			PerRequestPrice:  r.PerRequestPrice,
+			UserVisible:      userVisible,
 			Intervals:        intervals,
 		})
 	}

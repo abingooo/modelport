@@ -2,6 +2,8 @@ package handler
 
 import (
 	"log/slog"
+	"math"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -46,34 +48,42 @@ type modelPlazaOfficialPricing struct {
 
 // modelPlazaModel 广场模型条目：渠道定价（白名单形态）+ 官方参考价。
 type modelPlazaModel struct {
-	Name            string                     `json:"name"`
-	Platform        string                     `json:"platform"`
-	Pricing         *userSupportedModelPricing `json:"pricing"`
-	OfficialPricing *modelPlazaOfficialPricing `json:"official_pricing"`
+	Name                string                     `json:"name"`
+	Platform            string                     `json:"platform"`
+	Pricing             *userSupportedModelPricing `json:"pricing"`
+	DisplayPricing      *userSupportedModelPricing `json:"display_pricing"`
+	EffectiveMultiplier float64                    `json:"effective_multiplier"`
+	OfficialPricing     *modelPlazaOfficialPricing `json:"official_pricing"`
 }
 
 // modelPlazaGroup 广场分组条目（白名单字段）。
 type modelPlazaGroup struct {
-	ID                 int64             `json:"id"`
-	Name               string            `json:"name"`
-	Description        string            `json:"description"`
-	Platform           string            `json:"platform"`
-	SubscriptionType   string            `json:"subscription_type"`
-	RateMultiplier     float64           `json:"rate_multiplier"`
-	UserRateMultiplier *float64          `json:"user_rate_multiplier,omitempty"`
-	PeakRateEnabled    bool              `json:"peak_rate_enabled"`
-	PeakStart          string            `json:"peak_start"`
-	PeakEnd            string            `json:"peak_end"`
-	PeakRateMultiplier float64           `json:"peak_rate_multiplier"`
-	IsFree             bool              `json:"is_free"`
-	IsExclusive        bool              `json:"is_exclusive"`
-	Models             []modelPlazaModel `json:"models"`
+	ID                           int64             `json:"id"`
+	Name                         string            `json:"name"`
+	Description                  string            `json:"description"`
+	Platform                     string            `json:"platform"`
+	SubscriptionType             string            `json:"subscription_type"`
+	RateMultiplier               float64           `json:"rate_multiplier"`
+	UserRateMultiplier           *float64          `json:"user_rate_multiplier,omitempty"`
+	PeakRateEnabled              bool              `json:"peak_rate_enabled"`
+	PeakStart                    string            `json:"peak_start"`
+	PeakEnd                      string            `json:"peak_end"`
+	PeakRateMultiplier           float64           `json:"peak_rate_multiplier"`
+	AppliedPeakMultiplier        float64           `json:"applied_peak_multiplier"`
+	EffectiveRateMultiplier      float64           `json:"effective_rate_multiplier"`
+	EffectiveImageRateMultiplier float64           `json:"effective_image_rate_multiplier"`
+	IsFree                       bool              `json:"is_free"`
+	IsExclusive                  bool              `json:"is_exclusive"`
+	Models                       []modelPlazaModel `json:"models"`
 }
 
 // modelPlazaResponse 广场页响应。
 type modelPlazaResponse struct {
-	Description string            `json:"description"`
-	Groups      []modelPlazaGroup `json:"groups"`
+	Description              string            `json:"description"`
+	Currency                 string            `json:"currency"`
+	OfficialPricingSource    string            `json:"official_pricing_source"`
+	OfficialPricingUpdatedAt string            `json:"official_pricing_updated_at,omitempty"`
+	Groups                   []modelPlazaGroup `json:"groups"`
 }
 
 // Get 返回模型广场数据。
@@ -125,9 +135,16 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	for i := range visible {
 		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates))
 	}
+	officialUpdatedAt := ""
+	if updatedAt := h.channelService.PlazaOfficialPricingUpdatedAt(); !updatedAt.IsZero() {
+		officialUpdatedAt = updatedAt.UTC().Format(time.RFC3339)
+	}
 	response.Success(c, modelPlazaResponse{
-		Description: rt.Description,
-		Groups:      out,
+		Description:              rt.Description,
+		Currency:                 "USD",
+		OfficialPricingSource:    "LiteLLM",
+		OfficialPricingUpdatedAt: officialUpdatedAt,
+		Groups:                   out,
 	})
 }
 
@@ -154,35 +171,106 @@ func filterPlazaVisibleGroups(
 
 // toModelPlazaGroupDTO 将 service 层广场分组映射为白名单 DTO,并合并用户专属倍率。
 func toModelPlazaGroupDTO(g *service.PlazaGroup, userRates map[int64]float64) modelPlazaGroup {
+	return toModelPlazaGroupDTOAt(g, userRates, time.Now())
+}
+
+func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, now time.Time) modelPlazaGroup {
+	baseMultiplier := g.RateMultiplier
+	if rate, ok := userRates[g.ID]; ok {
+		baseMultiplier = rate
+	}
+	baseMultiplier = validDisplayMultiplier(baseMultiplier)
+	if g.IsFree {
+		baseMultiplier = 0
+	}
+	appliedPeakMultiplier := g.PeakMultiplierAt(now)
+	tokenMultiplier := baseMultiplier * appliedPeakMultiplier
+	imageMultiplier := baseMultiplier
+	if !g.IsFree && g.ImageRateIndependent {
+		imageMultiplier = validDisplayMultiplier(g.ImageRateMultiplier)
+	}
+
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
 		m := &g.Models[i]
+		effectiveMultiplier := baseMultiplier
+		if m.Pricing != nil {
+			switch m.Pricing.BillingMode {
+			case service.BillingModeToken, "":
+				effectiveMultiplier = tokenMultiplier
+			case service.BillingModeImage:
+				effectiveMultiplier = imageMultiplier
+			}
+		}
 		models = append(models, modelPlazaModel{
-			Name:            m.Name,
-			Platform:        m.Platform,
-			Pricing:         toUserPricing(m.Pricing),
-			OfficialPricing: toModelPlazaOfficialPricing(m.OfficialPricing),
+			Name:                m.Name,
+			Platform:            m.Platform,
+			Pricing:             toUserPricing(m.Pricing),
+			DisplayPricing:      toDisplayPricing(m.Pricing, effectiveMultiplier),
+			EffectiveMultiplier: effectiveMultiplier,
+			OfficialPricing:     toModelPlazaOfficialPricing(m.OfficialPricing),
 		})
 	}
 	dto := modelPlazaGroup{
-		ID:                 g.ID,
-		Name:               g.Name,
-		Description:        g.Description,
-		Platform:           g.Platform,
-		SubscriptionType:   g.SubscriptionType,
-		RateMultiplier:     g.RateMultiplier,
-		PeakRateEnabled:    g.PeakRateEnabled,
-		PeakStart:          g.PeakStart,
-		PeakEnd:            g.PeakEnd,
-		PeakRateMultiplier: g.PeakRateMultiplier,
-		IsFree:             g.IsFree,
-		IsExclusive:        g.IsExclusive,
-		Models:             models,
+		ID:                           g.ID,
+		Name:                         g.Name,
+		Description:                  g.Description,
+		Platform:                     g.Platform,
+		SubscriptionType:             g.SubscriptionType,
+		RateMultiplier:               g.RateMultiplier,
+		PeakRateEnabled:              g.PeakRateEnabled,
+		PeakStart:                    g.PeakStart,
+		PeakEnd:                      g.PeakEnd,
+		PeakRateMultiplier:           g.PeakRateMultiplier,
+		AppliedPeakMultiplier:        appliedPeakMultiplier,
+		EffectiveRateMultiplier:      baseMultiplier,
+		EffectiveImageRateMultiplier: imageMultiplier,
+		IsFree:                       g.IsFree,
+		IsExclusive:                  g.IsExclusive,
+		Models:                       models,
 	}
 	if rate, ok := userRates[g.ID]; ok {
 		dto.UserRateMultiplier = &rate
 	}
 	return dto
+}
+
+func validDisplayMultiplier(value float64) float64 {
+	if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+		return 0
+	}
+	return value
+}
+
+func toDisplayPricing(p *service.ChannelModelPricing, multiplier float64) *userSupportedModelPricing {
+	pricing := toUserPricing(p)
+	if pricing == nil {
+		return nil
+	}
+	pricing.InputPrice = scaledPrice(pricing.InputPrice, multiplier)
+	pricing.OutputPrice = scaledPrice(pricing.OutputPrice, multiplier)
+	pricing.CacheWritePrice = scaledPrice(pricing.CacheWritePrice, multiplier)
+	pricing.CacheReadPrice = scaledPrice(pricing.CacheReadPrice, multiplier)
+	pricing.ImageInputPrice = scaledPrice(pricing.ImageInputPrice, multiplier)
+	pricing.ImageOutputPrice = scaledPrice(pricing.ImageOutputPrice, multiplier)
+	pricing.PerRequestPrice = scaledPrice(pricing.PerRequestPrice, multiplier)
+	for i := range pricing.Intervals {
+		interval := &pricing.Intervals[i]
+		interval.InputPrice = scaledPrice(interval.InputPrice, multiplier)
+		interval.OutputPrice = scaledPrice(interval.OutputPrice, multiplier)
+		interval.CacheWritePrice = scaledPrice(interval.CacheWritePrice, multiplier)
+		interval.CacheReadPrice = scaledPrice(interval.CacheReadPrice, multiplier)
+		interval.PerRequestPrice = scaledPrice(interval.PerRequestPrice, multiplier)
+	}
+	return pricing
+}
+
+func scaledPrice(value *float64, multiplier float64) *float64 {
+	if value == nil {
+		return nil
+	}
+	scaled := *value * multiplier
+	return &scaled
 }
 
 // toModelPlazaOfficialPricing 转换官方参考价；nil 透传（前端显示 "-"）。

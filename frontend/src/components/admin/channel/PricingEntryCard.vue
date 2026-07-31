@@ -46,6 +46,12 @@
         <span class="flex-shrink-0 text-xs tabular-nums text-gray-500 dark:text-gray-400">
           {{ priceSummary }}
         </span>
+        <span
+          v-if="showPlazaVisibility && !entry.user_visible"
+          class="flex-shrink-0 rounded bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600 dark:bg-dark-600 dark:text-dark-300"
+        >
+          {{ t('admin.channels.form.hiddenFromModelPlaza') }}
+        </span>
       </div>
 
       <!-- Expanded: show the label "Pricing Entry" or similar -->
@@ -96,12 +102,31 @@
           </div>
         </div>
 
+        <div
+          v-if="showPlazaVisibility"
+          class="mt-3 flex items-center justify-between gap-4 border-y border-gray-200 py-2.5 dark:border-dark-600"
+        >
+          <div class="min-w-0">
+            <p class="text-xs font-medium text-gray-700 dark:text-gray-300">
+              {{ t('admin.channels.form.showInModelPlaza') }}
+            </p>
+            <p class="mt-0.5 text-[11px] text-gray-400 dark:text-dark-500">
+              {{ t('admin.channels.form.showInModelPlazaHint') }}
+            </p>
+          </div>
+          <Toggle
+            :model-value="entry.user_visible"
+            :aria-label="t('admin.channels.form.showInModelPlaza')"
+            @update:model-value="emit('update', { ...entry, user_visible: $event })"
+          />
+        </div>
+
         <!-- Token mode -->
         <div v-if="entry.billing_mode === 'token'">
           <!-- Default prices (fallback when no interval matches) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ t('admin.channels.form.defaultPrices') }}
-            <span class="ml-1 font-normal text-gray-400">￥/MTok</span>
+            <span class="ml-1 font-normal text-gray-400">$/MTok</span>
           </label>
           <div class="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-6">
             <div>
@@ -165,7 +190,7 @@
           <!-- Default per-request price -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ t('admin.channels.form.defaultPerRequestPrice') }}
-            <span class="ml-1 font-normal text-gray-400">￥</span>
+            <span class="ml-1 font-normal text-gray-400">$</span>
           </label>
           <div class="mt-1 w-48">
             <input :value="entry.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
@@ -201,7 +226,7 @@
           <!-- Default image price (per-request, same as per_request mode) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
             {{ t('admin.channels.form.defaultImagePrice') }}
-            <span class="ml-1 font-normal text-gray-400">￥</span>
+            <span class="ml-1 font-normal text-gray-400">$</span>
           </label>
           <div class="mt-1 w-48">
             <input :value="entry.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
@@ -253,6 +278,7 @@
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Select from '@/components/common/Select.vue'
+import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import IntervalRow from './IntervalRow.vue'
 import ModelTagInput from './ModelTagInput.vue'
@@ -263,10 +289,13 @@ import channelsAPI from '@/api/admin/channels'
 
 const { t } = useI18n()
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   entry: PricingFormEntry
   platform?: string
-}>()
+  showPlazaVisibility?: boolean
+}>(), {
+  showPlazaVisibility: true
+})
 
 const emit = defineEmits<{
   update: [entry: PricingFormEntry]
@@ -299,7 +328,7 @@ const priceSummary = computed(() => {
   if (tiers > 0) return t('admin.channels.form.tierCount', { count: tiers })
   return props.entry.per_request_price == null || props.entry.per_request_price === ''
     ? t('admin.channels.form.noPrice')
-    : `￥${props.entry.per_request_price}`
+    : `$${props.entry.per_request_price}`
 })
 
 function emitField(field: keyof PricingFormEntry, value: string) {

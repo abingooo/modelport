@@ -1059,6 +1059,13 @@ func (s *PricingService) GetStatus() map[string]any {
 	}
 }
 
+// LastUpdated 返回当前参考价格数据的更新时间。
+func (s *PricingService) LastUpdated() time.Time {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.lastUpdated
+}
+
 // ForceUpdate 强制更新
 func (s *PricingService) ForceUpdate() error {
 	return s.downloadPricingData()

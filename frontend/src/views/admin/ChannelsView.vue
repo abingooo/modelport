@@ -577,6 +577,7 @@
                       :key="pIdx"
                       :entry="entry"
                       :platform="section.platform"
+                      :show-plaza-visibility="false"
                       @update="rule.pricing.splice(pIdx, 1, $event)"
                       @remove="removeRulePricingEntry(sIdx, ruleIndex, pIdx)"
                     />
@@ -859,6 +860,7 @@ function addPricingEntry(sectionIdx: number) {
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
+    user_visible: true,
     intervals: []
   })
 }
@@ -892,6 +894,7 @@ async function syncLatestModels(sectionIdx: number) {
       image_input_price: null,
       image_output_price: null,
       per_request_price: null,
+      user_visible: true,
       intervals: []
     })
     appStore.showSuccess(t('admin.channels.form.syncModelsSuccess', { count: newModels.length }))
@@ -957,6 +960,7 @@ function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
+    user_visible: false,
     intervals: []
   })
 }
@@ -1073,6 +1077,7 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
             image_input_price: mTokToPerToken(p.image_input_price),
             image_output_price: mTokToPerToken(p.image_output_price),
             per_request_price: p.per_request_price != null && p.per_request_price !== '' ? Number(p.per_request_price) : null,
+            user_visible: false,
             intervals: formIntervalsToAPI(p.intervals || [])
           }))
       })
@@ -1114,6 +1119,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         image_input_price: mTokToPerToken(entry.image_input_price),
         image_output_price: mTokToPerToken(entry.image_output_price),
         per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
+        user_visible: entry.user_visible,
         intervals: formIntervalsToAPI(entry.intervals || [])
       })
     }
@@ -1211,6 +1217,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
         image_input_price: perTokenToMTok(p.image_input_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
+        user_visible: p.user_visible ?? true,
         intervals: apiIntervalsToForm(p.intervals || [])
       } as PricingFormEntry))
 
@@ -1400,6 +1407,7 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
         image_input_price: perTokenToMTok(p.image_input_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
+        user_visible: false,
         intervals: apiIntervalsToForm(p.intervals || [])
       } as PricingFormEntry))
     }

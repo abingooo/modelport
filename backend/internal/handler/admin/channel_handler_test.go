@@ -52,6 +52,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 				CacheWritePrice: float64Ptr(0.005),
 				CacheReadPrice:  float64Ptr(0.002),
 				PerRequestPrice: float64Ptr(0.5),
+				UserVisible:     true,
 			},
 		},
 		ModelMapping: map[string]map[string]string{
@@ -87,6 +88,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 	require.Equal(t, float64Ptr(0.005), p.CacheWritePrice)
 	require.Equal(t, float64Ptr(0.002), p.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.5), p.PerRequestPrice)
+	require.True(t, p.UserVisible)
 	require.Empty(t, p.Intervals)
 }
 
@@ -329,6 +331,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 			CacheReadPrice:   float64Ptr(0.002),
 			ImageOutputPrice: float64Ptr(0.04),
 			PerRequestPrice:  float64Ptr(0.5),
+			UserVisible:      boolPtr(false),
 		},
 	}
 
@@ -344,6 +347,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 	require.Equal(t, float64Ptr(0.002), r.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.04), r.ImageOutputPrice)
 	require.Equal(t, float64Ptr(0.5), r.PerRequestPrice)
+	require.False(t, r.UserVisible)
 }
 
 func TestPricingRequestToService_WithIntervals(t *testing.T) {
@@ -413,6 +417,7 @@ func TestPricingRequestToService_NilPriceFields(t *testing.T) {
 	result := pricingRequestToService(reqs)
 	require.Len(t, result, 1)
 	r := result[0]
+	require.True(t, r.UserVisible, "omitted user_visible must preserve the database default")
 	require.Nil(t, r.InputPrice)
 	require.Nil(t, r.OutputPrice)
 	require.Nil(t, r.CacheWritePrice)

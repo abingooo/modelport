@@ -594,7 +594,7 @@ export default {
   // Model Plaza (public group/model pricing showcase)
   modelPlaza: {
     title: '模型广场',
-    description: '按分组浏览可用模型与价格',
+    description: '集中查看当前账号可用的模型、分组与实际调用价格',
     loading: '加载中...',
     empty: '暂无可展示的分组',
     loadFailed: '加载模型广场失败',
@@ -606,12 +606,41 @@ export default {
       rateLabel: '倍率',
       modelLabel: '模型',
       searchPlaceholder: '搜索模型名称',
-      all: '全部'
+      all: '全部平台',
+      allGroups: '全部分组',
+      billingModeLabel: '计费方式',
+      allBillingModes: '全部计费方式',
+      more: '更多筛选',
+      clear: '清除筛选',
+      resultCount: '{count} 个模型'
     },
     badges: {
       free: '免费',
       exclusive: '专属分组',
-      subscription: '订阅'
+      subscription: '订阅',
+      peak: '峰时价格'
+    },
+    billingModes: {
+      token: '按量计费',
+      per_request: '按次计费',
+      image: '按图片计费'
+    },
+    provider: {
+      modelCount: '{count} 个模型'
+    },
+    card: {
+      group: '可用分组',
+      copyModel: '复制模型名称',
+      copied: '已复制',
+      officialShort: '官方',
+      noOfficialReference: '暂无官方参考价',
+      contextPricing: '{count} 档上下文价格',
+      defaultSpecification: '默认规格',
+      tiered: '阶梯定价'
+    },
+    source: {
+      name: '官方参考价来源：{source}',
+      withDate: '官方参考价：{source} · 更新于 {date}'
     },
     detail: {
       noModels: '该分组暂未配置模型',
@@ -623,8 +652,8 @@ export default {
       input: '输入',
       output: '输出',
       cache: '缓存',
-      cacheWrite: '写入',
-      cacheRead: '读取',
+      cacheWrite: '缓存写入',
+      cacheRead: '缓存读取',
       paidPrice: '实付价格(折后)',
       officialPrice: '官方价格',
       rate: '折扣倍率',

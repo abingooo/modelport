@@ -22,6 +22,9 @@ export interface PlazaModel {
   name: string
   platform: string
   pricing: UserSupportedModelPricing | null
+  /** 后端按当前用户、分组、峰时及图片独立倍率计算后的展示价格。 */
+  display_pricing: UserSupportedModelPricing | null
+  effective_multiplier: number
   official_pricing: PlazaOfficialPricing | null
 }
 
@@ -39,6 +42,9 @@ export interface ModelPlazaGroup {
   peak_start: string
   peak_end: string
   peak_rate_multiplier: number
+  applied_peak_multiplier: number
+  effective_rate_multiplier: number
+  effective_image_rate_multiplier: number
   is_free: boolean
   is_exclusive: boolean
   models: PlazaModel[]
@@ -47,6 +53,9 @@ export interface ModelPlazaGroup {
 export interface ModelPlazaResponse {
   /** 管理员配置的全局价格说明（Markdown）。 */
   description: string
+  currency: string
+  official_pricing_source: string
+  official_pricing_updated_at?: string
   groups: ModelPlazaGroup[]
 }
 
