@@ -21,6 +21,9 @@ export interface PlazaProviderSectionData {
   cards: PlazaModelCardData[]
 }
 
+export const PLAZA_OFFICIAL_GROUP_ID = '__official__' as const
+export type PlazaGroupFilterValue = number | 'all' | typeof PLAZA_OFFICIAL_GROUP_ID
+
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic · Claude',
   openai: 'OpenAI',
@@ -45,6 +48,17 @@ export function plazaProviderLabel(platform: string): string {
 
 export function plazaBillingMode(model: PlazaModel): BillingMode {
   return (model.pricing?.billing_mode || BILLING_MODE_TOKEN) as BillingMode
+}
+
+export function plazaHasOfficialPricing(model: PlazaModel): boolean {
+  if (plazaBillingMode(model) !== BILLING_MODE_TOKEN) return false
+  const pricing = model.official_pricing
+  return Boolean(
+    pricing &&
+      [pricing.input_price, pricing.output_price, pricing.cache_write_price, pricing.cache_read_price].some(
+        (value) => value != null
+      )
+  )
 }
 
 export function buildPlazaProviderSections(groups: ModelPlazaGroup[]): PlazaProviderSectionData[] {

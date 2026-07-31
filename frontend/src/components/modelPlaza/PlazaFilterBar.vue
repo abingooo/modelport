@@ -117,14 +117,19 @@ import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import type { GroupPlatform } from '@/types'
-import { plazaProviderLabel } from './modelPlazaPresentation'
+import {
+  PLAZA_OFFICIAL_GROUP_ID,
+  plazaProviderLabel
+} from './modelPlazaPresentation'
+import type { PlazaGroupFilterValue } from './modelPlazaPresentation'
 
 const props = defineProps<{
   platforms: string[]
   groups: Array<{ id: number; name: string; platforms: string[] }>
   billingModes: string[]
   platform: string
-  groupId: number | 'all'
+  groupId: PlazaGroupFilterValue
+  showOfficialPricing: boolean
   billingMode: string
   search: string
   resultCount: number
@@ -132,7 +137,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:platform': [value: string]
-  'update:groupId': [value: number | 'all']
+  'update:groupId': [value: PlazaGroupFilterValue]
   'update:billingMode': [value: string]
   'update:search': [value: string]
 }>()
@@ -157,6 +162,9 @@ const visibleGroups = computed(() =>
 
 const groupOptions = computed<SelectOption[]>(() => [
   { value: 'all', label: t('modelPlaza.filters.allGroups') },
+  ...(props.showOfficialPricing
+    ? [{ value: PLAZA_OFFICIAL_GROUP_ID, label: t('modelPlaza.card.officialGroup') }]
+    : []),
   ...visibleGroups.value.map((group) => ({ value: group.id, label: group.name }))
 ])
 
@@ -178,7 +186,11 @@ function updatePlatform(value: string | number | boolean | null) {
 }
 
 function updateGroup(value: string | number | boolean | null) {
-  emit('update:groupId', typeof value === 'number' ? value : 'all')
+  if (typeof value === 'number' || value === 'all' || value === PLAZA_OFFICIAL_GROUP_ID) {
+    emit('update:groupId', value)
+    return
+  }
+  emit('update:groupId', 'all')
 }
 
 function updateBillingMode(value: string | number | boolean | null) {

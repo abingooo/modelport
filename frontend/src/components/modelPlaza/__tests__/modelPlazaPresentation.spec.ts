@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
-import { buildPlazaProviderSections, plazaProviderLabel } from '../modelPlazaPresentation'
+import {
+  buildPlazaProviderSections,
+  plazaHasOfficialPricing,
+  plazaProviderLabel
+} from '../modelPlazaPresentation'
 
 function model(name: string, platform: string, multiplier: number): PlazaModel {
   return {
@@ -51,5 +55,18 @@ describe('model plaza presentation', () => {
     expect(plazaProviderLabel('grok')).toBe('xAI · Grok')
     expect(plazaProviderLabel('glm')).toBe('智谱AI · GLM')
     expect(plazaProviderLabel('unknown')).toBe('unknown')
+  })
+
+  it('detects models with official token pricing', () => {
+    const pricedModel = model('gpt-test', 'openai', 1)
+    pricedModel.official_pricing = {
+      input_price: 2.5e-6,
+      output_price: 1.5e-5,
+      cache_write_price: null,
+      cache_read_price: 2.5e-7
+    }
+
+    expect(plazaHasOfficialPricing(pricedModel)).toBe(true)
+    expect(plazaHasOfficialPricing(model('no-price', 'openai', 1))).toBe(false)
   })
 })

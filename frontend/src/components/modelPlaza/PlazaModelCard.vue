@@ -46,6 +46,7 @@
           v-if="groupOptions.length > 1"
           :model-value="selectedGroupId"
           :options="groupOptions"
+          :disabled="officialPricing"
           class="mt-1.5 w-full"
           @update:model-value="selectGroup"
         />
@@ -214,15 +215,19 @@ import { useAppStore } from '@/stores/app'
 import { BILLING_MODE_IMAGE, BILLING_MODE_TOKEN, type BillingMode } from '@/constants/channel'
 import type { GroupPlatform } from '@/types'
 import type { UserPricingInterval } from '@/api/channels'
-import type { PlazaModel, PlazaOfficialPricing } from '@/api/modelPlaza'
 import type { PlazaModelCardData, PlazaModelOffer } from './modelPlazaPresentation'
-import { plazaBillingMode, plazaProviderLabel } from './modelPlazaPresentation'
+import {
+  PLAZA_OFFICIAL_GROUP_ID,
+  plazaBillingMode,
+  plazaHasOfficialPricing,
+  plazaProviderLabel
+} from './modelPlazaPresentation'
 
 const props = defineProps<{
   card: PlazaModelCardData
+  officialPricing?: boolean
 }>()
 
-const OFFICIAL_GROUP_ID = '__official__'
 const { t } = useI18n()
 const appStore = useAppStore()
 const selectedGroupId = ref<number | string>(props.card.offers[0]?.group.id ?? 0)
@@ -233,7 +238,13 @@ let copiedTimer: ReturnType<typeof setTimeout> | null = null
 watch(
   () => props.card.offers.map((offer) => offer.group.id),
   (groupIds) => {
-    if (selectedGroupId.value === OFFICIAL_GROUP_ID && modelHasOfficialPricing(props.card.offers[0]?.model)) return
+    if (
+      selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID &&
+      props.card.offers[0]?.model &&
+      plazaHasOfficialPricing(props.card.offers[0].model)
+    ) {
+      return
+    }
     if (typeof selectedGroupId.value !== 'number' || !groupIds.includes(selectedGroupId.value)) {
       selectedGroupId.value = groupIds[0] ?? 0
     }
@@ -247,8 +258,8 @@ const currentOffer = computed<PlazaModelOffer>(
 const currentGroup = computed(() => currentOffer.value.group)
 const currentModel = computed(() => currentOffer.value.model)
 const displayPricing = computed(() => currentModel.value.display_pricing)
-const isOfficialPricing = computed(() => selectedGroupId.value === OFFICIAL_GROUP_ID)
-const hasOfficialPricing = computed(() => modelHasOfficialPricing(currentModel.value))
+const isOfficialPricing = computed(() => selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID)
+const hasOfficialPricing = computed(() => plazaHasOfficialPricing(currentModel.value))
 const hasDisplayPricing = computed(() =>
   isOfficialPricing.value ? hasOfficialPricing.value : displayPricing.value != null
 )
@@ -260,10 +271,23 @@ const accentStyle = computed(() => ({ '--plaza-accent': platformAccentColor(prop
 const groupOptions = computed<SelectOption[]>(() => {
   const options: SelectOption[] = props.card.offers.map(({ group }) => ({ value: group.id, label: group.name }))
   if (hasOfficialPricing.value) {
-    options.push({ value: OFFICIAL_GROUP_ID, label: t('modelPlaza.card.officialGroup') })
+    options.push({ value: PLAZA_OFFICIAL_GROUP_ID, label: t('modelPlaza.card.officialGroup') })
   }
   return options
 })
+
+watch(
+  () => props.officialPricing,
+  (officialPricing) => {
+    if (officialPricing && hasOfficialPricing.value) {
+      selectedGroupId.value = PLAZA_OFFICIAL_GROUP_ID
+    } else if (!officialPricing && selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID) {
+      selectedGroupId.value = props.card.offers[0]?.group.id ?? 0
+    }
+    intervalsExpanded.value = false
+  },
+  { immediate: true }
+)
 
 const billingModeLabel = computed(() => t(`modelPlaza.billingModes.${billingMode.value}`))
 const isPeakRateActive = computed(
@@ -325,7 +349,7 @@ const perUnitSuffix = computed(() =>
 )
 
 function selectGroup(value: string | number | boolean | null) {
-  if (typeof value === 'number' || value === OFFICIAL_GROUP_ID) {
+  if (typeof value === 'number' || value === PLAZA_OFFICIAL_GROUP_ID) {
     selectedGroupId.value = value
     intervalsExpanded.value = false
   }
@@ -352,20 +376,6 @@ function currentPrice(value: number | null | undefined): string {
 
 function formatPlazaPrice(value: number, scale: number): string {
   return formatScaled(value, scale, 2).replace(/^\$/, '￥')
-}
-
-function modelHasOfficialPricing(model: PlazaModel | undefined): boolean {
-  if (!model || plazaBillingMode(model) !== BILLING_MODE_TOKEN) return false
-  return hasOfficialPriceValue(model.official_pricing)
-}
-
-function hasOfficialPriceValue(pricing: PlazaOfficialPricing | null): boolean {
-  return Boolean(
-    pricing &&
-      [pricing.input_price, pricing.output_price, pricing.cache_write_price, pricing.cache_read_price].some(
-        (value) => value != null
-      )
-  )
 }
 
 function tierLabel(interval: UserPricingInterval): string {

@@ -37,11 +37,12 @@
         :billing-modes="billingModes"
         :platform="selectedPlatform"
         :group-id="selectedGroupId"
+        :show-official-pricing="showOfficialPricing"
         :billing-mode="selectedBillingMode"
         :search="searchQuery"
         :result-count="resultCount"
         @update:platform="selectedPlatform = $event"
-        @update:group-id="selectedGroupId = $event"
+        @update:group-id="selectGroup"
         @update:billing-mode="selectedBillingMode = $event"
         @update:search="searchQuery = $event"
       />
@@ -59,8 +60,13 @@
             <span class="h-px min-w-6 flex-1 bg-gray-200 dark:bg-dark-700"></span>
           </header>
 
-          <div class="grid min-w-0 grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <PlazaModelCard v-for="card in section.cards" :key="card.key" :card="card" />
+          <div class="plaza-model-grid grid min-w-0 items-stretch gap-4">
+            <PlazaModelCard
+              v-for="card in section.cards"
+              :key="card.key"
+              :card="card"
+              :official-pricing="isOfficialGroupSelected"
+            />
           </div>
         </section>
       </div>
@@ -91,10 +97,13 @@ import type { GroupPlatform } from '@/types'
 import type { ModelPlazaResponse } from '@/api/modelPlaza'
 import { useAuthStore } from '@/stores/auth'
 import {
+  PLAZA_OFFICIAL_GROUP_ID,
   buildPlazaProviderSections,
   plazaBillingMode,
+  plazaHasOfficialPricing,
   plazaProviderLabel
 } from './modelPlazaPresentation'
+import type { PlazaGroupFilterValue } from './modelPlazaPresentation'
 
 const props = defineProps<{
   response: ModelPlazaResponse | null
@@ -108,7 +117,7 @@ const authStore = useAuthStore()
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 
 const selectedPlatform = ref('all')
-const selectedGroupId = ref<number | 'all'>('all')
+const selectedGroupId = ref<PlazaGroupFilterValue>('all')
 const selectedBillingMode = ref('all')
 const searchQuery = ref('')
 
@@ -140,22 +149,54 @@ const billingModes = computed(() => {
   return [...new Set(modes)]
 })
 
+const showOfficialPricing = computed(() =>
+  (props.response?.groups ?? []).some((group) =>
+    group.models.some((model) => {
+      const platform = model.platform || group.platform
+      return (
+        (selectedPlatform.value === 'all' || platform === selectedPlatform.value) &&
+        plazaHasOfficialPricing(model)
+      )
+    })
+  )
+)
+const isOfficialGroupSelected = computed(
+  () => selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID
+)
+
 watch(selectedPlatform, (platform) => {
   if (selectedGroupId.value === 'all' || platform === 'all') return
+  if (selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID) {
+    if (!showOfficialPricing.value) selectedGroupId.value = 'all'
+    return
+  }
   const selectedGroup = groupOptions.value.find((group) => group.id === selectedGroupId.value)
   if (!selectedGroup?.platforms.includes(platform)) selectedGroupId.value = 'all'
 })
 
 watch(groupOptions, (groups) => {
-  if (selectedGroupId.value !== 'all' && !groups.some((group) => group.id === selectedGroupId.value)) {
+  if (
+    typeof selectedGroupId.value === 'number' &&
+    !groups.some((group) => group.id === selectedGroupId.value)
+  ) {
+    selectedGroupId.value = 'all'
+  }
+})
+
+watch(showOfficialPricing, (available) => {
+  if (!available && selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID) {
     selectedGroupId.value = 'all'
   }
 })
 
 const filteredGroups = computed(() => {
   const query = searchQuery.value.trim().toLocaleLowerCase()
+  const officialOnly = selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID
   return (props.response?.groups ?? [])
-    .filter((group) => selectedGroupId.value === 'all' || group.id === selectedGroupId.value)
+    .filter(
+      (group) =>
+        selectedGroupId.value === 'all' || officialOnly || group.id === selectedGroupId.value
+    )
     .map((group) => {
       const groupMatches = [group.name, group.description, plazaProviderLabel(group.platform)]
         .join(' ')
@@ -163,6 +204,7 @@ const filteredGroups = computed(() => {
         .includes(query)
       const models = group.models.filter((model) => {
         const platform = model.platform || group.platform
+        if (officialOnly && !plazaHasOfficialPricing(model)) return false
         if (selectedPlatform.value !== 'all' && platform !== selectedPlatform.value) return false
         if (selectedBillingMode.value !== 'all' && plazaBillingMode(model) !== selectedBillingMode.value) return false
         if (!query || groupMatches) return true
@@ -185,6 +227,11 @@ const filtersActive = computed(
     searchQuery.value.trim() !== ''
 )
 
+function selectGroup(value: PlazaGroupFilterValue) {
+  selectedGroupId.value = value
+  if (value === PLAZA_OFFICIAL_GROUP_ID) selectedBillingMode.value = 'token'
+}
+
 const pricingSourceLabel = computed(() => {
   const response = props.response
   if (!response?.official_pricing_source) return ''
@@ -203,6 +250,10 @@ const pricingSourceLabel = computed(() => {
 .plaza-description {
   line-height: 1.7;
   overflow-wrap: anywhere;
+}
+
+.plaza-model-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
 }
 
 .plaza-description :deep(h1),

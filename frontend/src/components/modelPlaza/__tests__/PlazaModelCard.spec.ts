@@ -75,11 +75,11 @@ function group(id: number, name: string, isFree = false): ModelPlazaGroup {
   }
 }
 
-function mountCard(card: PlazaModelCardData) {
+function mountCard(card: PlazaModelCardData, officialPricing = false) {
   const pinia = createPinia()
   setActivePinia(pinia)
   return mount(PlazaModelCard, {
-    props: { card },
+    props: { card, officialPricing },
     global: {
       plugins: [pinia],
       stubs: {
@@ -149,6 +149,30 @@ describe('PlazaModelCard', () => {
     expect(wrapper.text()).not.toContain('0x')
   })
 
+  it('follows the globally selected official pricing group', async () => {
+    const wrapper = mountCard(
+      {
+        key: 'grok:grok-4.3',
+        name: 'grok-4.3',
+        platform: 'grok',
+        offers: [{ group: group(1, 'Paid'), model: model(pricing()) }]
+      },
+      true
+    )
+    await nextTick()
+
+    const groupSelect = wrapper.findComponent(Select)
+    expect(groupSelect.props('modelValue')).toBe('__official__')
+    expect(groupSelect.props('disabled')).toBe(true)
+    expect(wrapper.text()).toContain('￥0.05')
+    expect(wrapper.text()).toContain('modelPlaza.card.officialReferenceHint')
+
+    await wrapper.setProps({ officialPricing: false })
+    await nextTick()
+    expect(groupSelect.props('modelValue')).toBe(1)
+    expect(wrapper.text()).not.toContain('￥0.05')
+  })
+
   it('renders image specifications as per-image price rows', () => {
     const imagePricing = pricing({
       billing_mode: 'image',
@@ -176,6 +200,7 @@ describe('PlazaModelCard', () => {
     expect(wrapper.text()).toContain('￥0.12')
     expect(wrapper.text()).not.toContain('$')
     expect(wrapper.text()).toContain('modelPlaza.table.perUnitImage')
+    expect(wrapper.findComponent(Select).exists()).toBe(false)
   })
 
   it('renders per-request pricing with the renminbi symbol', () => {
