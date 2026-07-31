@@ -103,7 +103,7 @@
         <div class="ml-auto hidden items-center gap-3 text-xs text-gray-400 lg:flex dark:text-dark-500">
           <span>{{ t('modelPlaza.filters.resultCount', { count: resultCount }) }}</span>
           <span class="h-4 w-px bg-gray-200 dark:bg-dark-700"></span>
-          <span class="whitespace-nowrap font-medium text-gray-500 dark:text-dark-300">USD · $ / 1M tokens</span>
+          <span class="whitespace-nowrap font-medium text-gray-500 dark:text-dark-300">CNY · ￥ / 1M tokens</span>
         </div>
       </div>
     </div>

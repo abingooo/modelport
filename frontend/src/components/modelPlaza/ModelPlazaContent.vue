@@ -59,7 +59,7 @@
             <span class="h-px min-w-6 flex-1 bg-gray-200 dark:bg-dark-700"></span>
           </header>
 
-          <div class="grid min-w-0 grid-cols-1 items-stretch gap-4 md:grid-cols-2 2xl:grid-cols-3">
+          <div class="grid min-w-0 grid-cols-1 items-stretch gap-4 md:grid-cols-2 xl:grid-cols-4">
             <PlazaModelCard v-for="card in section.cards" :key="card.key" :card="card" />
           </div>
         </section>

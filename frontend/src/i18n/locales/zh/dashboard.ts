@@ -629,7 +629,10 @@ export default {
       modelCount: '{count} 个模型'
     },
     card: {
-      group: '可用分组',
+      group: '价格分组',
+      officialGroup: '官方价格',
+      officialReference: '官方参考价',
+      officialReferenceHint: '仅供价格参考，实际扣费以可用分组为准',
       copyModel: '复制模型名称',
       copied: '已复制',
       officialShort: '官方',
@@ -657,7 +660,7 @@ export default {
       paidPrice: '实付价格(折后)',
       officialPrice: '官方价格',
       rate: '折扣倍率',
-      unitPerMillion: '$ / 1M token',
+      unitPerMillion: '￥ / 1M token',
       perUnitRequest: '/ 次',
       perUnitImage: '/ 张',
       perRequest: '按次计费',

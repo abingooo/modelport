@@ -141,7 +141,7 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	}
 	response.Success(c, modelPlazaResponse{
 		Description:              rt.Description,
-		Currency:                 "USD",
+		Currency:                 "CNY",
 		OfficialPricingSource:    "LiteLLM",
 		OfficialPricingUpdatedAt: officialUpdatedAt,
 		Groups:                   out,

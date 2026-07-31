@@ -624,7 +624,10 @@ export default {
       modelCount: '{count} models'
     },
     card: {
-      group: 'Available group',
+      group: 'Pricing group',
+      officialGroup: 'Official price',
+      officialReference: 'Official reference',
+      officialReferenceHint: 'For reference only. Actual billing follows the selected available group.',
       copyModel: 'Copy model name',
       copied: 'Copied',
       officialShort: 'Official',
@@ -652,7 +655,7 @@ export default {
       paidPrice: 'Your Price (Discounted)',
       officialPrice: 'Official Price',
       rate: 'Rate',
-      unitPerMillion: '$ / 1M tokens',
+      unitPerMillion: '￥ / 1M tokens',
       perUnitRequest: '/ request',
       perUnitImage: '/ image',
       perRequest: 'Per request',

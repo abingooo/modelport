@@ -93,7 +93,7 @@ function mountCard(card: PlazaModelCardData) {
 describe('PlazaModelCard', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('renders the four authoritative display prices without multiplying again', () => {
+  it('renders actual group prices and switches to the official virtual group', async () => {
     const paidGroup = group(1, 'grok(测试)')
     const paidModel = model(pricing())
     const wrapper = mountCard({
@@ -104,12 +104,29 @@ describe('PlazaModelCard', () => {
     })
 
     const text = wrapper.text()
-    expect(text).toContain('$0.0125')
-    expect(text).toContain('$0.025')
+    expect(text).toContain('￥0.0125')
+    expect(text).toContain('￥0.025')
     expect(text).toContain('modelPlaza.badges.free')
-    expect(text).toContain('$0.002')
-    expect(wrapper.findAll('.price-grid > div')[2].text()).not.toContain('$0.00')
-    expect(text).not.toContain('$0.00625')
+    expect(text).toContain('￥0.002')
+    expect(wrapper.findAll('.price-grid > div')[2].text()).not.toContain('￥0.00')
+    expect(text).not.toContain('￥0.00625')
+    expect(text).not.toContain('￥0.05')
+    expect(text).not.toContain('$')
+
+    const groupSelect = wrapper.findComponent(Select)
+    expect(groupSelect.props('options')).toContainEqual({
+      value: '__official__',
+      label: 'modelPlaza.card.officialGroup'
+    })
+    groupSelect.vm.$emit('update:modelValue', '__official__')
+    await nextTick()
+
+    const officialText = wrapper.text()
+    expect(officialText).toContain('￥0.025')
+    expect(officialText).toContain('￥0.05')
+    expect(officialText).toContain('￥0.004')
+    expect(officialText).toContain('modelPlaza.card.officialReferenceHint')
+    expect(officialText).not.toContain('$')
   })
 
   it('switches group-specific pricing and displays free instead of 1x', async () => {
@@ -154,9 +171,33 @@ describe('PlazaModelCard', () => {
     })
 
     expect(wrapper.text()).toContain('1K')
-    expect(wrapper.text()).toContain('$0.04')
+    expect(wrapper.text()).toContain('￥0.04')
     expect(wrapper.text()).toContain('4K')
-    expect(wrapper.text()).toContain('$0.12')
+    expect(wrapper.text()).toContain('￥0.12')
+    expect(wrapper.text()).not.toContain('$')
     expect(wrapper.text()).toContain('modelPlaza.table.perUnitImage')
+  })
+
+  it('renders per-request pricing with the renminbi symbol', () => {
+    const requestPricing = pricing({
+      billing_mode: 'per_request',
+      input_price: null,
+      output_price: null,
+      cache_write_price: null,
+      cache_read_price: null,
+      per_request_price: 0.05
+    })
+    const requestModel = model(requestPricing)
+    requestModel.pricing = requestPricing
+    const wrapper = mountCard({
+      key: 'grok:request',
+      name: 'grok-request',
+      platform: 'grok',
+      offers: [{ group: group(1, 'Request'), model: requestModel }]
+    })
+
+    expect(wrapper.text()).toContain('￥0.05')
+    expect(wrapper.text()).toContain('modelPlaza.table.perUnitRequest')
+    expect(wrapper.text()).not.toContain('$')
   })
 })
