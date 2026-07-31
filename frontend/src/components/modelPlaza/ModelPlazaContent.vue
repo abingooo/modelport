@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-5">
+  <div class="space-y-5" :class="{ 'model-plaza-content-public': !embedded }">
     <div v-if="!embedded" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <h1 class="text-2xl font-bold text-gray-950 dark:text-white sm:text-3xl">{{ t('modelPlaza.title') }}</h1>
@@ -62,7 +62,13 @@
             <span class="h-px min-w-6 flex-1 bg-gray-200 dark:bg-dark-700"></span>
           </header>
 
-          <div class="plaza-model-grid grid min-w-0 items-stretch gap-4">
+          <div
+            class="plaza-model-grid grid min-w-0 items-stretch gap-4"
+            :class="{
+              'plaza-model-grid-public': !embedded,
+              'plaza-model-grid-public-sparse': !embedded && section.cards.length < 4
+            }"
+          >
             <PlazaModelCard
               v-for="card in section.cards"
               :key="card.key"
@@ -335,6 +341,15 @@ const pricingSourceLabel = computed(() => {
 
 .plaza-model-grid {
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 17rem), 1fr));
+}
+
+.plaza-model-grid-public {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+}
+
+.plaza-model-grid-public-sparse {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 26rem));
+  justify-content: start;
 }
 
 .plaza-description :deep(h1),

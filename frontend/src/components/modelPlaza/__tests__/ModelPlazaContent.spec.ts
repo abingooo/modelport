@@ -106,4 +106,30 @@ describe('ModelPlazaContent', () => {
     await nextTick()
     expect(filterBar.props('groupId')).toBe(82)
   })
+
+  it('applies the wide public grid only outside the embedded dashboard', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(ModelPlazaContent, {
+      props: { response, loading: false },
+      global: {
+        plugins: [pinia],
+        stubs: {
+          Icon: { template: '<i />' },
+          PlatformIcon: { template: '<i />' },
+          PlazaModelCard: { template: '<article />' }
+        }
+      }
+    })
+
+    expect(wrapper.classes()).toContain('model-plaza-content-public')
+    expect(wrapper.findAll('.plaza-model-grid-public')).toHaveLength(2)
+    expect(wrapper.findAll('.plaza-model-grid-public-sparse')).toHaveLength(2)
+
+    await wrapper.setProps({ embedded: true })
+
+    expect(wrapper.classes()).not.toContain('model-plaza-content-public')
+    expect(wrapper.find('.plaza-model-grid-public').exists()).toBe(false)
+    expect(wrapper.find('.plaza-model-grid-public-sparse').exists()).toBe(false)
+  })
 })
