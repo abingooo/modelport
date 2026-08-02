@@ -17,7 +17,6 @@ export interface IntervalFormEntry {
 
 export interface PricingFormEntry {
   models: string[]
-	user_visible: boolean
   billing_mode: BillingMode
   input_price: number | string | null
   output_price: number | string | null
@@ -26,10 +25,11 @@ export interface PricingFormEntry {
   image_input_price: number | string | null
   image_output_price: number | string | null
   per_request_price: number | string | null
+  user_visible: boolean
   intervals: IntervalFormEntry[]
 }
 
-// 价格转换：后端存 per-token，前端显示 per-MTok (￥/1M tokens)
+// 价格转换：后端存 per-token，前端显示 per-MTok ($/1M tokens)
 const MTOK = 1_000_000
 
 export function toNullableNumber(val: number | string | null | undefined): number | null {
@@ -38,13 +38,13 @@ export function toNullableNumber(val: number | string | null | undefined): numbe
   return isNaN(num) ? null : num
 }
 
-/** 前端显示值(￥/MTok) → 后端存储值(per-token) */
+/** 前端显示值($/MTok) → 后端存储值(per-token) */
 export function mTokToPerToken(val: number | string | null | undefined): number | null {
   const num = toNullableNumber(val)
   return num === null ? null : parseFloat((num / MTOK).toPrecision(10))
 }
 
-/** 后端存储值(per-token) → 前端显示值(￥/MTok) */
+/** 后端存储值(per-token) → 前端显示值($/MTok) */
 export function perTokenToMTok(val: number | null | undefined): number | null {
   if (val === null || val === undefined) return null
   // toPrecision(10) 消除 IEEE 754 浮点乘法精度误差，如 5e-8 * 1e6 = 0.04999...96 → 0.05

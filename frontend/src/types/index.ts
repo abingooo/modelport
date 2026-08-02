@@ -135,6 +135,53 @@ export interface AffiliateInvitee {
   total_rebate: number
 }
 
+export interface AffiliateRegistrationRewardConfig {
+  enabled: boolean
+  default_inviter_enabled: boolean
+  default_inviter_user_id: number
+  inviter_bonus: number
+  invitee_trial_amount: number
+  invitee_trial_group_id: number
+  invitee_trial_days: number
+}
+
+export interface AffiliateFirstRechargeRewardConfig {
+  enabled: boolean
+  inviter_bonus: number
+  invitee_bonus_percent: number
+}
+
+export interface AffiliateRewardProgramConfig {
+  version: number
+  enabled: boolean
+  legacy_approval_cutoff?: string | null
+  registration: AffiliateRegistrationRewardConfig
+  first_recharge: AffiliateFirstRechargeRewardConfig
+}
+
+export interface AffiliateRewardInvitee {
+  user_id: number
+  email_masked: string
+  registered_at: string
+  registration_status: string
+  registration_reward_status: string
+  registration_reward_amount: number
+  first_recharge_status: string
+  first_recharge_reward_status: string
+  first_recharge_reward_amount: number
+  updated_at?: string | null
+}
+
+export interface AffiliateRewardDashboard {
+  program: AffiliateRewardProgramConfig
+  paid_amount: number
+  pending_amount: number
+  rejected_amount: number
+  invited_users: number
+  first_recharge_users: number
+  invitees: AffiliateRewardInvitee[]
+}
+
 export interface UserAffiliateDetail {
   user_id: number
   aff_code: string
@@ -146,6 +193,7 @@ export interface UserAffiliateDetail {
   /** 当前用户作为邀请人时实际生效的返利比例（专属覆盖全局）。0-100。 */
   effective_rebate_rate_percent: number
   invitees: AffiliateInvitee[]
+  reward_program?: AffiliateRewardDashboard | null
 }
 
 export interface AffiliateTransferResponse {
@@ -201,6 +249,7 @@ export interface PublicSettings {
   login_agreement_revision?: string
   login_agreement_documents?: LoginAgreementDocument[]
   turnstile_enabled: boolean
+  passkey_enabled?: boolean
   turnstile_site_key: string
   site_name: string
   site_logo: string
@@ -238,6 +287,8 @@ export interface PublicSettings {
   channel_monitor_enabled: boolean
   channel_monitor_default_interval_seconds: number
   available_channels_enabled: boolean
+  model_plaza_enabled: boolean
+  model_plaza_require_auth: boolean
   service_quota_enabled: boolean
   affiliate_enabled: boolean
   allow_user_view_error_requests?: boolean

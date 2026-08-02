@@ -384,11 +384,136 @@ export default {
     },
 
     affiliates: {
+      reviewsDescription: 'Review fixed rewards created by invited signups and first top-ups',
       invitesDescription: 'View site-wide inviter and invitee relationships',
       rebatesDescription: 'View recharge orders that generated affiliate rebates',
       transfersDescription: 'View affiliate quota transfers into account balance',
       errors: {
         loadFailed: 'Failed to load affiliate records'
+      },
+      reviews: {
+        empty: 'No reward reviews match the current filters',
+        approve: 'Approve',
+        reject: 'Reject',
+        unsupported: 'Legacy Type',
+        unsupportedApprove: 'Unknown legacy reward types cannot be issued automatically, but may be rejected',
+        legacyProtected: 'Legacy Protected',
+        legacyProtectedApprove: 'This record predates the legacy payout boundary and may be retained or rejected, but not issued automatically',
+        order: 'Order #{id}',
+        stats: {
+          pending: 'Pending',
+          attention: 'Needs Attention',
+          paid: 'Total Paid',
+          today: 'Paid Today'
+        },
+        filters: {
+          search: 'Search rewards',
+          searchPlaceholder: 'Review, order, user ID, or email',
+          pendingReview: 'Pending Review',
+          final: 'Completed',
+          allTypes: 'All reward types',
+          allRisk: 'All risk levels',
+          attention: 'Needs attention only'
+        },
+        columns: {
+          review: 'Review',
+          event: 'Reward Event',
+          relationship: 'Invite Relationship',
+          reward: 'Beneficiary & Amount',
+          risk: 'Risk',
+          status: 'Status',
+          actions: 'Actions'
+        },
+        types: {
+          invite_register_invitee_pro_trial_card: 'Invitee Signup Trial',
+          invite_register_invitee_bonus: 'Invitee Signup Balance',
+          invite_register_inviter_bonus: 'Inviter Signup Reward',
+          first_recharge_invitee_bonus: 'Invitee First Top-up Reward',
+          first_recharge_inviter_bonus: 'Inviter First Top-up Reward',
+          limited_recharge_bonus: 'Limited Top-up Reward'
+        },
+        status: {
+          pending: 'Pending',
+          approved: 'Processing',
+          paid: 'Paid',
+          rejected: 'Rejected'
+        },
+        risk: {
+          low: 'Low Risk',
+          medium: 'Medium Risk',
+          high: 'High Risk',
+          unknown: 'Unconfirmed'
+        },
+        riskDialog: {
+          title: 'Risk Snapshot #{id}',
+          score: 'Risk score {score}'
+        },
+        detailDialog: {
+          title: 'Reward Review #{id}',
+          inviter: 'Inviter',
+          invitee: 'Invitee',
+          beneficiary: 'Beneficiary',
+          amount: 'Reward Amount / Benefit Value',
+          order: 'Source Order',
+          registrationIp: 'Registration IP',
+          note: 'Review Note'
+        },
+        confirm: {
+          approveTitle: 'Approve Reward',
+          rejectTitle: 'Reject Reward',
+          groupNotice: 'Both sides of the same signup or top-up event are processed together. This action cannot be reversed.',
+          note: 'Review Note',
+          notePlaceholder: 'Record the decision basis; required when rejecting',
+          approveSuccess: 'Reward approved and issued',
+          rejectSuccess: 'Reward rejected'
+        },
+        program: {
+          action: 'Reward Rules',
+          title: 'Affiliate Reward Rules',
+          master: 'Enable Fixed Reward Program',
+          masterHint: 'When disabled, no new signup or first top-up reviews are created. Historical data remains unchanged.',
+          registration: 'Invited Signup Reward',
+          registrationHint: 'Configure inviter balance and invitee trial benefits',
+          defaultInviter: 'Bind a Default Inviter Without a Code',
+          defaultInviterHint: 'An explicit affiliate code always takes priority; otherwise the specified user is bound automatically',
+          defaultInviterUserId: 'Default Inviter User ID',
+          firstRecharge: 'Invitee First Top-up Reward',
+          firstRechargeHint: 'Triggered once by the first completed balance top-up',
+          inviterBonus: 'Inviter Balance Reward',
+          trialAmount: 'Trial Benefit Value',
+          trialGroup: 'Trial Group',
+          trialDays: 'Validity Days',
+          inviteePercent: 'Invitee Paid Amount Reward (%)',
+          saved: 'Affiliate reward rules saved',
+          saveFailed: 'Failed to save affiliate reward rules'
+        },
+        riskKeys: {
+          source: 'Risk Source',
+          risk_level: 'Risk Level',
+          risk_score: 'Risk Score',
+          reasons: 'Matched Reasons',
+          admin_inviter: 'Admin Inviter',
+          registration_ip_captured: 'Registration IP Captured',
+          registration_ip: 'Registration IP',
+          registration_ip_first_seen_at: 'First Captured At',
+          registration_ip_24h_users: 'Same-IP Users in 24h',
+          registration_ip_total_users: 'Same-IP Users Total',
+          inviter_invites_24h: 'Inviter Signups in 24h',
+          inviter_total_invites: 'Inviter Signups Total',
+          inviter_paid_invitees: 'Paid Invitees',
+          inviter_rejected_rewards: 'Rejected Rewards',
+          minutes_to_first_recharge: 'Minutes to First Top-up',
+          pay_amount: 'Amount Paid',
+          credited_quota: 'Credited Quota',
+          duplicate_payment_trade_no: 'Duplicate Payment Trade Number',
+          benefit: 'Benefit Type',
+          group_id: 'Group ID',
+          quota_amount: 'Reward Quota',
+          validity_days: 'Validity Days',
+          bonus_percent: 'Reward Percentage',
+          program_version: 'Program Version',
+          sync_with: 'Linked Reward'
+        }
       },
       records: {
         search: 'Search',

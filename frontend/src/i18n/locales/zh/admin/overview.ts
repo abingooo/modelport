@@ -384,11 +384,136 @@ export default {
     },
 
     affiliates: {
+      reviewsDescription: '审核邀请注册与好友首充产生的固定奖励',
       invitesDescription: '查看全站邀请关系和被邀请用户累计返利',
       rebatesDescription: '查看每一笔产生返利的充值订单',
       transfersDescription: '查看返利额度转入账户余额的提取流水',
       errors: {
         loadFailed: '加载邀请返利记录失败'
+      },
+      reviews: {
+        empty: '当前筛选条件下没有奖励审核单',
+        approve: '通过',
+        reject: '拒绝',
+        unsupported: '历史类型',
+        unsupportedApprove: '未知历史奖励类型不能自动发放，但可以拒绝',
+        legacyProtected: '历史保护',
+        legacyProtectedApprove: '该记录早于原系统发放边界，只能保留或拒绝，不能自动发放',
+        order: '订单 #{id}',
+        stats: {
+          pending: '待处理',
+          attention: '需关注',
+          paid: '累计发放',
+          today: '今日发放'
+        },
+        filters: {
+          search: '搜索奖励',
+          searchPlaceholder: '审核单、订单、用户 ID 或邮箱',
+          pendingReview: '待审核',
+          final: '已完成',
+          allTypes: '全部奖励类型',
+          allRisk: '全部风险等级',
+          attention: '仅需关注'
+        },
+        columns: {
+          review: '审核单',
+          event: '奖励事件',
+          relationship: '邀请关系',
+          reward: '受益人与金额',
+          risk: '风险',
+          status: '状态',
+          actions: '操作'
+        },
+        types: {
+          invite_register_invitee_pro_trial_card: '好友注册体验权益',
+          invite_register_invitee_bonus: '好友注册余额奖励',
+          invite_register_inviter_bonus: '邀请人注册奖励',
+          first_recharge_invitee_bonus: '好友首充奖励',
+          first_recharge_inviter_bonus: '邀请人首充奖励',
+          limited_recharge_bonus: '限时充值奖励'
+        },
+        status: {
+          pending: '待审核',
+          approved: '发放中',
+          paid: '已发放',
+          rejected: '已拒绝'
+        },
+        risk: {
+          low: '低风险',
+          medium: '中风险',
+          high: '高风险',
+          unknown: '待确认'
+        },
+        riskDialog: {
+          title: '风险快照 #{id}',
+          score: '风险分 {score}'
+        },
+        detailDialog: {
+          title: '奖励审核单 #{id}',
+          inviter: '邀请人',
+          invitee: '被邀请人',
+          beneficiary: '奖励受益人',
+          amount: '奖励金额 / 权益价值',
+          order: '来源订单',
+          registrationIp: '注册 IP',
+          note: '审核备注'
+        },
+        confirm: {
+          approveTitle: '确认发放奖励',
+          rejectTitle: '确认拒绝奖励',
+          groupNotice: '同一注册或首充事件的双方奖励将成组处理，操作不可反向撤销。',
+          note: '审核备注',
+          notePlaceholder: '记录判断依据；拒绝时必填',
+          approveSuccess: '奖励已审核并发放',
+          rejectSuccess: '奖励已拒绝'
+        },
+        program: {
+          action: '奖励规则',
+          title: '邀请奖励规则',
+          master: '启用固定奖励计划',
+          masterHint: '关闭后不再生成新的注册和首充审核单，历史数据保持不变',
+          registration: '邀请注册奖励',
+          registrationHint: '配置邀请人余额奖励与好友体验权益',
+          defaultInviter: '无返利码时绑定默认邀请人',
+          defaultInviterHint: '注册请求提供返利码时始终优先使用返利码；未提供时自动绑定指定用户',
+          defaultInviterUserId: '默认邀请人用户 ID',
+          firstRecharge: '好友首充奖励',
+          firstRechargeHint: '仅首笔已完成的余额充值触发一次',
+          inviterBonus: '邀请人余额奖励',
+          trialAmount: '体验权益价值',
+          trialGroup: '体验分组',
+          trialDays: '有效天数',
+          inviteePercent: '好友实付返奖比例（%）',
+          saved: '邀请奖励规则已保存',
+          saveFailed: '保存邀请奖励规则失败'
+        },
+        riskKeys: {
+          source: '风控来源',
+          risk_level: '风险等级',
+          risk_score: '风险分',
+          reasons: '命中原因',
+          admin_inviter: '管理员邀请人',
+          registration_ip_captured: '已采集注册 IP',
+          registration_ip: '注册 IP',
+          registration_ip_first_seen_at: '首次采集时间',
+          registration_ip_24h_users: '同 IP 24 小时用户数',
+          registration_ip_total_users: '同 IP 累计用户数',
+          inviter_invites_24h: '邀请人 24 小时邀请数',
+          inviter_total_invites: '邀请人累计邀请数',
+          inviter_paid_invitees: '已充值好友数',
+          inviter_rejected_rewards: '历史拒绝奖励数',
+          minutes_to_first_recharge: '注册至首充分钟数',
+          pay_amount: '实付金额',
+          credited_quota: '到账额度',
+          duplicate_payment_trade_no: '重复支付流水号',
+          benefit: '权益类型',
+          group_id: '分组 ID',
+          quota_amount: '奖励额度',
+          validity_days: '有效天数',
+          bonus_percent: '奖励比例',
+          program_version: '规则版本',
+          sync_with: '关联奖励'
+        }
       },
       records: {
         search: '搜索',

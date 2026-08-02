@@ -61,7 +61,7 @@
  *
  * const flagAvailableChannels = makeSidebarFlag(FeatureFlags.availableChannels)
  * // ...
- * { path: '/model-pricing', label: ..., featureFlag: flagAvailableChannels }
+ * { path: '/available-channels', label: ..., featureFlag: flagAvailableChannels }
  * ```
  *
  * `isFeatureFlagEnabled(flag)` returns the resolved boolean (`true` = show).
@@ -103,6 +103,11 @@ export const FeatureFlags = {
     key: 'available_channels_enabled',
     mode: 'opt-in',
     label: 'Available Channels',
+  }),
+  modelPlaza: defineFlag({
+    key: 'model_plaza_enabled',
+    mode: 'opt-in',
+    label: 'Model Plaza',
   }),
   payment: defineFlag({
     key: 'payment_enabled',

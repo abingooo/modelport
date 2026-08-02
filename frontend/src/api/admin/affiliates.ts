@@ -5,7 +5,7 @@
  */
 
 import { apiClient } from '../client'
-import type { PaginatedResponse } from '@/types'
+import type { AffiliateRewardProgramConfig, PaginatedResponse } from '@/types'
 
 export interface AffiliateAdminEntry {
   user_id: number
@@ -107,6 +107,64 @@ export interface SimpleUser {
   id: number
   email: string
   username: string
+}
+
+export type AffiliateRewardStatus = 'pending' | 'approved' | 'rejected' | 'paid'
+
+export interface AffiliateRewardReview {
+  id: number
+  inviter_user_id: number
+  invitee_user_id: number
+  reward_user_id: number
+  reward_type: string
+  reward_amount: number
+  payment_order_id?: number | null
+  status: AffiliateRewardStatus | string
+  risk_flags: Record<string, unknown>
+  risk_level: 'low' | 'medium' | 'high' | 'unknown' | string
+  risk_score: number
+  reviewed_by?: number | null
+  reviewed_at?: string | null
+  review_note: string
+  paid_at?: string | null
+  created_at: string
+  updated_at: string
+  inviter_email: string
+  invitee_email: string
+  reward_user_email: string
+  reviewed_by_email: string
+  order_amount?: number | null
+  order_pay_amount?: number | null
+  order_status: string
+  registration_ip: string
+  registration_ip_first_seen_at?: string | null
+  approval_blocked_reason?: string
+}
+
+export interface AffiliateRewardReviewStats {
+  pending_count: number
+  pending_amount: number
+  paid_count: number
+  paid_amount: number
+  rejected_count: number
+  high_risk_pending_count: number
+  today_paid_count: number
+  by_type: Record<string, unknown>
+}
+
+export interface ListAffiliateRewardReviewsParams {
+  page?: number
+  page_size?: number
+  search?: string
+  status?: string
+  reward_type?: string
+  risk?: string
+}
+
+export interface AffiliateRewardReviewResult {
+  review_ids: number[]
+  status: string
+  effects: Array<{ user_id: number; kind: string; group_id?: number }>
 }
 
 export async function listUsers(
@@ -215,6 +273,40 @@ export async function getUserOverview(
   return data
 }
 
+export async function getRewardProgram(): Promise<AffiliateRewardProgramConfig> {
+  const { data } = await apiClient.get<AffiliateRewardProgramConfig>('/admin/affiliates/reward-program')
+  return data
+}
+
+export async function updateRewardProgram(config: AffiliateRewardProgramConfig): Promise<AffiliateRewardProgramConfig> {
+  const { data } = await apiClient.put<AffiliateRewardProgramConfig>('/admin/affiliates/reward-program', config)
+  return data
+}
+
+export async function listRewardReviews(
+  params: ListAffiliateRewardReviewsParams = {},
+): Promise<PaginatedResponse<AffiliateRewardReview>> {
+  const { data } = await apiClient.get<PaginatedResponse<AffiliateRewardReview>>('/admin/affiliates/reviews', { params })
+  return data
+}
+
+export async function getRewardReviewStats(): Promise<AffiliateRewardReviewStats> {
+  const { data } = await apiClient.get<AffiliateRewardReviewStats>('/admin/affiliates/reviews/stats')
+  return data
+}
+
+export async function reviewReward(
+  reviewId: number,
+  action: 'approve' | 'reject',
+  note = '',
+): Promise<AffiliateRewardReviewResult> {
+  const { data } = await apiClient.post<AffiliateRewardReviewResult>(
+    `/admin/affiliates/reviews/${reviewId}/${action}`,
+    { note },
+  )
+  return data
+}
+
 export const affiliatesAPI = {
   listUsers,
   lookupUsers,
@@ -225,6 +317,11 @@ export const affiliatesAPI = {
   listRebateRecords,
   listTransferRecords,
   getUserOverview,
+  getRewardProgram,
+  updateRewardProgram,
+  listRewardReviews,
+  getRewardReviewStats,
+  reviewReward,
 }
 
 export default affiliatesAPI

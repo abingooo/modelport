@@ -34,8 +34,8 @@
         </router-link>
 
         <div class="nav-actions">
-          <router-link to="/model-pricing" class="nav-control pricing-link">
-            {{ t('home.modelPricing') }}
+          <router-link to="/available-channels" class="nav-control pricing-link">
+            {{ t('nav.availableChannels') }}
           </router-link>
           <div class="locale-control"><LocaleSwitcher /></div>
           <button
@@ -87,8 +87,8 @@
                 {{ t('home.getStarted') }}
                 <Icon name="arrowRight" size="sm" :stroke-width="2" />
               </router-link>
-              <router-link to="/model-pricing" class="secondary-action">
-                {{ t('home.modelPricing') }}
+              <router-link to="/available-channels" class="secondary-action">
+                {{ t('nav.availableChannels') }}
               </router-link>
             </div>
           </div>

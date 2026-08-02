@@ -7,6 +7,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -238,6 +239,92 @@ func (h *AffiliateHandler) ListTransferRecords(c *gin.Context) {
 		return
 	}
 	response.Paginated(c, items, total, filter.Page, filter.PageSize)
+}
+
+func (h *AffiliateHandler) GetRewardProgram(c *gin.Context) {
+	response.Success(c, h.affiliateService.AdminGetAffiliateRewardProgram(c.Request.Context()))
+}
+
+func (h *AffiliateHandler) UpdateRewardProgram(c *gin.Context) {
+	var config service.AffiliateRewardProgramConfig
+	if err := c.ShouldBindJSON(&config); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	updated, err := h.affiliateService.AdminSetAffiliateRewardProgram(c.Request.Context(), config)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, updated)
+}
+
+func (h *AffiliateHandler) ListRewardReviews(c *gin.Context) {
+	page, pageSize := response.ParsePagination(c)
+	items, total, err := h.affiliateService.AdminListAffiliateRewardReviews(c.Request.Context(), service.AffiliateRewardReviewFilter{
+		Search:     c.Query("search"),
+		Status:     c.Query("status"),
+		RewardType: c.Query("reward_type"),
+		Risk:       c.Query("risk"),
+		Page:       page,
+		PageSize:   pageSize,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Paginated(c, items, total, page, pageSize)
+}
+
+func (h *AffiliateHandler) GetRewardReviewStats(c *gin.Context) {
+	stats, err := h.affiliateService.AdminGetAffiliateRewardStats(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, stats)
+}
+
+type affiliateRewardReviewRequest struct {
+	Note string `json:"note"`
+}
+
+func (h *AffiliateHandler) ApproveRewardReview(c *gin.Context) {
+	h.reviewReward(c, service.AffiliateRewardActionApprove)
+}
+
+func (h *AffiliateHandler) RejectRewardReview(c *gin.Context) {
+	h.reviewReward(c, service.AffiliateRewardActionReject)
+}
+
+func (h *AffiliateHandler) reviewReward(c *gin.Context, action string) {
+	reviewID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || reviewID <= 0 {
+		response.BadRequest(c, "Invalid reward review ID")
+		return
+	}
+	subject, ok := servermiddleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.Unauthorized(c, "Admin not authenticated")
+		return
+	}
+	var req affiliateRewardReviewRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	result, err := h.affiliateService.AdminReviewAffiliateReward(
+		c.Request.Context(),
+		reviewID,
+		subject.UserID,
+		action,
+		req.Note,
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
 }
 
 func parseAffiliateRecordFilter(c *gin.Context, page, pageSize int) service.AffiliateRecordFilter {

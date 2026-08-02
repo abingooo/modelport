@@ -25,7 +25,6 @@ export interface ChannelModelPricing {
   id?: number
   platform: string
   models: string[]
-	user_visible?: boolean
   billing_mode: BillingMode
   input_price: number | null
   output_price: number | null
@@ -34,6 +33,7 @@ export interface ChannelModelPricing {
   image_input_price: number | null
   image_output_price: number | null
   per_request_price: number | null
+  user_visible?: boolean
   intervals: PricingInterval[]
 }
 

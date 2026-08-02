@@ -577,6 +577,7 @@
                       :key="pIdx"
                       :entry="entry"
                       :platform="section.platform"
+                      :show-plaza-visibility="false"
                       @update="rule.pricing.splice(pIdx, 1, $event)"
                       @remove="removeRulePricingEntry(sIdx, ruleIndex, pIdx)"
                     />
@@ -851,7 +852,6 @@ function toggleGroupInSection(sectionIdx: number, groupId: number) {
 function addPricingEntry(sectionIdx: number) {
   form.platforms[sectionIdx].model_pricing.push({
     models: [],
-	user_visible: true,
     billing_mode: 'token',
     input_price: null,
     output_price: null,
@@ -860,6 +860,7 @@ function addPricingEntry(sectionIdx: number) {
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
+    user_visible: true,
     intervals: []
   })
 }
@@ -885,7 +886,6 @@ async function syncLatestModels(sectionIdx: number) {
     // Add new models as a single new pricing entry (user fills in prices)
     form.platforms[sectionIdx].model_pricing.push({
       models: newModels,
-	  user_visible: true,
       billing_mode: 'token',
       input_price: null,
       output_price: null,
@@ -894,6 +894,7 @@ async function syncLatestModels(sectionIdx: number) {
       image_input_price: null,
       image_output_price: null,
       per_request_price: null,
+      user_visible: true,
       intervals: []
     })
     appStore.showSuccess(t('admin.channels.form.syncModelsSuccess', { count: newModels.length }))
@@ -951,7 +952,6 @@ function addAccountStatsRule(sectionIdx: number) {
 function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
   form.platforms[sectionIdx].account_stats_pricing_rules[ruleIndex].pricing.push({
     models: [],
-	user_visible: true,
     billing_mode: 'token',
     input_price: null,
     output_price: null,
@@ -960,6 +960,7 @@ function addRulePricingEntry(sectionIdx: number, ruleIndex: number) {
     image_input_price: null,
     image_output_price: null,
     per_request_price: null,
+    user_visible: false,
     intervals: []
   })
 }
@@ -1076,6 +1077,7 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
             image_input_price: mTokToPerToken(p.image_input_price),
             image_output_price: mTokToPerToken(p.image_output_price),
             per_request_price: p.per_request_price != null && p.per_request_price !== '' ? Number(p.per_request_price) : null,
+            user_visible: false,
             intervals: formIntervalsToAPI(p.intervals || [])
           }))
       })
@@ -1109,7 +1111,6 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
       model_pricing.push({
         platform: section.platform,
         models: entry.models,
-		user_visible: entry.user_visible,
         billing_mode: entry.billing_mode,
         input_price: mTokToPerToken(entry.input_price),
         output_price: mTokToPerToken(entry.output_price),
@@ -1118,6 +1119,7 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
         image_input_price: mTokToPerToken(entry.image_input_price),
         image_output_price: mTokToPerToken(entry.image_output_price),
         per_request_price: entry.per_request_price != null && entry.per_request_price !== '' ? Number(entry.per_request_price) : null,
+        user_visible: entry.user_visible,
         intervals: formIntervalsToAPI(entry.intervals || [])
       })
     }
@@ -1207,7 +1209,6 @@ function apiToForm(channel: Channel): PlatformSection[] {
       .filter(p => (p.platform || 'anthropic') === platform)
       .map(p => ({
         models: p.models || [],
-		user_visible: p.user_visible !== false,
         billing_mode: p.billing_mode,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
@@ -1216,6 +1217,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
         image_input_price: perTokenToMTok(p.image_input_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
+        user_visible: p.user_visible ?? true,
         intervals: apiIntervalsToForm(p.intervals || [])
       } as PricingFormEntry))
 
@@ -1397,7 +1399,6 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
       account_ids: [...(apiRule.account_ids || [])],
       pricing: (apiRule.pricing || []).map(p => ({
         models: [...(p.models || [])],
-		user_visible: true,
         billing_mode: p.billing_mode,
         input_price: perTokenToMTok(p.input_price),
         output_price: perTokenToMTok(p.output_price),
@@ -1406,6 +1407,7 @@ function distributeRulesToPlatforms(apiRules: AccountStatsPricingRule[]) {
         image_input_price: perTokenToMTok(p.image_input_price),
         image_output_price: perTokenToMTok(p.image_output_price),
         per_request_price: p.per_request_price,
+        user_visible: false,
         intervals: apiIntervalsToForm(p.intervals || [])
       } as PricingFormEntry))
     }

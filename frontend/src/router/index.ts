@@ -175,6 +175,16 @@ const routes: RouteRecordRaw[] = [
       title: 'Legal Document'
     }
   },
+  {
+    path: '/model-plaza',
+    name: 'ModelPlaza',
+    component: () => import('@/views/ModelPlazaView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Model Plaza',
+      titleKey: 'modelPlaza.title'
+    }
+  },
 
   // ==================== User Routes ====================
   {
@@ -256,18 +266,14 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/available-channels',
-    redirect: '/model-pricing',
-  },
-  {
-    path: '/model-pricing',
-    name: 'UserModelPricing',
-    component: () => import('@/views/user/ModelPricingView.vue'),
+    name: 'UserAvailableChannels',
+    component: () => import('@/views/user/AvailableChannelsView.vue'),
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
-      title: 'Model Pricing',
-      titleKey: 'modelPricing.title',
-      descriptionKey: 'modelPricing.description'
+      title: 'Available Channels',
+      titleKey: 'availableChannels.title',
+      descriptionKey: 'availableChannels.description'
     }
   },
   {
@@ -642,7 +648,19 @@ const routes: RouteRecordRaw[] = [
   },
   {
     path: '/admin/affiliates',
-    redirect: '/admin/affiliates/invites'
+    redirect: '/admin/affiliates/reviews'
+  },
+  {
+    path: '/admin/affiliates/reviews',
+    name: 'AdminAffiliateRewardReviews',
+    component: () => import('@/views/admin/affiliates/AdminAffiliateRewardReviewsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Affiliate Reward Reviews',
+      titleKey: 'nav.affiliateRewardReviews',
+      descriptionKey: 'admin.affiliates.reviewsDescription'
+    }
   },
   {
     path: '/admin/affiliates/invites',
@@ -834,6 +852,37 @@ router.beforeEach(async (to, _from, next) => {
       // Admin users go to admin dashboard, regular users go to user dashboard
       next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
       return
+    }
+    // Model Plaza:公开路由但受「启用开关 + 可选强制登录」双重控制(后端同口径 fail-closed)
+    if (to.path === '/model-plaza') {
+      if (!appStore.publicSettingsLoaded) {
+        try {
+          await appStore.fetchPublicSettings()
+        } catch (error) {
+          console.warn('Failed to load public settings in route guard', error)
+        }
+      }
+      const plazaSettings = appStore.cachedPublicSettings
+      // 仅在设置成功加载且明确为 false 时拦截(瞬时加载失败视为未知,由后端 404 兜底)
+      if (appStore.publicSettingsLoaded && plazaSettings?.model_plaza_enabled === false) {
+        next(
+          authStore.isAuthenticated
+            ? authStore.isAdmin
+              ? '/admin/dashboard'
+              : '/dashboard'
+            : '/home'
+        )
+        return
+      }
+      if (plazaSettings?.model_plaza_require_auth === true && !authStore.isAuthenticated) {
+        next({ path: '/login', query: { redirect: to.fullPath } })
+        return
+      }
+      // Backend mode:登录的非管理员也不可见(匿名由下方公共拦截处理,广场不在白名单)
+      if (appStore.backendModeEnabled && authStore.isAuthenticated && !authStore.isAdmin) {
+        next('/login')
+        return
+      }
     }
     // Backend mode: block public pages for unauthenticated users (except login, key-usage, setup)
     if (appStore.backendModeEnabled && !authStore.isAuthenticated) {

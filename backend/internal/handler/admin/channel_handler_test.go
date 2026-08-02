@@ -29,19 +29,6 @@ func TestChannelToResponse_NilInput(t *testing.T) {
 	require.Nil(t, channelToResponse(nil))
 }
 
-func TestPricingUserVisibilityRoundTrip(t *testing.T) {
-	hidden := false
-	converted := pricingRequestToService([]channelModelPricingRequest{
-		{Models: []string{"hidden-model"}, UserVisible: &hidden},
-		{Models: []string{"default-visible"}},
-	})
-	require.Len(t, converted, 2)
-	require.False(t, converted[0].UserVisible)
-	require.True(t, converted[1].UserVisible)
-	require.False(t, pricingToResponse(&converted[0]).UserVisible)
-	require.True(t, pricingToResponse(&converted[1]).UserVisible)
-}
-
 func TestChannelToResponse_FullChannel(t *testing.T) {
 	now := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
 	ch := &service.Channel{
@@ -65,6 +52,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 				CacheWritePrice: float64Ptr(0.005),
 				CacheReadPrice:  float64Ptr(0.002),
 				PerRequestPrice: float64Ptr(0.5),
+				UserVisible:     true,
 			},
 		},
 		ModelMapping: map[string]map[string]string{
@@ -100,6 +88,7 @@ func TestChannelToResponse_FullChannel(t *testing.T) {
 	require.Equal(t, float64Ptr(0.005), p.CacheWritePrice)
 	require.Equal(t, float64Ptr(0.002), p.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.5), p.PerRequestPrice)
+	require.True(t, p.UserVisible)
 	require.Empty(t, p.Intervals)
 }
 
@@ -342,6 +331,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 			CacheReadPrice:   float64Ptr(0.002),
 			ImageOutputPrice: float64Ptr(0.04),
 			PerRequestPrice:  float64Ptr(0.5),
+			UserVisible:      boolPtr(false),
 		},
 	}
 
@@ -357,6 +347,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 	require.Equal(t, float64Ptr(0.002), r.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.04), r.ImageOutputPrice)
 	require.Equal(t, float64Ptr(0.5), r.PerRequestPrice)
+	require.False(t, r.UserVisible)
 }
 
 func TestPricingRequestToService_WithIntervals(t *testing.T) {
@@ -426,6 +417,7 @@ func TestPricingRequestToService_NilPriceFields(t *testing.T) {
 	result := pricingRequestToService(reqs)
 	require.Len(t, result, 1)
 	r := result[0]
+	require.True(t, r.UserVisible, "omitted user_visible must preserve the database default")
 	require.Nil(t, r.InputPrice)
 	require.Nil(t, r.OutputPrice)
 	require.Nil(t, r.CacheWritePrice)

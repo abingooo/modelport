@@ -250,9 +250,6 @@ func toUserSupportedModels(
 				continue
 			}
 		}
-		if m.Pricing != nil && !m.Pricing.UserVisible {
-			continue
-		}
 		out = append(out, userSupportedModel{
 			Name:     m.Name,
 			Platform: m.Platform,

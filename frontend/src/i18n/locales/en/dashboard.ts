@@ -586,45 +586,105 @@ export default {
     }
   },
 
-  modelPricing: {
-    title: 'Model Pricing',
-    description: 'Base model prices for the groups you can access',
-    searchPlaceholder: 'Search models, channels, or groups...',
-    resultCount: '{count} models',
+  // Model Plaza (public group/model pricing showcase)
+  modelPlaza: {
+    title: 'Model Plaza',
+    description: 'Compare models, available groups, and the prices applied to your account',
+    loading: 'Loading...',
+    empty: 'No groups to display',
+    loadFailed: 'Failed to load model plaza',
+    noSearchResult: 'No matching models',
+    anonymousHint: 'Sign in to see your exclusive groups and personal rates',
     filters: {
-      allPlatforms: 'All platforms',
-      allGroups: 'All accessible groups',
-      allBillingMethods: 'All billing methods'
+      platformLabel: 'Platform',
+      groupLabel: 'Group',
+      pricingPlanLabel: 'Pricing plan',
+      rateLabel: 'Rate',
+      modelLabel: 'Model',
+      searchPlaceholder: 'Search models',
+      all: 'All providers',
+      allShort: 'All',
+      allGroups: 'All groups',
+      allGroupsHint: 'Switch available groups inside each model card',
+      officialPriceHint: 'Reference only; not used for actual billing',
+      billingModeLabel: 'Billing mode',
+      allBillingModes: 'All billing modes',
+      sortLabel: 'Sort',
+      sortByName: 'Name',
+      sortByOutput: 'Output ↓',
+      switchToNameSort: 'Sort by model name',
+      switchToOutputSort: 'Sort by output price, highest first',
+      groupSections: {
+        reference: 'Price reference',
+        exclusive: 'Exclusive groups',
+        subscription: 'Subscription groups',
+        standard: 'Usage groups'
+      },
+      more: 'More filters',
+      clear: 'Clear filters',
+      resultCount: '{count} models'
     },
-    billing: {
-      usage: 'Usage based',
-      request: 'Per request',
-      unconfigured: 'Not configured'
+    badges: {
+      free: 'Free',
+      exclusive: 'Exclusive',
+      subscription: 'Subscription',
+      peak: 'Peak price'
     },
-    columns: {
+    billingModes: {
+      token: 'Usage based',
+      per_request: 'Per request',
+      image: 'Per image'
+    },
+    provider: {
+      modelCount: '{count} models'
+    },
+    card: {
+      group: 'Pricing group',
+      officialGroup: 'Official price',
+      officialReference: 'Official reference',
+      officialReferenceHint: 'For reference only. Actual billing follows the selected available group.',
+      copyModel: 'Copy model name',
+      copied: 'Copied',
+      officialShort: 'Official',
+      noOfficialReference: 'No official reference',
+      contextPricing: '{count} context tiers',
+      defaultSpecification: 'Default specification',
+      tiered: 'Tiered'
+    },
+    source: {
+      name: 'Official reference source: {source}',
+      withDate: 'Official reference: {source} · Updated {date}'
+    },
+    detail: {
+      noModels: 'No models configured for this group',
+      noPricing: 'Pricing not configured',
+      peakNote: 'Peak hours {window}: billing rate ×{multiplier}'
+    },
+    table: {
       model: 'Model',
-      platform: 'Platform',
-      channel: 'Channel',
-      groups: 'Accessible Groups',
-      billingMethod: 'Billing Method',
-      input: 'Input ￥/MTok',
-      output: 'Output ￥/MTok',
-      cacheWrite: 'Cache Write ￥/MTok',
-      cacheRead: 'Cache Read ￥/MTok',
-      perRequest: 'Per Request'
+      input: 'Input',
+      output: 'Output',
+      cache: 'Cache',
+      cacheWrite: 'Cache write',
+      cacheRead: 'Cache read',
+      paidPrice: 'Your Price (Discounted)',
+      officialPrice: 'Official Price',
+      rate: 'Rate',
+      unitPerMillion: '￥ / 1M tokens',
+      perUnitRequest: '/ request',
+      perUnitImage: '/ image',
+      perRequest: 'Per request',
+      perImage: 'Per image'
     },
-	tiers: {
-	  default: 'Default'
-	},
-    empty: {
-      unconfigured: 'No model pricing is available',
-      filtered: 'No models match the current filters'
+    nav: {
+      login: 'Sign In',
+      backToDashboard: 'Back to Console'
     }
   },
 
   affiliate: {
     title: 'Affiliate Rebates',
-    description: 'Invite new users and convert your rebate quota into account balance',
+    description: 'Share your ModelPort invite link and track signup, first top-up, and ongoing rebates',
     yourCode: 'Your Affiliate Code',
     inviteLink: 'Invite Link',
     copyCode: 'Copy Code',
@@ -637,10 +697,49 @@ export default {
       rebateRate: 'My Rebate Rate',
       rebateRateHint: 'What you earn each time an invitee recharges',
       invitedUsers: 'Invited Users',
+      firstRechargeUsers: 'First Top-ups',
+      pendingReward: 'Pending Review',
+      paidReward: 'Rewards Paid',
       availableQuota: 'Available Rebate Quota',
       frozenQuota: 'Frozen',
       frozenQuotaHint: 'Recently earned rebates pending release',
       totalQuota: 'Historical Rebate Quota'
+    },
+    program: {
+      title: 'Signup & First Top-up Rewards',
+      description: 'Fixed rewards are credited directly after risk review',
+      active: 'Reward program active',
+      inactive: 'Reward program inactive',
+      enabled: 'Enabled',
+      disabled: 'Disabled',
+      legacyOnly: 'Only ongoing recharge rebates are currently enabled.',
+      reviewNotice: 'New rewards enter manual review and are credited automatically when approved. Fixed rewards do not need a balance transfer.',
+      registration: {
+        title: 'Invited Signup',
+        rule: 'The inviter receives {inviter}; the invitee receives a {days}-day trial worth {invitee}'
+      },
+      firstRecharge: {
+        title: 'Invitee First Top-up',
+        rule: 'The inviter receives {inviter}; the invitee receives {percent}% of the amount paid as balance'
+      }
+    },
+    continuous: {
+      title: 'Ongoing Recharge Rebate',
+      description: 'Accumulates from later invitee recharges and can be transferred to balance'
+    },
+    progress: {
+      title: 'Invite Reward Progress',
+      description: 'Signup and first top-up reward status for each invitee',
+      masked: 'User details are masked',
+      registration: 'Signup Reward',
+      firstRecharge: 'First Top-up Reward'
+    },
+    status: {
+      pending: 'Pending',
+      approved: 'Processing',
+      paid: 'Paid',
+      rejected: 'Rejected',
+      none: 'Not Triggered'
     },
     transfer: {
       title: 'Transfer Rebate Quota',
@@ -791,6 +890,31 @@ export default {
       sendCode: 'Send Code',
       codeSent: 'Verification code sent to your email',
       sendCodeFailed: 'Failed to send verification code'
+    },
+    passkey: {
+      title: 'Passkeys',
+      description: 'Use Face ID, Touch ID, Windows Hello, or a security key to sign in without a password.',
+      add: 'Add passkey',
+      continue: 'Create passkey',
+      name: 'Passkey name',
+      namePlaceholder: 'For example, MacBook Touch ID',
+      passwordPlaceholder: 'Enter your current password to confirm',
+      empty: 'No passkeys are registered yet.',
+      synced: 'Synced',
+      createdAt: 'Created {date}',
+      lastUsed: 'Last used {date}',
+      featureDisabled: 'Passkeys have not been configured by the administrator.',
+      unsupported: 'This browser or device does not support passkeys.',
+      loadFailed: 'Failed to load passkeys.',
+      added: 'Passkey added.',
+      addFailed: 'Failed to add passkey.',
+      renamePrompt: 'Enter a new name for this passkey',
+      renamed: 'Passkey renamed.',
+      renameFailed: 'Failed to rename passkey.',
+      deleteTitle: 'Delete passkey',
+      deleteConfirm: 'Delete “{name}”? You will no longer be able to sign in with it.',
+      deleted: 'Passkey deleted.',
+      deleteFailed: 'Failed to delete passkey.'
     },
     balanceNotify: {
       title: 'Balance Low Notification',

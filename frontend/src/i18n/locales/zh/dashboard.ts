@@ -591,45 +591,105 @@ export default {
     }
   },
 
-  modelPricing: {
-    title: '模型定价',
-    description: '查看您可访问分组中的模型基础价格',
-    searchPlaceholder: '搜索模型、渠道或分组...',
-    resultCount: '{count} 个模型',
+  // Model Plaza (public group/model pricing showcase)
+  modelPlaza: {
+    title: '模型广场',
+    description: '集中查看当前账号可用的模型、分组与实际调用价格',
+    loading: '加载中...',
+    empty: '暂无可展示的分组',
+    loadFailed: '加载模型广场失败',
+    noSearchResult: '没有匹配的模型',
+    anonymousHint: '登录后可查看你的专属分组与专属倍率',
     filters: {
-      allPlatforms: '全部平台',
-      allGroups: '全部可用分组',
-      allBillingMethods: '全部计费方式'
+      platformLabel: '平台',
+      groupLabel: '分组',
+      pricingPlanLabel: '计价方案',
+      rateLabel: '倍率',
+      modelLabel: '模型',
+      searchPlaceholder: '搜索模型名称',
+      all: '全部平台',
+      allShort: '全部',
+      allGroups: '全部分组',
+      allGroupsHint: '在模型卡片中切换可用分组',
+      officialPriceHint: '参考价，不参与实际扣费',
+      billingModeLabel: '计费方式',
+      allBillingModes: '全部计费方式',
+      sortLabel: '排序',
+      sortByName: '按名称',
+      sortByOutput: '输出价 ↓',
+      switchToNameSort: '切换为按模型名称排序',
+      switchToOutputSort: '切换为按输出价格从高到低排序',
+      groupSections: {
+        reference: '价格参考',
+        exclusive: '专属分组',
+        subscription: '订阅分组',
+        standard: '按量分组'
+      },
+      more: '更多筛选',
+      clear: '清除筛选',
+      resultCount: '{count} 个模型'
     },
-    billing: {
-      usage: '按量计费',
-      request: '按次计费',
-      unconfigured: '未配置'
+    badges: {
+      free: '免费',
+      exclusive: '专属分组',
+      subscription: '订阅',
+      peak: '峰时价格'
     },
-    columns: {
+    billingModes: {
+      token: '按量计费',
+      per_request: '按次计费',
+      image: '按图片计费'
+    },
+    provider: {
+      modelCount: '{count} 个模型'
+    },
+    card: {
+      group: '价格分组',
+      officialGroup: '官方价格',
+      officialReference: '官方参考价',
+      officialReferenceHint: '仅供价格参考，实际扣费以可用分组为准',
+      copyModel: '复制模型名称',
+      copied: '已复制',
+      officialShort: '官方',
+      noOfficialReference: '暂无官方参考价',
+      contextPricing: '{count} 档上下文价格',
+      defaultSpecification: '默认规格',
+      tiered: '阶梯定价'
+    },
+    source: {
+      name: '官方参考价来源：{source}',
+      withDate: '官方参考价：{source} · 更新于 {date}'
+    },
+    detail: {
+      noModels: '该分组暂未配置模型',
+      noPricing: '未配置定价',
+      peakNote: '高峰时段 {window} 计费倍率 ×{multiplier}'
+    },
+    table: {
       model: '模型',
-      platform: '平台',
-      channel: '渠道',
-      groups: '可用分组',
-      billingMethod: '计费方式',
-      input: '输入 ￥/MTok',
-      output: '输出 ￥/MTok',
-      cacheWrite: '缓存写入 ￥/MTok',
-      cacheRead: '缓存读取 ￥/MTok',
-      perRequest: '单次价格'
+      input: '输入',
+      output: '输出',
+      cache: '缓存',
+      cacheWrite: '缓存写入',
+      cacheRead: '缓存读取',
+      paidPrice: '实付价格(折后)',
+      officialPrice: '官方价格',
+      rate: '折扣倍率',
+      unitPerMillion: '￥ / 1M token',
+      perUnitRequest: '/ 次',
+      perUnitImage: '/ 张',
+      perRequest: '按次计费',
+      perImage: '按图片计费'
     },
-	tiers: {
-	  default: '默认'
-	},
-    empty: {
-      unconfigured: '暂无可查看的模型定价',
-      filtered: '没有符合当前筛选条件的模型'
+    nav: {
+      login: '登录',
+      backToDashboard: '回到后台'
     }
   },
 
   affiliate: {
     title: '邀请返利',
-    description: '邀请新用户注册，并将返利额度转入账户余额',
+    description: '分享模型港邀请链接，查看好友注册、首充与持续返利进度',
     yourCode: '我的邀请码',
     inviteLink: '邀请链接',
     copyCode: '复制邀请码',
@@ -642,10 +702,49 @@ export default {
       rebateRate: '我的返利比例',
       rebateRateHint: '被邀请用户每次充值后你可获得的返利比例',
       invitedUsers: '邀请人数',
+      firstRechargeUsers: '完成首充',
+      pendingReward: '待审核奖励',
+      paidReward: '已到账奖励',
       availableQuota: '可转返利额度',
       frozenQuota: '冻结中',
       frozenQuotaHint: '新产生的返利正在冻结期中',
       totalQuota: '历史返利额度'
+    },
+    program: {
+      title: '注册与首充奖励',
+      description: '固定奖励通过风控审核后直接发放到账户',
+      active: '奖励计划进行中',
+      inactive: '奖励计划未开启',
+      enabled: '已开启',
+      disabled: '未开启',
+      legacyOnly: '当前仅启用持续充值返利。',
+      reviewNotice: '新奖励进入人工审核，审核通过后自动到账；固定奖励无需手动转入余额。',
+      registration: {
+        title: '邀请注册',
+        rule: '邀请人可得 {inviter}；好友可得价值 {invitee}、有效期 {days} 天的体验权益'
+      },
+      firstRecharge: {
+        title: '好友首充',
+        rule: '邀请人可得 {inviter}；好友可获实付金额 {percent}% 的余额奖励'
+      }
+    },
+    continuous: {
+      title: '持续充值返利',
+      description: '按好友后续充值累计返利额度，可手动转入余额'
+    },
+    progress: {
+      title: '邀请奖励进度',
+      description: '每位好友的注册与首充奖励状态',
+      masked: '用户信息已脱敏',
+      registration: '注册奖励',
+      firstRecharge: '首充奖励'
+    },
+    status: {
+      pending: '待审核',
+      approved: '发放中',
+      paid: '已到账',
+      rejected: '未通过',
+      none: '未触发'
     },
     transfer: {
       title: '返利额度转余额',
@@ -796,6 +895,31 @@ export default {
       sendCode: '发送验证码',
       codeSent: '验证码已发送到您的邮箱',
       sendCodeFailed: '发送验证码失败'
+    },
+    passkey: {
+      title: 'Passkey',
+      description: '使用面容 ID、触控 ID、Windows Hello 或安全密钥免密码登录。',
+      add: '添加 Passkey',
+      continue: '创建 Passkey',
+      name: 'Passkey 名称',
+      namePlaceholder: '例如：MacBook 触控 ID',
+      passwordPlaceholder: '输入当前登录密码以确认',
+      empty: '尚未添加任何 Passkey。',
+      synced: '已同步',
+      createdAt: '创建于 {date}',
+      lastUsed: '上次使用 {date}',
+      featureDisabled: '管理员尚未配置 Passkey 功能。',
+      unsupported: '当前浏览器或设备不支持 Passkey。',
+      loadFailed: '加载 Passkey 失败。',
+      added: 'Passkey 已添加。',
+      addFailed: '添加 Passkey 失败。',
+      renamePrompt: '请输入新的 Passkey 名称',
+      renamed: 'Passkey 已重命名。',
+      renameFailed: '重命名 Passkey 失败。',
+      deleteTitle: '删除 Passkey',
+      deleteConfirm: '删除“{name}”？删除后将无法再使用它登录。',
+      deleted: 'Passkey 已删除。',
+      deleteFailed: '删除 Passkey 失败。'
     },
     balanceNotify: {
       title: '余额不足提醒',

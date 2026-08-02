@@ -59,7 +59,6 @@ type updateChannelRequest struct {
 type channelModelPricingRequest struct {
 	Platform         string                   `json:"platform" binding:"omitempty,max=50"`
 	Models           []string                 `json:"models" binding:"required,min=1,max=100"`
-	UserVisible      *bool                    `json:"user_visible"`
 	BillingMode      string                   `json:"billing_mode" binding:"omitempty,oneof=token per_request image"`
 	InputPrice       *float64                 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice      *float64                 `json:"output_price" binding:"omitempty,min=0"`
@@ -68,6 +67,7 @@ type channelModelPricingRequest struct {
 	ImageInputPrice  *float64                 `json:"image_input_price" binding:"omitempty,min=0"`
 	ImageOutputPrice *float64                 `json:"image_output_price" binding:"omitempty,min=0"`
 	PerRequestPrice  *float64                 `json:"per_request_price" binding:"omitempty,min=0"`
+	UserVisible      *bool                    `json:"user_visible"`
 	Intervals        []pricingIntervalRequest `json:"intervals"`
 }
 
@@ -112,7 +112,6 @@ type channelModelPricingResponse struct {
 	ID               int64                     `json:"id"`
 	Platform         string                    `json:"platform"`
 	Models           []string                  `json:"models"`
-	UserVisible      bool                      `json:"user_visible"`
 	BillingMode      string                    `json:"billing_mode"`
 	InputPrice       *float64                  `json:"input_price"`
 	OutputPrice      *float64                  `json:"output_price"`
@@ -121,6 +120,7 @@ type channelModelPricingResponse struct {
 	ImageInputPrice  *float64                  `json:"image_input_price"`
 	ImageOutputPrice *float64                  `json:"image_output_price"`
 	PerRequestPrice  *float64                  `json:"per_request_price"`
+	UserVisible      bool                      `json:"user_visible"`
 	Intervals        []pricingIntervalResponse `json:"intervals"`
 }
 
@@ -221,7 +221,6 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		ID:               p.ID,
 		Platform:         platform,
 		Models:           models,
-		UserVisible:      p.UserVisible,
 		BillingMode:      billingMode,
 		InputPrice:       p.InputPrice,
 		OutputPrice:      p.OutputPrice,
@@ -230,6 +229,7 @@ func pricingToResponse(p *service.ChannelModelPricing) channelModelPricingRespon
 		ImageInputPrice:  p.ImageInputPrice,
 		ImageOutputPrice: p.ImageOutputPrice,
 		PerRequestPrice:  p.PerRequestPrice,
+		UserVisible:      p.UserVisible,
 		Intervals:        intervals,
 	}
 }
@@ -257,6 +257,10 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			billingMode = service.BillingModeToken
 		}
 		platform := r.Platform
+		userVisible := true
+		if r.UserVisible != nil {
+			userVisible = *r.UserVisible
+		}
 		intervals := make([]service.PricingInterval, 0, len(r.Intervals))
 		for _, iv := range r.Intervals {
 			intervals = append(intervals, service.PricingInterval{
@@ -274,7 +278,6 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 		result = append(result, service.ChannelModelPricing{
 			Platform:         platform,
 			Models:           r.Models,
-			UserVisible:      r.UserVisible == nil || *r.UserVisible,
 			BillingMode:      billingMode,
 			InputPrice:       r.InputPrice,
 			OutputPrice:      r.OutputPrice,
@@ -283,6 +286,7 @@ func pricingRequestToService(reqs []channelModelPricingRequest) []service.Channe
 			ImageInputPrice:  r.ImageInputPrice,
 			ImageOutputPrice: r.ImageOutputPrice,
 			PerRequestPrice:  r.PerRequestPrice,
+			UserVisible:      userVisible,
 			Intervals:        intervals,
 		})
 	}

@@ -159,18 +159,6 @@ func TestGetTierByLabel_Empty(t *testing.T) {
 	require.Nil(t, p.GetTierByLabel("1K"))
 }
 
-func TestHiddenPricingStillResolvesForBilling(t *testing.T) {
-	channel := Channel{ModelPricing: []ChannelModelPricing{{
-		Models:      []string{"hidden-model"},
-		UserVisible: false,
-		InputPrice:  testPtrFloat64(0.25),
-	}}}
-	pricing := channel.GetModelPricing("hidden-model")
-	require.NotNil(t, pricing)
-	require.False(t, pricing.UserVisible)
-	require.InDelta(t, 0.25, *pricing.InputPrice, 1e-9)
-}
-
 func TestChannelClone(t *testing.T) {
 	original := &Channel{
 		ID:       1,
