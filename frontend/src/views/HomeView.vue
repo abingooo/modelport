@@ -1,5 +1,5 @@
 <template>
-  <div v-if="homeContent" class="min-h-screen">
+  <div v-if="hasHomeContent" class="min-h-screen">
     <iframe
       v-if="isHomeContentUrl"
       :src="homeContent.trim()"
@@ -7,6 +7,79 @@
       allowfullscreen
     ></iframe>
     <div v-else v-html="homeContent"></div>
+  </div>
+
+  <div
+    v-else-if="compactHomeEnabled"
+    data-testid="compact-home"
+    class="flex min-h-screen flex-col bg-gray-50 text-gray-900 dark:bg-dark-950 dark:text-white"
+  >
+    <header class="border-b border-gray-200 px-4 py-4 sm:px-6 dark:border-dark-800">
+      <nav class="mx-auto flex w-full max-w-5xl items-center justify-between gap-3">
+        <div class="flex min-w-0 items-center gap-3">
+          <template v-if="isModelPortBrand">
+            <img :src="markSource" alt="" aria-hidden="true" class="h-9 w-9 object-contain" />
+            <img :src="wordmarkSource" :alt="`${siteName} logo`" class="h-7 max-w-36 object-contain" />
+          </template>
+          <template v-else>
+            <BrandLogo
+              :site-name="siteName"
+              :site-logo="siteLogo"
+              variant="mark"
+              image-class="h-9 w-9 object-contain"
+            />
+            <span class="truncate text-base font-semibold">{{ siteName }}</span>
+          </template>
+        </div>
+
+        <div class="flex shrink-0 items-center gap-2">
+          <LocaleSwitcher />
+          <button
+            type="button"
+            class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-dark-400 dark:hover:bg-dark-800 dark:hover:text-white"
+            :title="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+            :aria-label="isDark ? t('home.switchToLight') : t('home.switchToDark')"
+            @click="toggleTheme"
+          >
+            <Icon :name="isDark ? 'moon' : 'sun'" size="sm" />
+          </button>
+        </div>
+      </nav>
+    </header>
+
+    <main class="flex flex-1 items-center justify-center px-5 py-16 text-center sm:px-6">
+      <div class="w-full max-w-2xl">
+        <img
+          v-if="isModelPortBrand"
+          :src="markSource"
+          alt=""
+          aria-hidden="true"
+          class="mx-auto mb-7 h-20 w-20 object-contain"
+        />
+        <BrandLogo
+          v-else
+          :site-name="siteName"
+          :site-logo="siteLogo"
+          variant="mark"
+          image-class="mx-auto mb-7 h-20 w-20 object-contain"
+        />
+        <h1 class="text-3xl font-semibold sm:text-4xl">{{ siteName }}</h1>
+        <p class="mx-auto mt-4 max-w-xl whitespace-pre-wrap text-base leading-7 text-gray-600 dark:text-dark-300">
+          {{ siteSubtitle }}
+        </p>
+        <router-link
+          :to="startPath"
+          class="mt-8 inline-flex min-h-10 items-center justify-center gap-2 rounded-lg bg-primary-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-primary-700"
+        >
+          {{ isAuthenticated ? t('home.dashboard') : t('home.login') }}
+          <Icon name="arrowRight" size="xs" :stroke-width="2" />
+        </router-link>
+      </div>
+    </main>
+
+    <footer class="border-t border-gray-200 px-4 py-5 text-center text-sm text-gray-500 dark:border-dark-800 dark:text-dark-400">
+      {{ copyrightText }}
+    </footer>
   </div>
 
   <div
@@ -202,6 +275,10 @@ const docUrl = computed(() =>
   sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || '')
 )
 const homeContent = computed(() => appStore.cachedPublicSettings?.home_content || '')
+const hasHomeContent = computed(() => homeContent.value.trim().length > 0)
+const compactHomeEnabled = computed(
+  () => appStore.cachedPublicSettings?.compact_home_enabled === true
+)
 const isHomeContentUrl = computed(() => {
   const content = homeContent.value.trim()
   return content.startsWith('http://') || content.startsWith('https://')
