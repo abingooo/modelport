@@ -268,6 +268,26 @@
             </div>
             <Toggle v-model="programDraft.registration.enabled" />
           </div>
+          <div class="mt-4 grid gap-4 border-y border-gray-100 py-4 dark:border-dark-700 sm:grid-cols-[minmax(0,1fr)_220px] sm:items-end">
+            <div class="flex items-center justify-between gap-4 sm:pb-2">
+              <div>
+                <p class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.affiliates.reviews.program.defaultInviter') }}</p>
+                <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('admin.affiliates.reviews.program.defaultInviterHint') }}</p>
+              </div>
+              <Toggle v-model="programDraft.registration.default_inviter_enabled" />
+            </div>
+            <label class="form-field">
+              <span>{{ t('admin.affiliates.reviews.program.defaultInviterUserId') }}</span>
+              <input
+                v-model.number="programDraft.registration.default_inviter_user_id"
+                type="number"
+                min="1"
+                step="1"
+                class="input"
+                :disabled="!programDraft.registration.default_inviter_enabled"
+              />
+            </label>
+          </div>
           <div class="mt-4 grid gap-4 sm:grid-cols-2">
             <label class="form-field"><span>{{ t('admin.affiliates.reviews.program.inviterBonus') }}</span><input v-model.number="programDraft.registration.inviter_bonus" type="number" min="0" step="0.01" class="input" /></label>
             <label class="form-field"><span>{{ t('admin.affiliates.reviews.program.trialAmount') }}</span><input v-model.number="programDraft.registration.invitee_trial_amount" type="number" min="0" step="0.01" class="input" /></label>

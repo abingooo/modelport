@@ -40,11 +40,13 @@ var (
 )
 
 type AffiliateRegistrationRewardConfig struct {
-	Enabled             bool    `json:"enabled"`
-	InviterBonus        float64 `json:"inviter_bonus"`
-	InviteeTrialAmount  float64 `json:"invitee_trial_amount"`
-	InviteeTrialGroupID int64   `json:"invitee_trial_group_id"`
-	InviteeTrialDays    int     `json:"invitee_trial_days"`
+	Enabled               bool    `json:"enabled"`
+	DefaultInviterEnabled bool    `json:"default_inviter_enabled"`
+	DefaultInviterUserID  int64   `json:"default_inviter_user_id"`
+	InviterBonus          float64 `json:"inviter_bonus"`
+	InviteeTrialAmount    float64 `json:"invitee_trial_amount"`
+	InviteeTrialGroupID   int64   `json:"invitee_trial_group_id"`
+	InviteeTrialDays      int     `json:"invitee_trial_days"`
 }
 
 type AffiliateFirstRechargeRewardConfig struct {
@@ -66,11 +68,13 @@ func DefaultAffiliateRewardProgramConfig() AffiliateRewardProgramConfig {
 		Version: AffiliateRewardProgramVersion,
 		Enabled: false,
 		Registration: AffiliateRegistrationRewardConfig{
-			Enabled:             true,
-			InviterBonus:        1,
-			InviteeTrialAmount:  3,
-			InviteeTrialGroupID: 50,
-			InviteeTrialDays:    3,
+			Enabled:               true,
+			DefaultInviterEnabled: false,
+			DefaultInviterUserID:  0,
+			InviterBonus:          1,
+			InviteeTrialAmount:    3,
+			InviteeTrialGroupID:   50,
+			InviteeTrialDays:      3,
 		},
 		FirstRecharge: AffiliateFirstRechargeRewardConfig{
 			Enabled:             true,
@@ -95,6 +99,10 @@ func NormalizeAffiliateRewardProgramConfig(config AffiliateRewardProgramConfig) 
 		math.IsNaN(config.FirstRecharge.InviteeBonusPercent) ||
 		math.IsInf(config.FirstRecharge.InviteeBonusPercent, 0) ||
 		config.FirstRecharge.InviteeBonusPercent < 0 || config.FirstRecharge.InviteeBonusPercent > 100 {
+		return AffiliateRewardProgramConfig{}, ErrAffiliateRewardProgramInvalid
+	}
+	if config.Registration.DefaultInviterUserID < 0 ||
+		(config.Registration.DefaultInviterEnabled && config.Registration.DefaultInviterUserID <= 0) {
 		return AffiliateRewardProgramConfig{}, ErrAffiliateRewardProgramInvalid
 	}
 	if config.Registration.Enabled {

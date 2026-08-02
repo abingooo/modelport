@@ -137,6 +137,8 @@ export interface AffiliateInvitee {
 
 export interface AffiliateRegistrationRewardConfig {
   enabled: boolean
+  default_inviter_enabled: boolean
+  default_inviter_user_id: number
   inviter_bonus: number
   invitee_trial_amount: number
   invitee_trial_group_id: number

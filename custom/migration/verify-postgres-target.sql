@@ -14,7 +14,8 @@ DECLARE
         '192_add_free_group_billing.sql',
         '193_add_channel_pricing_user_visibility.sql',
         '194_remove_image_site_setting.sql',
-        '195_affiliate_reward_review_program.sql'
+        '195_affiliate_reward_review_program.sql',
+        '196_affiliate_default_inviter.sql'
     ];
     expected_tables text[] := ARRAY[
         'model_catalog_metadata',
@@ -30,8 +31,8 @@ DECLARE
     object_name text;
 BEGIN
     SELECT count(*) INTO actual_count FROM public.schema_migrations;
-    IF actual_count <> 246 THEN
-        RAISE EXCEPTION 'expected 246 schema migrations, found %', actual_count;
+    IF actual_count <> 247 THEN
+        RAISE EXCEPTION 'expected 247 schema migrations, found %', actual_count;
     END IF;
 
     FOREACH object_name IN ARRAY expected_migrations LOOP
@@ -112,6 +113,8 @@ BEGIN
           AND COALESCE((value::jsonb->>'enabled')::boolean, false)
           AND COALESCE((value::jsonb->>'version')::integer, 0) = 1
           AND value::jsonb->>'legacy_approval_cutoff' = '2026-07-05T22:00:00Z'
+          AND COALESCE((value::jsonb->'registration'->>'default_inviter_enabled')::boolean, false)
+          AND COALESCE((value::jsonb->'registration'->>'default_inviter_user_id')::bigint, 0) = 1
     ) THEN
         RAISE EXCEPTION 'affiliate reward program was not adopted from referral history';
     END IF;

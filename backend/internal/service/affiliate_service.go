@@ -17,6 +17,7 @@ var (
 	ErrAffiliateCodeTaken       = infraerrors.Conflict("AFFILIATE_CODE_TAKEN", "affiliate code already in use")
 	ErrAffiliateAlreadyBound    = infraerrors.Conflict("AFFILIATE_ALREADY_BOUND", "affiliate inviter already bound")
 	ErrAffiliateQuotaEmpty      = infraerrors.BadRequest("AFFILIATE_QUOTA_EMPTY", "no affiliate quota available to transfer")
+	ErrAffiliateDefaultInviter  = infraerrors.BadRequest("AFFILIATE_DEFAULT_INVITER_INVALID", "default affiliate inviter is invalid")
 )
 
 const (
@@ -322,6 +323,49 @@ func (s *AffiliateService) BindInviterByCode(ctx context.Context, userID int64, 
 		)
 	} else {
 		bound, err = s.repo.BindInviter(ctx, userID, inviterSummary.UserID)
+	}
+	if err != nil {
+		return err
+	}
+	if !bound {
+		return ErrAffiliateAlreadyBound
+	}
+	return nil
+}
+
+func (s *AffiliateService) BindDefaultInviter(ctx context.Context, userID int64) error {
+	if s == nil || s.repo == nil {
+		return infraerrors.ServiceUnavailable("SERVICE_UNAVAILABLE", "affiliate service unavailable")
+	}
+	if userID <= 0 || !s.IsEnabled(ctx) {
+		return nil
+	}
+
+	config := s.affiliateRewardProgramConfig(ctx)
+	registration := config.Registration
+	if !registration.DefaultInviterEnabled || registration.DefaultInviterUserID <= 0 || registration.DefaultInviterUserID == userID {
+		return nil
+	}
+
+	selfSummary, err := s.repo.EnsureUserAffiliate(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if selfSummary.InviterID != nil {
+		return nil
+	}
+
+	var bound bool
+	if rewardRepo := s.rewardRepository(); rewardRepo != nil {
+		bound, err = rewardRepo.BindInviterWithRewardProgram(
+			ctx,
+			userID,
+			registration.DefaultInviterUserID,
+			config,
+			AffiliateRegistrationMetaFromContext(ctx),
+		)
+	} else {
+		bound, err = s.repo.BindInviter(ctx, userID, registration.DefaultInviterUserID)
 	}
 	if err != nil {
 		return err

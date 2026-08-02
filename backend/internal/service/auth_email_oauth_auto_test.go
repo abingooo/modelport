@@ -42,7 +42,7 @@ func newEmailOAuthAutoAuthService(
 		nil, // emailQueueService
 		nil, // promoService
 		nil, // defaultSubAssigner — nil, assignSubscriptions early return
-		nil, // affiliateService — nil, bindOAuthAffiliate early return
+		nil, // affiliateService — nil, bindAffiliate early return
 		quotaRepo,
 	)
 }

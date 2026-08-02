@@ -3,7 +3,7 @@
 ## 1. 适用范围
 
 本文档用于把 TokensHub 生产站首次切换到 ModelPort。目标版本必须是经过测试服验证的
-`linux/amd64` 正式镜像，当前目标系列为 `0.1.166.2`。
+`linux/amd64` 正式镜像，当前目标系列为 `0.1.168.1`。
 
 本次只保证 ModelPort 核心业务：登录、现有用户和余额、API Key、分组、订阅、兑换码、
 账号池、渠道定价、下游 OpenAI/Anthropic/Google 协议、用量记录和计费。TokensHub 的推荐、
@@ -34,12 +34,12 @@
 基于 2026-07-27 TokensHub 生产只读快照的最终演练结果：
 
 - PostgreSQL 18 原始库有 236 条迁移、107 张表和 88 个序列。
-- `--migrate-only` 将迁移数提升到 245，第二次执行无变化。
+- `--migrate-only` 将迁移数提升到 247，第二次执行无变化。
 - 1494 个用户、余额合计 `6181.99823396`、1469 个 API Key、575 条订阅和
   1,077,234 条用量全部保留。
 - 既有表双种子数据指纹、既有列、约束、索引、函数和触发器归一化指纹在迁移前后完全一致；
   `settings_id_seq` 因写入一条邀请奖励源码配置正常前移 1，其余 87 个既有序列完全一致。
-- 目标只新增 ModelPort 预期字段、空表、邀请奖励源码配置和九条迁移记录；1928 条历史奖励审核、
+- 目标只新增 ModelPort 预期字段、空表、邀请奖励源码配置和十一条迁移记录；1928 条历史奖励审核、
   688 条余额发放及 377 条注册 IP 记录的双种子指纹保持不变。
 - TokensHub 原审核 API 的 `2026-07-06 06:00 +08:00` 历史发放边界随配置接管；边界前记录
   保持可见、可拒绝，但源码拒绝自动发放，避免迁移后误付历史待处理奖励。
@@ -59,7 +59,7 @@
 在任意生产操作前记录以下信息：
 
 ```bash
-export MODELPORT_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.166.2
+export MODELPORT_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.168.1
 docker pull "$MODELPORT_IMAGE"
 docker image inspect "$MODELPORT_IMAGE" \
   --format '{{.Id}} {{.Architecture}} {{index .RepoDigests 0}}'
@@ -69,7 +69,7 @@ docker run --rm "$MODELPORT_IMAGE" --version
 必须同时满足：
 
 - 架构为 `amd64`。
-- 应用版本为 `0.1.166.2`。
+- 应用版本为 `0.1.168.1`。
 - digest 与 GitHub Release、测试服务器记录一致。
 - `custom/migration` 下的 SQL/Lua 文件与发布提交一致。
 - GitHub Actions 后端、前端、AMD64 镜像构建全部通过。
@@ -207,7 +207,7 @@ psql -X -v ON_ERROR_STOP=1 "$MODELPORT_DATABASE_URL" \
   > "$CUTOVER_DIR/postgres-target-verification.tsv"
 ```
 
-准入要求：`diff` 无输出，目标验证显示 `PASS`，迁移数恰好为 245。任何无法解释的表计数、
+准入要求：`diff` 无输出，目标验证显示 `PASS`，迁移数恰好为 247。任何无法解释的表计数、
 指纹、序列、财务汇总或约束差异都必须停止切换。
 
 ## 9. Redis 会话迁移
@@ -293,7 +293,7 @@ fi
 
 应用只绑定回环地址，不接公网流量。完成以下只读或可回滚验证：
 
-- `/health` 正常，版本为 ModelPort `0.1.166.2`；公开设置中的 `site_name` 为 `ModelPort`，
+- `/health` 正常，版本为 ModelPort `0.1.168.1`；公开设置中的 `site_name` 为 `ModelPort`，
   `api_base_url` 与实际生产 origin 一致，`custom_menu_items` 为空。
 - 管理员和普通用户登录、refresh-token 刷新正常。
 - 用户数、余额、API Key、订阅、兑换码、账号、分组和价格读取正常。

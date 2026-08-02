@@ -514,10 +514,35 @@ func roundAffiliateReward(value float64) float64 {
 }
 
 func (r *affiliateRepository) ValidateAffiliateRewardProgram(ctx context.Context, config service.AffiliateRewardProgramConfig) error {
+	client := clientFromContext(ctx, r.client)
+	if config.Registration.DefaultInviterEnabled {
+		rows, err := client.QueryContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM users
+    WHERE id = $1 AND deleted_at IS NULL AND status = 'active'
+)`, config.Registration.DefaultInviterUserID)
+		if err != nil {
+			return err
+		}
+		if !rows.Next() {
+			_ = rows.Close()
+			return service.ErrAffiliateDefaultInviter
+		}
+		var valid bool
+		if err := rows.Scan(&valid); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if !valid {
+			return service.ErrAffiliateDefaultInviter
+		}
+	}
 	if !config.Enabled || !config.Registration.Enabled || config.Registration.InviteeTrialAmount <= 0 {
 		return nil
 	}
-	client := clientFromContext(ctx, r.client)
 	rows, err := client.QueryContext(ctx, `
 SELECT EXISTS (
     SELECT 1 FROM groups

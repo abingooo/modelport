@@ -69,6 +69,8 @@ describe('AdminAffiliateRewardReviewsView', () => {
       enabled: true,
       registration: {
         enabled: true,
+        default_inviter_enabled: true,
+        default_inviter_user_id: 1,
         inviter_bonus: 1,
         invitee_trial_amount: 3,
         invitee_trial_group_id: 50,
@@ -214,5 +216,34 @@ describe('AdminAffiliateRewardReviewsView', () => {
 
     expect(mocks.reviewReward).toHaveBeenCalledWith(101, 'approve', '')
     expect(mocks.showSuccess).toHaveBeenCalledWith('admin.affiliates.reviews.confirm.approveSuccess')
+  })
+
+  it('edits the source-managed default inviter policy', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const rulesButton = wrapper.findAll('button').find((button) =>
+      button.text().includes('admin.affiliates.reviews.program.action'),
+    )
+    expect(rulesButton).toBeDefined()
+    await rulesButton!.trigger('click')
+
+    const dialog = wrapper.get('[data-dialog]')
+    expect(dialog.text()).toContain('admin.affiliates.reviews.program.defaultInviter')
+    const defaultInviterInput = dialog.get('input[type="number"][min="1"]')
+    expect(defaultInviterInput.element).toHaveProperty('value', '1')
+    await defaultInviterInput.setValue('7')
+
+    const saveButton = dialog.findAll('button').find((button) => button.text().includes('common.save'))
+    expect(saveButton).toBeDefined()
+    await saveButton!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.updateRewardProgram).toHaveBeenCalledWith(expect.objectContaining({
+      registration: expect.objectContaining({
+        default_inviter_enabled: true,
+        default_inviter_user_id: 7,
+      }),
+    }))
   })
 })

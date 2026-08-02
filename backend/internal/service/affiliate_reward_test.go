@@ -38,6 +38,11 @@ func TestNormalizeAffiliateRewardProgramConfig(t *testing.T) {
 		{"missing trial group", func(config *AffiliateRewardProgramConfig) { config.Registration.InviteeTrialGroupID = 0 }},
 		{"invalid trial days", func(config *AffiliateRewardProgramConfig) { config.Registration.InviteeTrialDays = 3651 }},
 		{"invalid recharge percent", func(config *AffiliateRewardProgramConfig) { config.FirstRecharge.InviteeBonusPercent = 100.01 }},
+		{"negative default inviter", func(config *AffiliateRewardProgramConfig) { config.Registration.DefaultInviterUserID = -1 }},
+		{"missing enabled default inviter", func(config *AffiliateRewardProgramConfig) {
+			config.Registration.DefaultInviterEnabled = true
+			config.Registration.DefaultInviterUserID = 0
+		}},
 		{"zero legacy cutoff", func(config *AffiliateRewardProgramConfig) {
 			zero := time.Time{}
 			config.LegacyApprovalCutoff = &zero
@@ -69,6 +74,8 @@ func TestAffiliateRewardProgramDefaultsDisabled(t *testing.T) {
 	config := DefaultAffiliateRewardProgramConfig()
 	require.False(t, config.Enabled)
 	require.True(t, config.Registration.Enabled)
+	require.False(t, config.Registration.DefaultInviterEnabled)
+	require.Zero(t, config.Registration.DefaultInviterUserID)
 	require.True(t, config.FirstRecharge.Enabled)
 	require.Nil(t, config.LegacyApprovalCutoff)
 	require.InDelta(t, 1, config.Registration.InviterBonus, 1e-9)
@@ -156,12 +163,36 @@ func TestMergeAffiliateRewardFlags(t *testing.T) {
 
 type affiliateRewardCapabilityStub struct {
 	AffiliateRepository
-	orderID int64
-	config  AffiliateRewardProgramConfig
+	orderID       int64
+	config        AffiliateRewardProgramConfig
+	bindUserID    int64
+	bindInviterID int64
+	bindMeta      AffiliateRegistrationMeta
+	bindResult    bool
+	summaries     map[int64]*AffiliateSummary
+	codes         map[string]*AffiliateSummary
 }
 
-func (stub *affiliateRewardCapabilityStub) BindInviterWithRewardProgram(context.Context, int64, int64, AffiliateRewardProgramConfig, AffiliateRegistrationMeta) (bool, error) {
-	return false, nil
+func (stub *affiliateRewardCapabilityStub) EnsureUserAffiliate(_ context.Context, userID int64) (*AffiliateSummary, error) {
+	if summary := stub.summaries[userID]; summary != nil {
+		return summary, nil
+	}
+	return &AffiliateSummary{UserID: userID}, nil
+}
+
+func (stub *affiliateRewardCapabilityStub) GetAffiliateByCode(_ context.Context, code string) (*AffiliateSummary, error) {
+	if summary := stub.codes[code]; summary != nil {
+		return summary, nil
+	}
+	return nil, ErrAffiliateProfileNotFound
+}
+
+func (stub *affiliateRewardCapabilityStub) BindInviterWithRewardProgram(_ context.Context, userID, inviterID int64, config AffiliateRewardProgramConfig, meta AffiliateRegistrationMeta) (bool, error) {
+	stub.bindUserID = userID
+	stub.bindInviterID = inviterID
+	stub.config = config
+	stub.bindMeta = meta
+	return stub.bindResult, nil
 }
 
 func (stub *affiliateRewardCapabilityStub) EnsureRegistrationRewardReviews(context.Context, int64, int64, AffiliateRewardProgramConfig, AffiliateRegistrationMeta) error {
@@ -217,6 +248,68 @@ func TestAffiliateServiceDetectsRewardRepositoryCapability(t *testing.T) {
 
 	baseOnlyService := NewAffiliateService(&paymentFulfillmentAffiliateRepoStub{}, nil, nil, nil)
 	require.Nil(t, baseOnlyService.rewardRepository())
+}
+
+func TestAuthServiceAffiliateBindingPrefersExplicitCodeAndFallsBackToConfiguredInviter(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultAffiliateRewardProgramConfig()
+	config.Enabled = true
+	config.Registration.DefaultInviterEnabled = true
+	config.Registration.DefaultInviterUserID = 1
+	encoded, err := json.Marshal(config)
+	require.NoError(t, err)
+	settings := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
+		SettingKeyAffiliateEnabled:             "true",
+		SettingKeyAffiliateRewardProgramConfig: string(encoded),
+	}}, nil)
+	repo := &affiliateRewardCapabilityStub{
+		bindResult: true,
+		codes: map[string]*AffiliateSummary{
+			"PARTNER": {UserID: 9},
+		},
+	}
+	authService := &AuthService{affiliateService: NewAffiliateService(repo, settings, nil, nil)}
+
+	authService.bindAffiliate(context.Background(), 42, " partner ")
+	require.Equal(t, int64(42), repo.bindUserID)
+	require.Equal(t, int64(9), repo.bindInviterID)
+
+	repo.bindUserID = 0
+	repo.bindInviterID = 0
+	ctx := WithSessionBinding(context.Background(), &SessionBinding{IP: "203.0.113.19", UserAgent: "registration-test"})
+	authService.bindAffiliate(ctx, 43, "")
+	require.Equal(t, int64(43), repo.bindUserID)
+	require.Equal(t, int64(1), repo.bindInviterID)
+	require.Equal(t, "203.0.113.19", repo.bindMeta.ClientIP)
+	require.Equal(t, "registration-test", repo.bindMeta.UserAgent)
+}
+
+func TestAffiliateServiceDefaultInviterPreservesExistingBindingAndRejectsSelfBinding(t *testing.T) {
+	t.Parallel()
+
+	config := DefaultAffiliateRewardProgramConfig()
+	config.Registration.DefaultInviterEnabled = true
+	config.Registration.DefaultInviterUserID = 1
+	encoded, err := json.Marshal(config)
+	require.NoError(t, err)
+	settings := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
+		SettingKeyAffiliateEnabled:             "true",
+		SettingKeyAffiliateRewardProgramConfig: string(encoded),
+	}}, nil)
+	existingInviterID := int64(7)
+	repo := &affiliateRewardCapabilityStub{
+		bindResult: true,
+		summaries: map[int64]*AffiliateSummary{
+			44: {UserID: 44, InviterID: &existingInviterID},
+		},
+	}
+	affiliateService := NewAffiliateService(repo, settings, nil, nil)
+
+	require.NoError(t, affiliateService.BindDefaultInviter(context.Background(), 44))
+	require.Zero(t, repo.bindUserID)
+	require.NoError(t, affiliateService.BindDefaultInviter(context.Background(), 1))
+	require.Zero(t, repo.bindUserID)
 }
 
 func TestAffiliateServicePreservesLegacyApprovalCutoffOnAdminUpdate(t *testing.T) {
