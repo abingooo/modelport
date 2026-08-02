@@ -499,3 +499,98 @@ func SelectLotteryPrize(prizes []LotteryPrize, roll int) *LotteryPrize {
 	}
 	return nil
 }
+
+func AllocateScheduledLotteryPrizes(prizes []LotteryPrize, participantCount int, random LotteryRandomSource) ([]*LotteryPrize, error) {
+	if participantCount < 0 || random == nil {
+		return nil, ErrLotteryInvalid
+	}
+
+	assignments := make([]*LotteryPrize, participantCount)
+	remainingBeforeDraw := remainingLotteryPrizeCount(prizes)
+	remaining := remainingBeforeDraw
+	unassigned := make([]int, 0, participantCount)
+
+	for participantIndex := 0; participantIndex < participantCount; participantIndex++ {
+		if remaining == 0 {
+			unassigned = append(unassigned, participantIndex)
+			continue
+		}
+		roll, err := random.Intn(10000)
+		if err != nil {
+			return nil, err
+		}
+		prize := SelectLotteryPrize(prizes, roll)
+		if prize == nil {
+			unassigned = append(unassigned, participantIndex)
+			continue
+		}
+		assignments[participantIndex] = prize
+		prize.AwardedCount++
+		remaining--
+	}
+
+	if participantCount < remainingBeforeDraw {
+		return assignments, nil
+	}
+
+	for remaining > 0 {
+		candidateIndex, err := random.Intn(len(unassigned))
+		if err != nil {
+			return nil, err
+		}
+		if candidateIndex < 0 || candidateIndex >= len(unassigned) {
+			return nil, fmt.Errorf("scheduled lottery participant selection out of range")
+		}
+		participantIndex := unassigned[candidateIndex]
+		unassigned[candidateIndex] = unassigned[len(unassigned)-1]
+		unassigned = unassigned[:len(unassigned)-1]
+
+		prize, err := selectRemainingLotteryPrize(prizes, random)
+		if err != nil {
+			return nil, err
+		}
+		assignments[participantIndex] = prize
+		prize.AwardedCount++
+		remaining--
+	}
+
+	return assignments, nil
+}
+
+func remainingLotteryPrizeCount(prizes []LotteryPrize) int {
+	remaining := 0
+	for i := range prizes {
+		prize := &prizes[i]
+		if !prize.IsEnabled || prize.AwardedCount >= prize.Inventory {
+			continue
+		}
+		remaining += prize.Inventory - prize.AwardedCount
+	}
+	return remaining
+}
+
+func selectRemainingLotteryPrize(prizes []LotteryPrize, random LotteryRandomSource) (*LotteryPrize, error) {
+	remaining := remainingLotteryPrizeCount(prizes)
+	if remaining == 0 {
+		return nil, ErrLotteryInvalid
+	}
+	roll, err := random.Intn(remaining)
+	if err != nil {
+		return nil, err
+	}
+	if roll < 0 || roll >= remaining {
+		return nil, fmt.Errorf("scheduled lottery prize selection out of range")
+	}
+	for i := range prizes {
+		prize := &prizes[i]
+		if !prize.IsEnabled || prize.AwardedCount >= prize.Inventory {
+			continue
+		}
+		available := prize.Inventory - prize.AwardedCount
+		if roll < available {
+			return prize, nil
+		}
+		roll -= available
+	}
+	return nil, ErrLotteryInvalid
+}

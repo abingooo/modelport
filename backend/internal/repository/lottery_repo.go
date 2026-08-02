@@ -832,13 +832,13 @@ WHERE campaign_id=$1 AND status='pending' ORDER BY id FOR UPDATE`, campaignID)
 	if err := rows.Close(); err != nil {
 		return nil, err
 	}
+	assignments, err := service.AllocateScheduledLotteryPrizes(prizes, len(pending), random)
+	if err != nil {
+		return nil, fmt.Errorf("generate scheduled lottery draw: %w", err)
+	}
 	result := &service.LotteryDrawResult{CampaignID: campaignID, ParticipantCount: len(pending)}
-	for _, pendingEntry := range pending {
-		roll, err := random.Intn(10000)
-		if err != nil {
-			return nil, fmt.Errorf("generate scheduled lottery draw: %w", err)
-		}
-		prize := service.SelectLotteryPrize(prizes, roll)
+	for pendingIndex, pendingEntry := range pending {
+		prize := assignments[pendingIndex]
 		status := service.LotteryEntryNotWon
 		if prize != nil {
 			status = service.LotteryEntryWon
@@ -851,11 +851,6 @@ WHERE campaign_id=$1 AND status='pending' ORDER BY id FOR UPDATE`, campaignID)
 			result.WinnerCount++
 			if entry.PrizeType == service.LotteryPrizeBalance {
 				result.BalanceRewardUserIDs = append(result.BalanceRewardUserIDs, entry.UserID)
-			}
-			for i := range prizes {
-				if entry.PrizeID != nil && prizes[i].ID == *entry.PrizeID {
-					prizes[i].AwardedCount++
-				}
 			}
 		}
 	}
