@@ -13,7 +13,15 @@ const stores = vi.hoisted(() => ({
     siteVersion: '0.1.164.6-dev.2',
     publicSettingsLoaded: true,
     sidebarScrollTop: 0,
-    cachedPublicSettings: { custom_menu_items: [] },
+    cachedPublicSettings: {
+      custom_menu_items: [] as Array<{
+        id: number
+        label: string
+        visibility: string
+        sort_order: number
+        icon_svg: string
+      }>,
+    },
     toggleSidebar: vi.fn(),
     setMobileOpen: vi.fn(),
   },
@@ -61,13 +69,6 @@ vi.mock('@/utils/featureFlags', () => ({
   makeSidebarFlag: () => () => true,
 }))
 
-vi.mock('@/composables/useBatchImageAccess', () => ({
-  useBatchImageAccess: () => ({
-    canUseBatchImage: { value: true },
-    refreshBatchImageAccess: vi.fn(),
-  }),
-}))
-
 const RouterLinkStub = defineComponent({
   props: { to: { type: String, required: true } },
   template: '<a :data-to="to"><slot /></a>',
@@ -86,18 +87,20 @@ function mountSidebar() {
 }
 
 function renderedPaths(wrapper: ReturnType<typeof mountSidebar>) {
-  return wrapper.findAll('[data-to]').map((link) => link.attributes('data-to'))
+  return wrapper.get('.sidebar-nav').findAll('[data-to]').map((link) => link.attributes('data-to'))
 }
 
 describe('AppSidebar user navigation', () => {
   beforeEach(() => {
     stores.auth.isAdmin = false
     stores.auth.isSimpleMode = false
+    stores.app.cachedPublicSettings.custom_menu_items = []
   })
 
   it('keeps native account flows and omits retired product links for regular users', () => {
     const paths = renderedPaths(mountSidebar())
     expect(paths).not.toContain('/image-site')
+    expect(paths).not.toContain('/batch-image')
     expect(paths).not.toContain('/store')
     expect(paths).toContain('/purchase')
     expect(paths).toContain('/subscriptions')
@@ -106,10 +109,36 @@ describe('AppSidebar user navigation', () => {
     expect(paths).toContain('/lottery')
   })
 
+  it('orders regular-user navigation by workflow and places custom pages after channel status', () => {
+    stores.app.cachedPublicSettings.custom_menu_items = [{
+      id: 7,
+      label: '生图小站',
+      visibility: 'user',
+      sort_order: 1,
+      icon_svg: '<svg></svg>',
+    }]
+
+    expect(renderedPaths(mountSidebar())).toEqual([
+      '/dashboard',
+      '/keys',
+      '/usage',
+      '/monitor',
+      '/custom/7',
+      '/purchase',
+      '/subscriptions',
+      '/redeem',
+      '/orders',
+      '/affiliate',
+      '/lottery',
+      '/profile',
+    ])
+  })
+
   it('omits retired product links from the admin personal section', () => {
     stores.auth.isAdmin = true
     const paths = renderedPaths(mountSidebar())
     expect(paths).not.toContain('/image-site')
+    expect(paths).not.toContain('/batch-image')
     expect(paths).not.toContain('/store')
     expect(paths).toContain('/purchase')
     expect(paths).toContain('/subscriptions')
@@ -123,6 +152,7 @@ describe('AppSidebar user navigation', () => {
     stores.auth.isSimpleMode = true
     const paths = renderedPaths(mountSidebar())
     expect(paths).not.toContain('/image-site')
+    expect(paths).not.toContain('/batch-image')
     expect(paths).not.toContain('/store')
     expect(paths).not.toContain('/lottery')
     expect(paths).not.toContain('/admin/lottery')

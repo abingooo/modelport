@@ -107,8 +107,8 @@
         </router-link>
 
         <div class="nav-actions">
-          <router-link to="/available-channels" class="nav-control pricing-link">
-            {{ t('nav.availableChannels') }}
+          <router-link :to="modelPlazaPath" class="nav-control pricing-link">
+            {{ t('nav.modelPlaza') }}
           </router-link>
           <div class="locale-control"><LocaleSwitcher /></div>
           <button
@@ -160,75 +160,14 @@
                 {{ t('home.getStarted') }}
                 <Icon name="arrowRight" size="sm" :stroke-width="2" />
               </router-link>
-              <router-link to="/available-channels" class="secondary-action">
-                {{ t('nav.availableChannels') }}
+              <router-link :to="modelPlazaPath" class="secondary-action">
+                {{ t('nav.modelPlaza') }}
               </router-link>
             </div>
           </div>
         </div>
       </section>
 
-      <section class="model-current" :aria-label="t('home.modelCurrent.label')">
-        <div class="current-stage">
-          <div
-            class="model-lane lane-east"
-            role="list"
-            :aria-label="t('home.modelCurrent.label')"
-          >
-            <div class="model-track track-east">
-              <div
-                v-for="copy in 2"
-                :key="`east-${copy}`"
-                class="model-sequence"
-                :aria-hidden="copy === 2"
-              >
-                <span
-                  v-for="(provider, index) in flowProviders"
-                  :key="`east-${copy}-${index}-${provider.platform}`"
-                  class="provider-chip"
-                  :class="{
-                    'is-loop-duplicate': index >= providers.length,
-                    'needs-dark-icon': provider.darkIcon,
-                  }"
-                  :role="copy === 1 && index < providers.length ? 'listitem' : undefined"
-                  :aria-label="copy === 1 && index < providers.length ? provider.name : undefined"
-                  :aria-hidden="copy !== 1 || index >= providers.length ? 'true' : undefined"
-                  :title="provider.name"
-                  :data-platform="provider.platform"
-                  :style="{ '--provider-color': provider.color }"
-                >
-                  <span class="provider-emblem">
-                    <PlatformIcon :platform="provider.platform" size="lg" />
-                  </span>
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div class="model-lane lane-west" aria-hidden="true">
-            <div class="model-track track-west">
-              <div v-for="copy in 2" :key="`west-${copy}`" class="model-sequence">
-                <span
-                  v-for="(provider, index) in reversedFlowProviders"
-                  :key="`west-${copy}-${index}-${provider.platform}`"
-                  class="provider-chip"
-                  :class="{
-                    'is-loop-duplicate': index >= providers.length,
-                    'needs-dark-icon': provider.darkIcon,
-                  }"
-                  :title="provider.name"
-                  :data-platform="provider.platform"
-                  :style="{ '--provider-color': provider.color }"
-                >
-                  <span class="provider-emblem">
-                    <PlatformIcon :platform="provider.platform" size="lg" />
-                  </span>
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
     </main>
 
     <footer class="home-footer">
@@ -244,7 +183,6 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BrandLogo from '@/components/common/BrandLogo.vue'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
-import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import HarborScene, { type HarborProvider } from '@/components/home/HarborScene.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore, useAuthStore } from '@/stores'
@@ -302,6 +240,10 @@ const markSource = computed(() =>
 const isAuthenticated = computed(() => authStore.isAuthenticated)
 const dashboardPath = computed(() => authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
 const startPath = computed(() => isAuthenticated.value ? dashboardPath.value : '/login')
+const modelPlazaPath = computed(() => isAuthenticated.value
+  ? { path: '/model-plaza', query: { embedded: '1' } }
+  : '/model-plaza'
+)
 const currentYear = computed(() => new Date().getFullYear())
 const copyrightText = computed(
   () => isModelPortBrand.value
@@ -329,12 +271,6 @@ const providers = computed<HarborProvider[]>(() => modelVendorPlatforms.map((pla
   color: platformAccentHex(platform),
   darkIcon: platform === 'grok' || platform === 'kimi',
 })))
-const reversedProviders = computed(() => [...providers.value].reverse())
-const flowProviders = computed(() => [...providers.value, ...providers.value])
-const reversedFlowProviders = computed(() => [
-  ...reversedProviders.value,
-  ...reversedProviders.value,
-])
 
 let descriptionElement: HTMLMetaElement | null = null
 let createdDescriptionElement = false
@@ -491,8 +427,7 @@ onBeforeUnmount(() => {
 .hero-kicker,
 .hero-actions,
 .primary-action,
-.secondary-action,
-.provider-chip {
+.secondary-action {
   display: flex;
   align-items: center;
 }
@@ -726,151 +661,6 @@ onBeforeUnmount(() => {
   transform: translateY(-2px);
 }
 
-.model-current {
-  position: relative;
-  border-top: 1px solid var(--line-soft);
-  border-bottom: 1px solid var(--line-soft);
-  overflow: hidden;
-  background: var(--paper);
-}
-
-.current-stage {
-  position: relative;
-  height: 132px;
-  overflow: hidden;
-  background: color-mix(in srgb, var(--paper-soft) 88%, var(--sky));
-}
-
-.current-stage::before {
-  position: absolute;
-  z-index: 0;
-  top: 50%;
-  right: 0;
-  left: 0;
-  height: 1px;
-  content: "";
-  background: var(--line-soft);
-}
-
-.model-lane {
-  position: absolute;
-  z-index: 2;
-  right: 0;
-  left: 0;
-  height: 50px;
-  overflow: hidden;
-}
-
-.lane-east {
-  top: 11px;
-}
-
-.lane-west {
-  bottom: 11px;
-}
-
-.model-track,
-.model-sequence {
-  display: flex;
-  width: max-content;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.model-track {
-  gap: 12px;
-  will-change: transform;
-}
-
-.model-sequence {
-  min-width: max(1320px, 100vw);
-  padding-inline: 8px;
-  justify-content: space-around;
-  gap: 10px;
-}
-
-.track-east {
-  animation: current-east 42s linear infinite;
-}
-
-.track-west {
-  animation: current-west 47s linear infinite;
-}
-
-.provider-chip {
-  --provider-color: var(--blue);
-  position: relative;
-  width: 48px;
-  height: 48px;
-  flex: 0 0 48px;
-  justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--provider-color) 58%, var(--line));
-  border-radius: 6px;
-  color: var(--provider-color);
-  background: color-mix(in srgb, var(--paper) 64%, transparent);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 58%, transparent),
-    inset 0 -4px 10px color-mix(in srgb, var(--provider-color) 9%, transparent),
-    0 7px 15px color-mix(in srgb, var(--ink) 9%, transparent);
-  backdrop-filter: blur(10px) saturate(125%);
-  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
-}
-
-.provider-chip::before {
-  position: absolute;
-  top: 3px;
-  right: 6px;
-  left: 6px;
-  height: 1px;
-  content: "";
-  background: color-mix(in srgb, #fff 72%, transparent);
-  opacity: 0.8;
-}
-
-.provider-chip:hover {
-  border-color: var(--provider-color);
-  box-shadow:
-    inset 0 1px 0 color-mix(in srgb, #fff 64%, transparent),
-    inset 0 -4px 10px color-mix(in srgb, var(--provider-color) 12%, transparent),
-    0 10px 20px color-mix(in srgb, var(--provider-color) 16%, transparent);
-  transform: translateY(-2px);
-}
-
-.is-dark .provider-chip {
-  background: color-mix(in srgb, var(--paper) 58%, transparent);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.13),
-    inset 0 -5px 12px color-mix(in srgb, var(--provider-color) 12%, transparent),
-    0 8px 18px rgba(0, 0, 0, 0.22);
-}
-
-.provider-emblem {
-  display: inline-flex;
-  width: 25px;
-  height: 25px;
-  flex: 0 0 25px;
-  align-items: center;
-  justify-content: center;
-  color: var(--provider-color);
-}
-
-.provider-emblem :deep(svg) {
-  width: 24px;
-  height: 24px;
-}
-
-.is-dark .provider-chip.needs-dark-icon {
-  color: #f4f7f2;
-}
-
-.is-dark .provider-chip.needs-dark-icon .provider-emblem {
-  color: #f4f7f2;
-}
-
-.is-dark .provider-chip.needs-dark-icon :deep(svg path) {
-  fill: #f4f7f2;
-}
-
 .home-footer {
   border-top: 1px solid var(--line-soft);
   background: var(--paper);
@@ -887,16 +677,6 @@ onBeforeUnmount(() => {
 
 .footer-layout p {
   margin: 0;
-}
-
-@keyframes current-east {
-  from { transform: translateX(calc(-50% - 6px)); }
-  to { transform: translateX(0); }
-}
-
-@keyframes current-west {
-  from { transform: translateX(0); }
-  to { transform: translateX(calc(-50% - 6px)); }
 }
 
 @media (min-width: 1800px) {
@@ -1007,34 +787,6 @@ onBeforeUnmount(() => {
     min-height: 54px;
     padding-inline: 23px;
     font-size: 17px;
-  }
-
-  .current-stage {
-    height: 158px;
-  }
-
-  .model-lane {
-    height: 60px;
-  }
-
-  .lane-east {
-    top: 14px;
-  }
-
-  .lane-west {
-    bottom: 14px;
-  }
-
-  .provider-chip {
-    width: 58px;
-    height: 58px;
-    flex-basis: 58px;
-  }
-
-  .provider-emblem,
-  .provider-emblem :deep(svg) {
-    width: 29px;
-    height: 29px;
   }
 
   .footer-layout {
@@ -1167,31 +919,6 @@ onBeforeUnmount(() => {
     padding: 0 12px;
   }
 
-  .current-stage {
-    height: 122px;
-  }
-
-  .lane-east {
-    top: 9px;
-  }
-
-  .lane-west {
-    bottom: 9px;
-  }
-
-  .provider-chip {
-    width: 42px;
-    height: 42px;
-    flex-basis: 42px;
-    backdrop-filter: blur(7px) saturate(118%);
-  }
-
-  .provider-emblem,
-  .provider-emblem :deep(svg) {
-    width: 22px;
-    height: 22px;
-  }
-
   .footer-layout {
     min-height: 52px;
   }
@@ -1219,33 +946,5 @@ onBeforeUnmount(() => {
     transition: none;
   }
 
-  .current-stage {
-    height: auto;
-    padding: 18px 0;
-  }
-
-  .model-lane {
-    position: static;
-    height: auto;
-    overflow: visible;
-  }
-
-  .model-track,
-  .model-sequence {
-    width: auto;
-    min-width: 0;
-    flex-wrap: wrap;
-    justify-content: center;
-    animation: none;
-    transform: none;
-  }
-
-  .model-sequence:nth-child(2) {
-    display: none;
-  }
-
-  .provider-chip.is-loop-duplicate {
-    display: none;
-  }
 }
 </style>

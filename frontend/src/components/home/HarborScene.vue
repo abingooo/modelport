@@ -14,6 +14,7 @@
     :data-atmosphere="dark ? 'stars' : 'clouds'"
     data-crane-system="integrated-sts"
     data-ship-count="2"
+    :style="{ '--terminal-offset': `${terminalOffset}px` }"
     @pointermove="handlePointerMove"
     @pointerleave="resetPointer"
   >
@@ -94,6 +95,7 @@ interface Palette {
 interface HarborLayout {
   compact: boolean
   horizonY: number
+  terminalOffsetY: number
   terminalLeft: number
   terminalRight: number
   deckY: number
@@ -120,6 +122,12 @@ interface CloudPoint {
   speed: number
   alpha: number
 }
+
+const MID_SCENE_MIN_WIDTH = 700
+const MID_SCENE_PEAK_WIDTH = 720
+const MID_SCENE_END_WIDTH = 900
+const MID_SCENE_START_OFFSET = 17
+const MID_SCENE_PEAK_OFFSET = 44
 
 const DEFAULT_PROVIDERS: HarborProvider[] = [
   { name: 'OpenAI', platform: 'openai', color: '#10a37f' },
@@ -177,6 +185,7 @@ const ready = ref(false)
 const failed = ref(false)
 const reducedMotion = ref(false)
 const sceneScale = ref(1)
+const terminalOffset = ref(0)
 const moonPhase = ref<MoonPhase>(getMoonPhase())
 const resolvedProviders = computed(() => props.providers.length ? props.providers : DEFAULT_PROVIDERS)
 const fallbackMoonShadowOffset = computed(() => {
@@ -217,9 +226,9 @@ function palette(): Palette {
         star: '#dcebe6',
         city: '#17363c',
         citySoft: '#23484e',
-        water: '#0b3b45',
-        waterDeep: '#062a33',
-        waterLine: '#61c4ba',
+        water: '#0b438c',
+        waterDeep: '#061f4f',
+        waterLine: '#62adff',
         ink: '#061216',
         structure: '#15292d',
         structureSoft: '#668084',
@@ -239,9 +248,9 @@ function palette(): Palette {
         star: '#ffffff',
         city: '#829d98',
         citySoft: '#9eb1ac',
-        water: '#2b7d85',
-        waterDeep: '#145963',
-        waterLine: '#b8e5dc',
+        water: '#2c86df',
+        waterDeep: '#0b55ae',
+        waterLine: '#b9dcff',
         ink: '#14292c',
         structure: '#263b3d',
         structureSoft: '#647a77',
@@ -255,7 +264,7 @@ function palette(): Palette {
       }
 }
 
-function polygon(points: Array<[number, number]>, fill: string) {
+function polygon(points: Array<[number, number]>, fill: string | CanvasGradient) {
   if (!context || !points.length) return
   context.beginPath()
   context.moveTo(points[0][0], points[0][1])
@@ -265,6 +274,53 @@ function polygon(points: Array<[number, number]>, fill: string) {
   context.closePath()
   context.fillStyle = fill
   context.fill()
+}
+
+function drawCuboid(
+  x: number,
+  y: number,
+  cuboidWidth: number,
+  cuboidHeight: number,
+  depth: number,
+  fill: string,
+  alpha = 1,
+  ribs = true
+) {
+  if (!context) return
+  const rise = Math.max(2, depth * 0.55)
+  const topFace: Array<[number, number]> = [
+    [x, y],
+    [x + depth, y - rise],
+    [x + cuboidWidth + depth, y - rise],
+    [x + cuboidWidth, y],
+  ]
+  const sideFace: Array<[number, number]> = [
+    [x + cuboidWidth, y],
+    [x + cuboidWidth + depth, y - rise],
+    [x + cuboidWidth + depth, y + cuboidHeight - rise],
+    [x + cuboidWidth, y + cuboidHeight],
+  ]
+
+  context.save()
+  context.globalAlpha = alpha
+  context.fillStyle = fill
+  context.fillRect(x, y, cuboidWidth, cuboidHeight)
+  polygon(topFace, fill)
+  polygon(sideFace, fill)
+
+  context.globalAlpha = alpha * 0.27
+  polygon(topFace, '#ffffff')
+  context.globalAlpha = alpha * 0.2
+  polygon(sideFace, '#061a36')
+
+  if (ribs && cuboidWidth >= 14) {
+    const ribCount = Math.max(1, Math.floor(cuboidWidth / 12))
+    for (let rib = 1; rib <= ribCount; rib += 1) {
+      const ribX = x + (cuboidWidth * rib) / (ribCount + 1)
+      strokeLine([[ribX, y + 2], [ribX, y + cuboidHeight - 2]], '#ffffff', 0.7, alpha * 0.2)
+    }
+  }
+  context.restore()
 }
 
 function strokeLine(
@@ -597,22 +653,41 @@ function drawRoutes(colors: Palette, horizonY: number, time: number) {
 }
 
 function getHarborLayout(horizonY: number): HarborLayout {
-  const compact = width < 700
+  const compact = width < MID_SCENE_MIN_WIDTH
+  const terminalOffsetY = getTerminalOffset(width)
   return {
     compact,
     horizonY,
+    terminalOffsetY,
     terminalLeft: width * (compact ? 0.47 : 0.54),
     terminalRight: width * (compact ? 0.76 : 0.82),
-    deckY: horizonY + Math.min(compact ? 48 : 54, height * (compact ? 0.066 : 0.07)),
+    deckY: horizonY
+      + Math.min(compact ? 48 : 54, height * (compact ? 0.066 : 0.07))
+      + terminalOffsetY,
     deckThickness: compact ? 16 : 20,
     dockFootX: width * (compact ? 0.8 : 0.84),
     lighthouseX: width * (compact ? 0.89 : 0.91),
-    lighthouseBaseY: horizonY + Math.min(compact ? 156 : 176, height * (compact ? 0.205 : 0.22)),
+    lighthouseBaseY: horizonY
+      + Math.min(compact ? 156 : 176, height * (compact ? 0.205 : 0.22))
+      + terminalOffsetY,
     lighthouseHeight: Math.max(
       compact ? 92 : 108,
       Math.min(compact ? 126 : 148, height * (compact ? 0.17 : 0.19))
     ),
   }
+}
+
+function getTerminalOffset(sceneWidth: number) {
+  if (sceneWidth < MID_SCENE_MIN_WIDTH || sceneWidth >= MID_SCENE_END_WIDTH) return 0
+  if (sceneWidth <= MID_SCENE_PEAK_WIDTH) {
+    const progress = (sceneWidth - MID_SCENE_MIN_WIDTH)
+      / (MID_SCENE_PEAK_WIDTH - MID_SCENE_MIN_WIDTH)
+    return MID_SCENE_START_OFFSET
+      + (MID_SCENE_PEAK_OFFSET - MID_SCENE_START_OFFSET) * progress
+  }
+  return MID_SCENE_PEAK_OFFSET
+    * (MID_SCENE_END_WIDTH - sceneWidth)
+    / (MID_SCENE_END_WIDTH - MID_SCENE_PEAK_WIDTH)
 }
 
 function lighthouseLanternY(layout: HarborLayout) {
@@ -705,7 +780,7 @@ function drawTerminalAndDock(colors: Palette, layout: HarborLayout) {
 }
 
 function drawBreakwater(colors: Palette) {
-  const compact = width < 700
+  const compact = width < MID_SCENE_MIN_WIDTH
   const tipX = width * (compact ? 0.2 : 0.18)
   const startY = height * (compact ? 0.91 : 0.9)
   const tipY = height * (compact ? 0.855 : 0.845)
@@ -746,15 +821,26 @@ function drawIntegratedGantry(colors: Palette, layout: HarborLayout, time: numbe
   const span = layout.terminalRight - layout.terminalLeft
   const beamStart = layout.terminalLeft - width * (layout.compact ? 0.08 : 0.1)
   const beamEnd = layout.terminalRight - span * 0.03
-  const beamY = layout.horizonY - Math.min(
-    layout.compact ? 68 : 102,
-    height * (layout.compact ? 0.095 : 0.14)
-  )
+  const beamY = layout.horizonY
+    - Math.min(
+      layout.compact ? 68 : 102,
+      height * (layout.compact ? 0.095 : 0.14)
+    )
+    + layout.terminalOffsetY
   const railY = layout.deckY - 8
   const leftFrame = layout.terminalLeft + span * 0.1
   const rightFrame = layout.terminalRight - span * 0.08
 
-  strokeLine([[beamStart, beamY], [beamEnd, beamY]], colors.structureSoft, layout.compact ? 4 : 5)
+  drawCuboid(
+    beamStart,
+    beamY,
+    beamEnd - beamStart,
+    layout.compact ? 7 : 9,
+    layout.compact ? 3 : 5,
+    colors.structureSoft,
+    0.94,
+    false
+  )
   strokeLine([[beamStart + 4, beamY + 10], [beamEnd, beamY + 10]], colors.structureSoft, 2.5, 0.86)
 
   const trussSegments = layout.compact ? 7 : 10
@@ -807,13 +893,7 @@ function drawIntegratedGantry(colors: Palette, layout: HarborLayout, time: numbe
   const cargoColor = cargoColors.length
     ? cargoColors[Math.floor(time / 5500) % cargoColors.length]
     : colors.mint
-  context.fillStyle = cargoColor
-  context.fillRect(trolleyX - 17, hookY, 34, 13)
-  context.fillStyle = colors.cream
-  context.globalAlpha = 0.22
-  context.fillRect(trolleyX - 11, hookY + 2, 1, 9)
-  context.fillRect(trolleyX + 10, hookY + 2, 1, 9)
-  context.globalAlpha = 1
+  drawCuboid(trolleyX - 17, hookY, 34, 13, 5, cargoColor, 0.96)
 
   const nameplateX = leftFrame + (rightFrame - leftFrame) * 0.47
   context.fillStyle = colors.structure
@@ -855,12 +935,15 @@ function drawContainers(colors: Palette, layout: HarborLayout) {
     for (let column = 0; column < Math.max(2, count - Math.floor(row / 2)); column += 1) {
       const x = startX + column * (unitWidth + 3)
       const y = baseY - unitHeight - row * (unitHeight + 3)
-      context.fillStyle = containerColors[(column + row * 2) % containerColors.length]
-      context.globalAlpha = 0.42
-      context.fillRect(x, y, unitWidth, unitHeight)
-      context.fillStyle = colors.cream
-      context.globalAlpha = 0.16
-      context.fillRect(x + 4, y + 2, 1, Math.max(2, unitHeight - 4))
+      drawCuboid(
+        x,
+        y,
+        unitWidth,
+        unitHeight,
+        layout.compact ? 3 : 4,
+        containerColors[(column + row * 2) % containerColors.length],
+        0.62
+      )
     }
   }
   context.globalAlpha = 1
@@ -991,21 +1074,34 @@ function drawShip(
   context.save()
   context.translate(x, y + (reducedMotion.value ? 0 : Math.sin(time * 0.0012) * 2))
   context.scale(scale * direction, scale)
-  polygon([[-74, 0], [82, 0], [59, 23], [-57, 23]], colors.structure)
-  context.fillStyle = colors.cream
-  context.fillRect(-54, -18, 34, 18)
-  context.fillStyle = colors.structureSoft
-  context.fillRect(-47, -29, 20, 11)
+  const hullGradient = context.createLinearGradient(0, 0, 0, 24)
+  hullGradient.addColorStop(0, colors.structureSoft)
+  hullGradient.addColorStop(0.22, colors.structure)
+  hullGradient.addColorStop(1, colors.ink)
+  polygon([[-74, 0], [82, 0], [59, 23], [-57, 23]], hullGradient)
+  polygon([[-74, 0], [82, 0], [72, 5], [-67, 5]], colors.structureSoft)
+  strokeLine([[-67, 7], [70, 7]], colors.cream, 1, props.dark ? 0.3 : 0.22)
+
+  drawCuboid(-54, -18, 34, 18, 5, colors.cream, 1, false)
+  drawCuboid(-47, -29, 20, 11, 4, colors.structureSoft, 1, false)
   context.fillStyle = colors.ink
   context.fillRect(-43, -25, 5, 4)
   context.fillRect(-34, -25, 5, 4)
+  strokeLine([[-37, -33], [-37, -43]], colors.structure, 1.5)
+  strokeLine([[-37, -41], [-27, -37]], colors.structure, 1)
 
   const cargoColors = resolvedProviders.value.map((provider) => provider.color)
   const colorsToUse = cargoColors.length ? cargoColors : [colors.coral, colors.mint, colors.yellow]
   for (let row = 0; row < 3; row += 1) {
     for (let column = 0; column < 5 - row; column += 1) {
-      context.fillStyle = colorsToUse[(column + row + cargoOffset) % colorsToUse.length]
-      context.fillRect(-9 + column * 18, -12 - row * 13, 15, 10)
+      drawCuboid(
+        -9 + column * 18,
+        -12 - row * 13,
+        15,
+        10,
+        3,
+        colorsToUse[(column + row + cargoOffset) % colorsToUse.length]
+      )
     }
   }
   context.fillStyle = colors.waterLine
@@ -1087,7 +1183,7 @@ function render(time = performance.now()) {
   pointer.currentY += (pointer.targetY - pointer.currentY) * 0.055
 
   const colors = palette()
-  const compact = width < 700
+  const compact = width < MID_SCENE_MIN_WIDTH
   const horizonY = height * (compact ? 0.61 : 0.63)
   const layout = getHarborLayout(horizonY)
   const parallaxX = pointer.currentX * Math.min(16, width * 0.014)
@@ -1144,6 +1240,7 @@ function resize() {
     : 1
   width = cssWidth / sceneScale.value
   height = cssHeight / sceneScale.value
+  terminalOffset.value = getTerminalOffset(width)
   pixelRatio = Math.min(2, window.devicePixelRatio || 1)
   element.width = Math.round(cssWidth * pixelRatio)
   element.height = Math.round(cssHeight * pixelRatio)
@@ -1253,7 +1350,7 @@ canvas {
 .dock-model-badges {
   position: absolute;
   z-index: 2;
-  top: calc(63% + 8px);
+  top: calc(63% + 8px + var(--terminal-offset, 0px));
   right: 20%;
   display: grid;
   width: 204px;
@@ -1363,11 +1460,11 @@ canvas {
 .fallback-water {
   position: absolute;
   inset: 61% 0 0;
-  background: linear-gradient(to bottom, #2b7d85, #145963);
+  background: linear-gradient(to bottom, #2c86df, #0b55ae);
 }
 
 .is-dark .fallback-water {
-  background: linear-gradient(to bottom, #0b3b45, #062a33);
+  background: linear-gradient(to bottom, #0b438c, #061f4f);
 }
 
 .fallback-terminal {

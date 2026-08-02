@@ -57,11 +57,15 @@ function mountView() {
         },
         BrandLogo: true,
         LocaleSwitcher: true,
-        PlatformIcon: true,
         Icon: true,
         RouterLink: {
           props: ['to'],
-          template: '<a :data-to="to"><slot /></a>',
+          template: `
+            <a
+              :data-to="typeof to === 'string' ? to : to.path"
+              :data-embedded="typeof to === 'string' ? undefined : to.query.embedded"
+            ><slot /></a>
+          `,
         },
       },
     },
@@ -112,21 +116,20 @@ describe('HomeView graphic harbor', () => {
 
     const destinations = routes(wrapper)
     expect(destinations).toContain('/dashboard')
-    expect(destinations).toContain('/available-channels')
+    expect(destinations).toContain('/model-plaza')
+    expect(destinations).not.toContain('/available-channels')
     expect(destinations).not.toContain('/keys')
     expect(destinations).not.toContain('/lottery')
+    expect(wrapper.findAll('[data-to="/model-plaza"][data-embedded="1"]')).toHaveLength(2)
     expect(wrapper.find('.hero-image').exists()).toBe(false)
     expect(wrapper.find('.mobile-navigation').exists()).toBe(false)
-    expect(wrapper.findAll('.provider-chip')).toHaveLength(88)
-    expect(wrapper.findAll('.provider-copy')).toHaveLength(0)
-    expect(wrapper.findAll('.vertical-current')).toHaveLength(0)
-    expect(wrapper.find('.current-meta').exists()).toBe(false)
+    expect(wrapper.find('.model-current').exists()).toBe(false)
+    expect(wrapper.findAll('.provider-chip')).toHaveLength(0)
     expect(wrapper.find('.port-node').exists()).toBe(false)
     expect(wrapper.get('.home-footer').text()).toBe(
       `© ${new Date().getFullYear()} ModelPort 保留所有权利`
     )
     expect(wrapper.get('.home-footer').text()).not.toContain('ModelPort.')
-    expect(wrapper.find('.lane-east').text()).not.toContain('MP-')
     expect(wrapper.find('.fleet-section').exists()).toBe(false)
     expect(wrapper.find('.protocol-section').exists()).toBe(false)
     expect(wrapper.find('.closing-section').exists()).toBe(false)
@@ -145,24 +148,18 @@ describe('HomeView graphic harbor', () => {
     await flushPromises()
     expect(routes(wrapper)).toContain('/login')
     expect(routes(wrapper)).not.toContain('/dashboard')
+    expect(wrapper.findAll('[data-to="/model-plaza"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-to="/model-plaza"][data-embedded]')).toHaveLength(0)
   })
 
-  it('shows only first-party model vendors in the bidirectional icon current', async () => {
+  it('keeps provider cargo in the harbor without rendering a separate icon current', async () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const visibleProviders = new Set(
-      wrapper.findAll('.lane-east [data-platform]').map((chip) => chip.attributes('data-platform'))
-    )
-    expect(visibleProviders).toContain('openai')
-    expect(visibleProviders).toContain('anthropic')
-    expect(visibleProviders).toContain('deepseek')
-    expect(visibleProviders).toContain('mimo')
-    expect(wrapper.findAll('.lane-east [role="listitem"]')).toHaveLength(11)
-    expect(wrapper.findAll('.provider-chip.needs-dark-icon')).not.toHaveLength(0)
-    expect(wrapper.get('.model-current').attributes('aria-label')).toBe(
-      'home.modelCurrent.label'
-    )
+    expect(wrapper.get('[data-testid="harbor"]').attributes('data-provider-count')).toBe('11')
+    expect(wrapper.find('.model-current').exists()).toBe(false)
+    expect(wrapper.find('.lane-east').exists()).toBe(false)
+    expect(wrapper.find('.lane-west').exists()).toBe(false)
   })
 
   it('preserves configured external home content', async () => {

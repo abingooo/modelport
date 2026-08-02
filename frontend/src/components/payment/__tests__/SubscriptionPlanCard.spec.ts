@@ -52,6 +52,18 @@ const mountPlanCard = (groupPlatform: string, overrides: Partial<SubscriptionPla
   });
 
 describe("SubscriptionPlanCard", () => {
+  it("uses ModelPort blue for the sales accent and purchase action", () => {
+    const wrapper = mountPlanCard("openai");
+
+    expect(wrapper.get("div.h-1\\.5").classes()).toContain("bg-primary-500");
+    expect(wrapper.get("button").classes()).toEqual(expect.arrayContaining([
+      "bg-primary-600",
+      "hover:bg-primary-700",
+      "focus-visible:ring-primary-500",
+    ]));
+    expect(wrapper.get("button").classes()).not.toContain("bg-emerald-600");
+  });
+
   it("does not show Antigravity model scopes for OpenAI plans", () => {
     const text = mountPlanCard("openai").text();
 

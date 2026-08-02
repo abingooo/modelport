@@ -65,7 +65,6 @@ type Handlers struct {
 	AvailableChannel *AvailableChannelHandler
 	ModelPlaza       *ModelPlazaHandler
 	AsyncImage       *AsyncImageHandler
-	BatchImage       *BatchImageHandler
 	Lottery          *LotteryHandler
 }
 

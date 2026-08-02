@@ -143,6 +143,33 @@ func TestGatewayRoutesAsyncImagesPathsAreRegistered(t *testing.T) {
 	}
 }
 
+func TestGatewayRoutesRetiredBatchImagesPathsReturnNotFound(t *testing.T) {
+	router := newGatewayRoutesTestRouter()
+	tests := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/v1/images/batches"},
+		{http.MethodGet, "/v1/images/batches"},
+		{http.MethodGet, "/v1/images/batches/models"},
+		{http.MethodGet, "/v1/images/batches/1"},
+		{http.MethodGet, "/v1/images/batches/1/items"},
+		{http.MethodGet, "/v1/images/batches/1/items/item-1/content"},
+		{http.MethodGet, "/v1/images/batches/1/download"},
+		{http.MethodPost, "/v1/images/batches/1/cancel"},
+		{http.MethodDelete, "/v1/images/batches/1"},
+		{http.MethodDelete, "/v1/images/batches/1/outputs"},
+	}
+
+	for _, test := range tests {
+		req := httptest.NewRequest(test.method, test.path, nil)
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusNotFound, w.Code, "method=%s path=%s", test.method, test.path)
+	}
+}
+
 func TestGatewayRoutesGrokImagesAndVideosPathsAreRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter(service.PlatformGrok)
 
