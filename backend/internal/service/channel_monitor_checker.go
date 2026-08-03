@@ -168,8 +168,15 @@ type providerAdapter struct {
 //
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerAdapters = map[string]providerAdapter{
-	MonitorProviderOpenAI: providerOpenAIChatAdapter,
-	MonitorProviderGrok:   providerGrokChatAdapter,
+	MonitorProviderOpenAI:   providerOpenAIChatAdapter,
+	MonitorProviderGrok:     providerOpenAICompatibleChatAdapter,
+	MonitorProviderDeepSeek: providerOpenAICompatibleChatAdapter,
+	MonitorProviderQwen:     providerOpenAICompatibleChatAdapter,
+	MonitorProviderGLM:      providerOpenAICompatibleChatAdapter,
+	MonitorProviderKimi:     providerOpenAICompatibleChatAdapter,
+	MonitorProviderDoubao:   providerOpenAICompatibleChatAdapter,
+	MonitorProviderMiniMax:  providerOpenAICompatibleChatAdapter,
+	MonitorProviderMiMo:     providerOpenAICompatibleChatAdapter,
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
@@ -210,7 +217,7 @@ var providerAdapters = map[string]providerAdapter{
 var providerOpenAIChatAdapter = newOpenAICompatibleChatAdapter(providerOpenAIPath)
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
-var providerGrokChatAdapter = newOpenAICompatibleChatAdapter(providerGrokPath)
+var providerOpenAICompatibleChatAdapter = newOpenAICompatibleChatAdapter(providerOpenAIPath)
 
 func newOpenAICompatibleChatAdapter(path string) providerAdapter {
 	return providerAdapter{
@@ -445,6 +452,13 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderOpenAI + ":" + MonitorAPIModeChatCompletions: {"model": true, "messages": true, "stream": true},
 	MonitorProviderOpenAI + ":" + MonitorAPIModeResponses:       {"model": true, "instructions": true, "input": true, "stream": true},
 	MonitorProviderGrok:      {"model": true, "messages": true, "stream": true},
+	MonitorProviderDeepSeek:  {"model": true, "messages": true, "stream": true},
+	MonitorProviderQwen:      {"model": true, "messages": true, "stream": true},
+	MonitorProviderGLM:       {"model": true, "messages": true, "stream": true},
+	MonitorProviderKimi:      {"model": true, "messages": true, "stream": true},
+	MonitorProviderDoubao:    {"model": true, "messages": true, "stream": true},
+	MonitorProviderMiniMax:   {"model": true, "messages": true, "stream": true},
+	MonitorProviderMiMo:      {"model": true, "messages": true, "stream": true},
 	MonitorProviderAnthropic: {"model": true, "messages": true},
 	MonitorProviderGemini:    {"contents": true},
 }
@@ -464,7 +478,7 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 }
 
 func validateReplaceRequestBody(provider, apiMode string, body map[string]any) error {
-	if provider != MonitorProviderOpenAI && provider != MonitorProviderGrok {
+	if !isOpenAICompatibleMonitorProvider(provider) {
 		return nil
 	}
 	switch defaultAPIMode(apiMode) {
@@ -478,6 +492,10 @@ func validateReplaceRequestBody(provider, apiMode string, body map[string]any) e
 		}
 	}
 	return nil
+}
+
+func isOpenAICompatibleMonitorProvider(provider string) bool {
+	return provider != MonitorProviderAnthropic && provider != MonitorProviderGemini && isSupportedProvider(provider)
 }
 
 func stringFromAny(v any) string {
