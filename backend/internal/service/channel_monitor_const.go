@@ -47,8 +47,6 @@ const (
 
 	// providerOpenAIPath OpenAI Chat Completions 路径。
 	providerOpenAIPath = "/v1/chat/completions"
-	// providerGrokPath Grok OpenAI-compatible Chat Completions 路径。
-	providerGrokPath = "/v1/chat/completions"
 	// providerOpenAIResponsesPath OpenAI Responses API 路径。
 	providerOpenAIResponsesPath = "/v1/responses"
 	// providerAnthropicPath Anthropic Messages 路径。
