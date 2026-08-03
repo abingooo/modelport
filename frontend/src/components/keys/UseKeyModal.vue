@@ -243,7 +243,7 @@ const copiedIndex = ref<number | null>(null)
 const activeTab = ref<string>('unix')
 const activeClientTab = ref<string>('claude')
 type CodexAuthMode = 'legacy' | 'api-key'
-const codexAuthMode = ref<CodexAuthMode>('legacy')
+const codexAuthMode = ref<CodexAuthMode>('api-key')
 const compatiblePreset = computed(() => getOpenAICompatibleProviderPreset(props.platform))
 
 // Reset tabs when platform changes
@@ -266,12 +266,12 @@ const defaultClientTab = computed(() => {
 watch(() => props.platform, () => {
   activeTab.value = 'unix'
   activeClientTab.value = defaultClientTab.value
-  codexAuthMode.value = 'legacy'
+  codexAuthMode.value = 'api-key'
 }, { immediate: true })
 
 watch(() => props.show, (show) => {
   if (show) {
-    codexAuthMode.value = 'legacy'
+    codexAuthMode.value = 'api-key'
   }
 })
 
