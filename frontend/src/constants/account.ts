@@ -14,6 +14,21 @@ export const QUOTA_RESET_MODE_ROLLING = 'rolling' as const
 export const QUOTA_RESET_MODE_FIXED = 'fixed' as const
 export type QuotaResetMode = typeof QUOTA_RESET_MODE_ROLLING | typeof QUOTA_RESET_MODE_FIXED
 
+const UPSTREAM_BILLING_PROBE_PLATFORMS = new Set([
+  'openai',
+  'anthropic',
+  'gemini',
+  'antigravity',
+  'grok'
+])
+
+export function supportsUpstreamBillingProbe(
+  platform?: string | null,
+  accountType?: string | null
+): boolean {
+  return accountType === 'apikey' && !!platform && UPSTREAM_BILLING_PROBE_PLATFORMS.has(platform)
+}
+
 /** Vertex AI location options for Service Account accounts */
 export const VERTEX_LOCATION_OPTIONS = [
   {
