@@ -1451,7 +1451,7 @@
             }}
           </p>
           <div
-            v-if="account?.type === 'apikey'"
+            v-if="upstreamBillingProbeCapable"
             class="mt-3 flex items-center justify-between gap-3"
           >
             <div class="min-w-0">
@@ -1676,7 +1676,7 @@
       </div>
 
       <div
-        v-if="account?.type === 'apikey'"
+        v-if="upstreamBillingProbeCapable"
         class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
       >
         <div>
@@ -2695,7 +2695,7 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
-import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
+import { supportsUpstreamBillingProbe, VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -2727,6 +2727,10 @@ const emit = defineEmits<{
   close: []
   updated: [account: Account]
 }>()
+
+const upstreamBillingProbeCapable = computed(() =>
+  supportsUpstreamBillingProbe(props.account?.platform, props.account?.type)
+)
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -4116,7 +4120,7 @@ const handleSubmit = async () => {
       updatePayload.load_factor = 0
     }
     updatePayload.auto_pause_on_expired = autoPauseOnExpired.value
-    if (props.account.type === 'apikey') {
+    if (upstreamBillingProbeCapable.value) {
       updatePayload.upstream_billing_probe_enabled = upstreamBillingAutoProbeEnabled.value
       updatePayload.upstream_billing_rate_sync_enabled = upstreamBillingRateSyncEnabled.value
       if (upstreamBillingRateSyncEnabled.value) {
