@@ -468,6 +468,13 @@ const baseSettingsResponse = {
   payment_enabled_types: [],
   payment_balance_disabled: false,
   payment_balance_recharge_multiplier: 1,
+  payment_recharge_bonus_enabled: false,
+  payment_recharge_bonus_tiers: [
+    { min_amount: 0, bonus_percent: 3 },
+    { min_amount: 100, bonus_percent: 5 },
+    { min_amount: 500, bonus_percent: 8 },
+    { min_amount: 1000, bonus_percent: 10 },
+  ],
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
   payment_load_balance_strategy: "round-robin",
@@ -888,6 +895,35 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(payload).not.toHaveProperty("payment_visible_method_wxpay_source");
     expect(payload).not.toHaveProperty("payment_visible_method_alipay_enabled");
     expect(payload).not.toHaveProperty("payment_visible_method_wxpay_enabled");
+  });
+
+  it("sorts and submits recharge bonus tiers", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      payment_recharge_bonus_enabled: true,
+      payment_recharge_bonus_tiers: [
+        { min_amount: 500, bonus_percent: 8 },
+        { min_amount: 0, bonus_percent: 3 },
+        { min_amount: 100, bonus_percent: 5 },
+      ],
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+    await openPaymentTab(wrapper);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payment_recharge_bonus_enabled: true,
+        payment_recharge_bonus_tiers: [
+          { min_amount: 0, bonus_percent: 3 },
+          { min_amount: 100, bonus_percent: 5 },
+          { min_amount: 500, bonus_percent: 8 },
+        ],
+      }),
+    );
   });
 
   it("submits the admin recharge affiliate rebate setting", async () => {
