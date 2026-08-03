@@ -161,6 +161,34 @@ func TestCreateAccountAcceptsDedicatedUpstreamBillingProbeSetting(t *testing.T) 
 	require.ErrorIs(t, err, ErrUpstreamBillingProbeAccountInvalid)
 }
 
+func TestCreateAccountIgnoresUnsupportedAPIKeyProbeFlag(t *testing.T) {
+	enabled := true
+	for _, platform := range []string{
+		PlatformDeepSeek,
+		PlatformQwen,
+		PlatformGLM,
+		PlatformKimi,
+		PlatformDoubao,
+		PlatformMiniMax,
+		PlatformMiMo,
+	} {
+		t.Run(platform, func(t *testing.T) {
+			repo := &upstreamBillingProbeAccountRepo{}
+			created, err := (&adminServiceImpl{accountRepo: repo}).CreateAccount(context.Background(), &CreateAccountInput{
+				Name:                 platform,
+				Platform:             platform,
+				Type:                 AccountTypeAPIKey,
+				Credentials:          map[string]any{"api_key": "sk-test", "base_url": "https://relay.example"},
+				ProbeEnabled:         &enabled,
+				SkipDefaultGroupBind: true,
+			})
+
+			require.NoError(t, err)
+			require.NotContains(t, created.Extra, UpstreamBillingProbeEnabledExtraKey)
+		})
+	}
+}
+
 func TestUpdateAccountPreservesManagedUpstreamBillingProbeStateForUnrelatedEdit(t *testing.T) {
 	accountID := int64(110)
 	repo := &upstreamBillingProbeAccountRepo{accounts: map[int64]*Account{

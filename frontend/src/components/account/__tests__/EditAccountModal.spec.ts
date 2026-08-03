@@ -683,7 +683,6 @@ describe('EditAccountModal', () => {
   })
 
   it('exposes the upstream billing auto-probe toggle for non-OpenAI API-key accounts', async () => {
-    // 探测已放宽到全部 API-key 平台：grok 账号同样能开启并保存。
     const account = buildAccount()
     account.platform = 'grok'
     account.name = 'grok-relay'
@@ -702,6 +701,25 @@ describe('EditAccountModal', () => {
 
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBe(true)
+  })
+
+  it('hides and omits upstream billing settings for unsupported API-key platforms', async () => {
+    const account = buildAccount()
+    account.platform = 'deepseek'
+    account.name = 'deepseek'
+    account.credentials = { api_key: 'sk-deepseek', base_url: 'https://api.deepseek.com' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="upstream-billing-rate-sync"]').exists()).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload).not.toHaveProperty('upstream_billing_probe_enabled')
+    expect(payload).not.toHaveProperty('upstream_billing_rate_sync_enabled')
   })
 
   it('enabling rate sync also enables probing and stops submitting a manual rate', async () => {

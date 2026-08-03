@@ -134,6 +134,17 @@ async function submitApiKeyAccount(
   return wrapper
 }
 
+async function submitDedicatedProviderApiKeyAccount(platformLabel: string) {
+  const wrapper = mountModal()
+  await selectButtonByText(wrapper, platformLabel)
+  await flushPromises()
+  await wrapper.get('form#create-account-form input[type="text"]').setValue(`${platformLabel} account`)
+  await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+  await wrapper.get('form#create-account-form').trigger('submit.prevent')
+  await flushPromises()
+  return wrapper
+}
+
 async function openCodexImportStep(toggleClicks = 0) {
   const wrapper = mountModal()
   await selectButtonByText(wrapper, 'OpenAI')
@@ -289,7 +300,6 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
 
     expect(createAccountMock).toHaveBeenCalledTimes(1)
     expect(createAccountMock.mock.calls[0]?.[0]?.extra?.openai_long_context_billing_enabled).toBeUndefined()
-    // 上游倍率探测已放宽到全部 API-key 平台：非 OpenAI 平台与 OpenAI 一致，默认开启。
     expect(createAccountMock.mock.calls[0]?.[0]?.upstream_billing_probe_enabled).toBe(true)
   })
 
@@ -299,9 +309,25 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(createAccountMock.mock.calls[0]?.[0]?.upstream_billing_probe_enabled).toBe(false)
   })
 
+  it.each([
+    ['DeepSeek', 'deepseek'],
+    ['通义千问', 'qwen'],
+    ['智谱AI', 'glm'],
+    ['Kimi', 'kimi'],
+    ['ByteDance', 'doubao'],
+    ['MiniMax', 'minimax'],
+    ['小米 MiMo', 'mimo']
+  ] as const)('omits upstream billing probes when creating a %s account', async (label, platform) => {
+    const wrapper = await submitDedicatedProviderApiKeyAccount(label)
+
+    expect(wrapper.find('[data-testid="upstream-billing-auto-probe"]').exists()).toBe(false)
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.platform).toBe(platform)
+    expect(createAccountMock.mock.calls[0]?.[0]).not.toHaveProperty('upstream_billing_probe_enabled')
+    expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
+  })
+
   it('antigravity upstream 创建默认携带上游倍率探测开关', async () => {
-    // antigravity upstream 走独立创建 helper，
-    // 也必须与其余 API-key 平台一样默认开启探测并传递开关。
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'Antigravity')
     await selectButtonByText(wrapper, 'admin.accounts.types.antigravityApikey')
@@ -320,7 +346,6 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(payload?.platform).toBe('antigravity')
     expect(payload?.type).toBe('apikey')
     expect(payload?.upstream_billing_probe_enabled).toBe(true)
-    // 创建成功后前端立即发起一次首探（与其他 apikey 平台一致）。
     expect(probeUpstreamBillingMock).toHaveBeenCalledWith(42)
   })
 

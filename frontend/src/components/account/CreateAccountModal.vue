@@ -1082,8 +1082,9 @@
           <p class="input-hint">{{ t('admin.accounts.arkEndpointIdHint') }}</p>
         </div>
 
-        <!-- 上游倍率自动探测：全部 API-key 平台可用（所在区块已限定 apikey 类型） -->
+        <!-- 上游倍率自动探测仅对后端支持的平台开放 -->
         <div
+          v-if="upstreamBillingProbeCapable"
           class="flex items-center justify-between gap-4 border-t border-gray-200 pt-4 dark:border-dark-600"
         >
           <div>
@@ -3525,7 +3526,7 @@ import {
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
-import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
+import { supportsUpstreamBillingProbe, VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
   OPENAI_WS_MODE_CTX_POOL,
   OPENAI_WS_MODE_OFF,
@@ -4059,6 +4060,10 @@ const form = reactive({
   group_ids: [] as number[],
   expires_at: null as number | null
 })
+
+const upstreamBillingProbeCapable = computed(() =>
+  supportsUpstreamBillingProbe(form.platform, form.type)
+)
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
@@ -5116,7 +5121,9 @@ const handleSubmit = async () => {
     ...form,
     group_ids: form.group_ids,
     extra,
-    upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value,
+    ...(upstreamBillingProbeCapable.value
+      ? { upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value }
+      : {}),
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }
@@ -5245,9 +5252,9 @@ const createAccountAndFinish = async (
     rate_multiplier: form.rate_multiplier,
     group_ids: form.group_ids,
     expires_at: form.expires_at,
-    // 上游倍率探测对全部 API-key 平台开放（antigravity upstream 走本 helper）；
-    // 非 apikey 类型（bedrock/oauth）不传，后端不动作。
-    upstream_billing_probe_enabled: type === 'apikey' ? upstreamBillingAutoProbeEnabled.value : undefined,
+    ...(supportsUpstreamBillingProbe(platform, type)
+      ? { upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value }
+      : {}),
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }
