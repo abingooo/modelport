@@ -225,8 +225,8 @@ func TestRunCheckForModel_Grok_DefaultChatRequest(t *testing.T) {
 	if res.LatencyMs == nil {
 		t.Fatal("Grok request should record latency")
 	}
-	if h.lastPath != providerGrokPath {
-		t.Fatalf("expected Grok chat completions path %q, got %q", providerGrokPath, h.lastPath)
+	if h.lastPath != providerOpenAIPath {
+		t.Fatalf("expected Grok chat completions path %q, got %q", providerOpenAIPath, h.lastPath)
 	}
 	if h.lastBody["model"] != MonitorDefaultGrokModel {
 		t.Errorf("Grok body should contain model=%s, got %v", MonitorDefaultGrokModel, h.lastBody["model"])

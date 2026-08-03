@@ -25,6 +25,11 @@ export type OrderType = 'balance' | 'subscription'
 
 // ==================== Configuration ====================
 
+export interface RechargeBonusTier {
+  min_amount: number
+  bonus_percent: number
+}
+
 export interface PaymentConfig {
   payment_enabled: boolean
   min_amount: number
@@ -34,6 +39,8 @@ export interface PaymentConfig {
   order_timeout_minutes: number
   balance_disabled: boolean
   balance_recharge_multiplier: number
+  recharge_bonus_enabled: boolean
+  recharge_bonus_tiers: RechargeBonusTier[]
   subscription_usd_to_cny_rate: number
   enabled_payment_types: PaymentType[]
   help_image_url: string
@@ -68,6 +75,8 @@ export interface CheckoutInfoResponse {
   plans: SubscriptionPlan[]
   balance_disabled: boolean
   balance_recharge_multiplier: number
+  recharge_bonus_enabled: boolean
+  recharge_bonus_tiers: RechargeBonusTier[]
   /** Subscription CNY conversion rate (1 USD = X CNY); 0 = disabled, plan price is charged as-is */
   subscription_usd_to_cny_rate: number
   recharge_fee_rate: number
@@ -104,6 +113,8 @@ export interface PaymentOrder {
   refund_request_reason?: string
   plan_id?: number
   provider_instance_id?: string
+  recharge_bonus_percent?: number
+  recharge_bonus_amount?: number
 }
 
 // ==================== Plans & Channels ====================
@@ -210,6 +221,8 @@ export interface CreateOrderResult {
   payment_env?: string
   pay_amount: number
   fee_rate: number
+  recharge_bonus_percent?: number
+  recharge_bonus_amount?: number
   expires_at: string
   result_type?: CreateOrderResultType
   payment_type?: string

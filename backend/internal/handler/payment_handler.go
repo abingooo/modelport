@@ -147,6 +147,8 @@ func (h *PaymentHandler) GetCheckoutInfo(c *gin.Context) {
 		Plans:                         planList,
 		BalanceDisabled:               cfg.BalanceDisabled,
 		BalanceRechargeMultiplier:     cfg.BalanceRechargeMultiplier,
+		RechargeBonusEnabled:          cfg.RechargeBonusEnabled,
+		RechargeBonusTiers:            cfg.RechargeBonusTiers,
 		SubscriptionUSDToCNYRate:      cfg.SubscriptionUSDToCNYRate,
 		RechargeFeeRate:               cfg.RechargeFeeRate,
 		HelpText:                      cfg.HelpText,
@@ -164,6 +166,8 @@ type checkoutInfoResponse struct {
 	Plans                         []checkoutPlan                  `json:"plans"`
 	BalanceDisabled               bool                            `json:"balance_disabled"`
 	BalanceRechargeMultiplier     float64                         `json:"balance_recharge_multiplier"`
+	RechargeBonusEnabled          bool                            `json:"recharge_bonus_enabled"`
+	RechargeBonusTiers            []service.RechargeBonusTier     `json:"recharge_bonus_tiers"`
 	SubscriptionUSDToCNYRate      float64                         `json:"subscription_usd_to_cny_rate"`
 	RechargeFeeRate               float64                         `json:"recharge_fee_rate"`
 	HelpText                      string                          `json:"help_text"`
@@ -620,27 +624,29 @@ func isMobile(c *gin.Context) bool {
 }
 
 type PaymentOrderResult struct {
-	ID                  int64      `json:"id"`
-	UserID              int64      `json:"user_id"`
-	Amount              float64    `json:"amount"`
-	PayAmount           float64    `json:"pay_amount"`
-	FeeRate             float64    `json:"fee_rate"`
-	Currency            string     `json:"currency"`
-	PaymentType         string     `json:"payment_type"`
-	OutTradeNo          string     `json:"out_trade_no"`
-	Status              string     `json:"status"`
-	OrderType           string     `json:"order_type"`
-	CreatedAt           time.Time  `json:"created_at"`
-	ExpiresAt           time.Time  `json:"expires_at"`
-	PaidAt              *time.Time `json:"paid_at,omitempty"`
-	CompletedAt         *time.Time `json:"completed_at,omitempty"`
-	RefundAmount        float64    `json:"refund_amount"`
-	RefundReason        *string    `json:"refund_reason,omitempty"`
-	RefundRequestedAt   *time.Time `json:"refund_requested_at,omitempty"`
-	RefundRequestedBy   *string    `json:"refund_requested_by,omitempty"`
-	RefundRequestReason *string    `json:"refund_request_reason,omitempty"`
-	PlanID              *int64     `json:"plan_id,omitempty"`
-	ProviderInstanceID  *string    `json:"provider_instance_id,omitempty"`
+	ID                   int64      `json:"id"`
+	UserID               int64      `json:"user_id"`
+	Amount               float64    `json:"amount"`
+	PayAmount            float64    `json:"pay_amount"`
+	FeeRate              float64    `json:"fee_rate"`
+	Currency             string     `json:"currency"`
+	PaymentType          string     `json:"payment_type"`
+	OutTradeNo           string     `json:"out_trade_no"`
+	Status               string     `json:"status"`
+	OrderType            string     `json:"order_type"`
+	CreatedAt            time.Time  `json:"created_at"`
+	ExpiresAt            time.Time  `json:"expires_at"`
+	PaidAt               *time.Time `json:"paid_at,omitempty"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	RefundAmount         float64    `json:"refund_amount"`
+	RefundReason         *string    `json:"refund_reason,omitempty"`
+	RefundRequestedAt    *time.Time `json:"refund_requested_at,omitempty"`
+	RefundRequestedBy    *string    `json:"refund_requested_by,omitempty"`
+	RefundRequestReason  *string    `json:"refund_request_reason,omitempty"`
+	PlanID               *int64     `json:"plan_id,omitempty"`
+	ProviderInstanceID   *string    `json:"provider_instance_id,omitempty"`
+	RechargeBonusPercent float64    `json:"recharge_bonus_percent,omitempty"`
+	RechargeBonusAmount  float64    `json:"recharge_bonus_amount,omitempty"`
 }
 
 func sanitizePaymentOrdersForResponse(orders []*dbent.PaymentOrder) []PaymentOrderResult {
@@ -657,28 +663,31 @@ func sanitizePaymentOrderForResponse(order *dbent.PaymentOrder) *PaymentOrderRes
 	if order == nil {
 		return nil
 	}
+	bonus := service.PaymentOrderRechargeBonus(order)
 	return &PaymentOrderResult{
-		ID:                  order.ID,
-		UserID:              order.UserID,
-		Amount:              order.Amount,
-		PayAmount:           order.PayAmount,
-		FeeRate:             order.FeeRate,
-		Currency:            service.PaymentOrderCurrency(order),
-		PaymentType:         order.PaymentType,
-		OutTradeNo:          order.OutTradeNo,
-		Status:              order.Status,
-		OrderType:           order.OrderType,
-		CreatedAt:           order.CreatedAt,
-		ExpiresAt:           order.ExpiresAt,
-		PaidAt:              order.PaidAt,
-		CompletedAt:         order.CompletedAt,
-		RefundAmount:        order.RefundAmount,
-		RefundReason:        order.RefundReason,
-		RefundRequestedAt:   order.RefundRequestedAt,
-		RefundRequestedBy:   order.RefundRequestedBy,
-		RefundRequestReason: order.RefundRequestReason,
-		PlanID:              order.PlanID,
-		ProviderInstanceID:  order.ProviderInstanceID,
+		ID:                   order.ID,
+		UserID:               order.UserID,
+		Amount:               order.Amount,
+		PayAmount:            order.PayAmount,
+		FeeRate:              order.FeeRate,
+		Currency:             service.PaymentOrderCurrency(order),
+		PaymentType:          order.PaymentType,
+		OutTradeNo:           order.OutTradeNo,
+		Status:               order.Status,
+		OrderType:            order.OrderType,
+		CreatedAt:            order.CreatedAt,
+		ExpiresAt:            order.ExpiresAt,
+		PaidAt:               order.PaidAt,
+		CompletedAt:          order.CompletedAt,
+		RefundAmount:         order.RefundAmount,
+		RefundReason:         order.RefundReason,
+		RefundRequestedAt:    order.RefundRequestedAt,
+		RefundRequestedBy:    order.RefundRequestedBy,
+		RefundRequestReason:  order.RefundRequestReason,
+		PlanID:               order.PlanID,
+		ProviderInstanceID:   order.ProviderInstanceID,
+		RechargeBonusPercent: bonus.BonusPercent,
+		RechargeBonusAmount:  bonus.BonusAmount,
 	}
 }
 

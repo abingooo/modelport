@@ -55,11 +55,17 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	}
 	orderAmount := req.Amount
 	limitAmount := req.Amount
+	rechargeBonus := RechargeBonusSnapshot{}
 	if plan != nil {
 		orderAmount = plan.Price
 		limitAmount = plan.Price
 	} else if req.OrderType == payment.OrderTypeBalance {
-		orderAmount = calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
+		baseCreditedAmount := calculateCreditedBalance(req.Amount, cfg.BalanceRechargeMultiplier)
+		rechargeBonus = calculateRechargeBonus(req.Amount, baseCreditedAmount, cfg)
+		orderAmount = decimal.NewFromFloat(baseCreditedAmount).
+			Add(decimal.NewFromFloat(rechargeBonus.BonusAmount)).
+			Round(2).
+			InexactFloat64()
 	}
 	feeRate := cfg.RechargeFeeRate
 	methodCurrency := payment.DefaultPaymentCurrency
@@ -100,7 +106,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, req CreateOrderRequest
 	if oauthResp != nil {
 		return oauthResp, nil
 	}
-	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel)
+	order, err := s.createOrderInTx(ctx, req, user, plan, cfg, orderAmount, limitAmount, feeRate, payAmount, sel, rechargeBonus)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +155,7 @@ func (s *PaymentService) validateSubOrder(ctx context.Context, req CreateOrderRe
 	return plan, nil
 }
 
-func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection) (*dbent.PaymentOrder, error) {
+func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderRequest, user *User, plan *dbent.SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount, feeRate, payAmount float64, sel *payment.InstanceSelection, rechargeBonus RechargeBonusSnapshot) (*dbent.PaymentOrder, error) {
 	tx, err := s.entClient.Tx(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin transaction: %w", err)
@@ -171,6 +177,7 @@ func (s *PaymentService) createOrderInTx(ctx context.Context, req CreateOrderReq
 		return nil, err
 	}
 	providerSnapshot := buildPaymentOrderProviderSnapshot(sel, req)
+	providerSnapshot = addRechargeBonusSnapshot(providerSnapshot, rechargeBonus)
 	selectedInstanceID := ""
 	selectedProviderKey := ""
 	if sel != nil {
@@ -468,13 +475,16 @@ func (s *PaymentService) invokeProvider(ctx context.Context, order *dbent.Paymen
 	if err != nil {
 		return nil, fmt.Errorf("update order with payment details: %w", err)
 	}
+	rechargeBonus := PaymentOrderRechargeBonus(order)
 	s.writeAuditLog(ctx, order.ID, "ORDER_CREATED", fmt.Sprintf("user:%d", req.UserID), map[string]any{
-		"paymentAmount":  req.Amount,
-		"creditedAmount": order.Amount,
-		"payAmount":      order.PayAmount,
-		"paymentType":    req.PaymentType,
-		"orderType":      req.OrderType,
-		"paymentSource":  NormalizePaymentSource(req.PaymentSource),
+		"paymentAmount":        req.Amount,
+		"creditedAmount":       order.Amount,
+		"payAmount":            order.PayAmount,
+		"paymentType":          req.PaymentType,
+		"orderType":            req.OrderType,
+		"paymentSource":        NormalizePaymentSource(req.PaymentSource),
+		"rechargeBonusPercent": rechargeBonus.BonusPercent,
+		"rechargeBonusAmount":  rechargeBonus.BonusAmount,
 	})
 	resultType := pr.ResultType
 	if resultType == "" {
@@ -730,27 +740,30 @@ func classifyCreatePaymentError(req CreateOrderRequest, providerKey string, err 
 }
 
 func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest, payAmount float64, sel *payment.InstanceSelection, pr *payment.CreatePaymentResponse, resultType payment.CreatePaymentResultType) *CreateOrderResponse {
+	bonus := PaymentOrderRechargeBonus(order)
 	return &CreateOrderResponse{
-		OrderID:      order.ID,
-		Amount:       order.Amount,
-		PayAmount:    payAmount,
-		FeeRate:      order.FeeRate,
-		Status:       OrderStatusPending,
-		ResultType:   resultType,
-		PaymentType:  req.PaymentType,
-		OutTradeNo:   order.OutTradeNo,
-		PayURL:       pr.PayURL,
-		QRCode:       pr.QRCode,
-		ClientSecret: pr.ClientSecret,
-		IntentID:     pr.IntentID,
-		Currency:     pr.Currency,
-		CountryCode:  pr.CountryCode,
-		PaymentEnv:   pr.PaymentEnv,
-		OAuth:        pr.OAuth,
-		JSAPI:        pr.JSAPI,
-		JSAPIPayload: pr.JSAPI,
-		ExpiresAt:    order.ExpiresAt,
-		PaymentMode:  sel.PaymentMode,
+		OrderID:              order.ID,
+		Amount:               order.Amount,
+		PayAmount:            payAmount,
+		FeeRate:              order.FeeRate,
+		RechargeBonusPercent: bonus.BonusPercent,
+		RechargeBonusAmount:  bonus.BonusAmount,
+		Status:               OrderStatusPending,
+		ResultType:           resultType,
+		PaymentType:          req.PaymentType,
+		OutTradeNo:           order.OutTradeNo,
+		PayURL:               pr.PayURL,
+		QRCode:               pr.QRCode,
+		ClientSecret:         pr.ClientSecret,
+		IntentID:             pr.IntentID,
+		Currency:             pr.Currency,
+		CountryCode:          pr.CountryCode,
+		PaymentEnv:           pr.PaymentEnv,
+		OAuth:                pr.OAuth,
+		JSAPI:                pr.JSAPI,
+		JSAPIPayload:         pr.JSAPI,
+		ExpiresAt:            order.ExpiresAt,
+		PaymentMode:          sel.PaymentMode,
 	}
 }
 

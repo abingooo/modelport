@@ -47,8 +47,6 @@ const (
 
 	// providerOpenAIPath OpenAI Chat Completions 路径。
 	providerOpenAIPath = "/v1/chat/completions"
-	// providerGrokPath Grok OpenAI-compatible Chat Completions 路径。
-	providerGrokPath = "/v1/chat/completions"
 	// providerOpenAIResponsesPath OpenAI Responses API 路径。
 	providerOpenAIResponsesPath = "/v1/responses"
 	// providerAnthropicPath Anthropic Messages 路径。
@@ -56,11 +54,18 @@ const (
 	// providerGeminiPathTemplate Gemini generateContent 路径模板（含 model 占位）。
 	providerGeminiPathTemplate = "/v1beta/models/%s:generateContent"
 
-	// MonitorProviderOpenAI / Anthropic / Gemini / Grok provider 字符串常量（也是 ent enum 的实际值）。
+	// MonitorProvider* provider 字符串常量（也是 ent enum 的实际值）。
 	MonitorProviderOpenAI    = "openai"
 	MonitorProviderAnthropic = "anthropic"
 	MonitorProviderGemini    = "gemini"
 	MonitorProviderGrok      = "grok"
+	MonitorProviderDeepSeek  = "deepseek"
+	MonitorProviderQwen      = "qwen"
+	MonitorProviderGLM       = "glm"
+	MonitorProviderKimi      = "kimi"
+	MonitorProviderDoubao    = "doubao"
+	MonitorProviderMiniMax   = "minimax"
+	MonitorProviderMiMo      = "mimo"
 
 	// MonitorDefaultGrokModel 是新增 Grok 监控未显式指定模型时使用的轻量测活模型。
 	MonitorDefaultGrokModel = "grok-4.5"
@@ -118,7 +123,7 @@ var (
 		"CHANNEL_MONITOR_NOT_FOUND", "channel monitor not found",
 	)
 	ErrChannelMonitorInvalidProvider = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_INVALID_PROVIDER", "provider must be one of openai/anthropic/gemini/grok",
+		"CHANNEL_MONITOR_INVALID_PROVIDER", "unsupported channel monitor provider",
 	)
 	ErrChannelMonitorInvalidAPIMode = infraerrors.BadRequest(
 		"CHANNEL_MONITOR_INVALID_API_MODE", "api_mode must be chat_completions or responses; responses is only supported for openai",

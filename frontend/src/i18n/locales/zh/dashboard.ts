@@ -486,7 +486,13 @@ export default {
       anthropic: 'Anthropic',
       gemini: 'Gemini',
       grok: 'Grok',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      qwen: '通义千问',
+      glm: '智谱AI',
+      kimi: 'Kimi',
+      doubao: 'ByteDance',
+      minimax: 'MiniMax',
+      mimo: '小米 MiMo'
     },
     extraModelsHeader: '附加模型',
     extraModelsEmpty: '无附加模型',

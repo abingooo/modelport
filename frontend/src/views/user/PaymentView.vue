@@ -53,6 +53,29 @@
                 :max="globalMaxAmount"
               />
               <p v-if="amountError" class="mt-2 text-xs text-amber-600 dark:text-amber-300">{{ amountError }}</p>
+              <div
+                v-if="checkout.recharge_bonus_enabled && rechargeBonusTiers.length > 0"
+                class="mt-4 border-t border-gray-100 pt-4 dark:border-dark-700"
+              >
+                <div class="mb-2 flex items-center gap-2 text-sm font-medium text-gray-800 dark:text-gray-200">
+                  <Icon name="gift" size="sm" class="text-primary-500" />
+                  {{ t('payment.rechargeBonusTitle') }}
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    v-for="tier in rechargeBonusTiers"
+                    :key="`${tier.min_amount}-${tier.bonus_percent}`"
+                    :class="[
+                      'rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',
+                      matchedRechargeBonusTier === tier
+                        ? 'border-primary-300 bg-primary-50 text-primary-700 dark:border-primary-700 dark:bg-primary-950/40 dark:text-primary-300'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-400',
+                    ]"
+                  >
+                    {{ rechargeBonusTierLabel(tier) }}
+                  </span>
+                </div>
+              </div>
             </div>
             <div v-if="enabledMethods.length >= 1" class="card p-6">
               <PaymentMethodSelector
@@ -75,9 +98,17 @@
                   <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.actualPay') }}</span>
                   <span class="text-lg font-bold text-primary-600 dark:text-primary-400">{{ formatSelectedPaymentAmount(totalAmount) }}</span>
                 </div>
-                <div v-if="balanceRechargeMultiplier !== 1" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': feeRate <= 0 }">
-                  <span class="text-gray-500 dark:text-gray-400">{{ t('payment.creditedBalance') }}</span>
+                <div v-if="balanceRechargeMultiplier !== 1 || checkout.recharge_bonus_enabled" class="flex justify-between" :class="{ 'border-t border-gray-200 pt-2 dark:border-dark-600': feeRate <= 0 }">
+                  <span class="text-gray-500 dark:text-gray-400">{{ t('payment.baseCreditedBalance') }}</span>
                   <span class="text-gray-900 dark:text-white">￥{{ creditedAmount.toFixed(2) }}</span>
+                </div>
+                <div v-if="rechargeBonusAmount > 0" class="flex justify-between">
+                  <span class="text-gray-500 dark:text-gray-400">{{ t('payment.rechargeBonusAmount') }} ({{ rechargeBonusPercent }}%)</span>
+                  <span class="font-medium text-primary-600 dark:text-primary-400">+￥{{ rechargeBonusAmount.toFixed(2) }}</span>
+                </div>
+                <div v-if="rechargeBonusAmount > 0" class="flex justify-between border-t border-gray-200 pt-2 dark:border-dark-600">
+                  <span class="font-medium text-gray-700 dark:text-gray-300">{{ t('payment.totalCreditedBalance') }}</span>
+                  <span class="text-lg font-bold text-primary-600 dark:text-primary-400">￥{{ totalCreditedAmount.toFixed(2) }}</span>
                 </div>
                 <p v-if="balanceRechargeMultiplier !== 1" class="border-t border-gray-200 pt-2 text-xs text-gray-500 dark:border-dark-600 dark:text-gray-400">
                   {{ t('payment.rechargeRatePreview', { usd: balanceRechargeMultiplier.toFixed(2) }) }}
@@ -267,7 +298,7 @@ import { paymentAPI } from '@/api/payment'
 import { extractApiErrorMessage, extractI18nErrorMessage } from '@/utils/apiError'
 import { isMobileDevice } from '@/utils/device'
 import { hasPeakRate, formatPeakRateWindow, serverTimezoneLabel, type PeakRateFields } from '@/utils/peak-rate'
-import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType } from '@/types/payment'
+import type { SubscriptionPlan, CheckoutInfoResponse, CreateOrderResult, OrderType, RechargeBonusTier } from '@/types/payment'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import AmountInput from '@/components/payment/AmountInput.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
@@ -502,7 +533,7 @@ function onPaymentSettled() {
 // All checkout data from single API call
 const checkout = ref<CheckoutInfoResponse>({
   methods: {}, global_min: 0, global_max: 0,
-  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, help_text: '', help_image_url: '', stripe_publishable_key: '',
+  plans: [], balance_disabled: false, balance_recharge_multiplier: 1, recharge_bonus_enabled: false, recharge_bonus_tiers: [], subscription_usd_to_cny_rate: 0, recharge_fee_rate: 0, help_text: '', help_image_url: '', stripe_publishable_key: '',
 })
 
 const tabs = computed(() => {
@@ -525,6 +556,42 @@ const subscriptionUsdToCnyRate = computed(() => {
   return Number.isFinite(rate) && rate > 0 ? rate : 0
 })
 const creditedAmount = computed(() => Math.round((validAmount.value * balanceRechargeMultiplier.value) * 100) / 100)
+const rechargeBonusTiers = computed<RechargeBonusTier[]>(() => {
+  if (!Array.isArray(checkout.value.recharge_bonus_tiers)) return []
+  return checkout.value.recharge_bonus_tiers
+    .filter((tier) => Number.isFinite(tier.min_amount) && Number.isFinite(tier.bonus_percent))
+    .map((tier) => ({
+      min_amount: Math.max(0, tier.min_amount),
+      bonus_percent: Math.min(100, Math.max(0, tier.bonus_percent)),
+    }))
+    .sort((left, right) => left.min_amount - right.min_amount)
+})
+const matchedRechargeBonusTier = computed<RechargeBonusTier | null>(() => {
+  if (!checkout.value.recharge_bonus_enabled || validAmount.value <= 0) return null
+  let matchedTier: RechargeBonusTier | null = null
+  for (const tier of rechargeBonusTiers.value) {
+    if (validAmount.value < tier.min_amount) break
+    matchedTier = tier
+  }
+  return matchedTier
+})
+const rechargeBonusPercent = computed(() => matchedRechargeBonusTier.value?.bonus_percent ?? 0)
+const rechargeBonusAmount = computed(() =>
+  Math.round((creditedAmount.value * rechargeBonusPercent.value / 100) * 100) / 100
+)
+const totalCreditedAmount = computed(() =>
+  Math.round((creditedAmount.value + rechargeBonusAmount.value) * 100) / 100
+)
+
+function rechargeBonusTierLabel(tier: RechargeBonusTier): string {
+  if (tier.min_amount <= 0) {
+    return t('payment.rechargeBonusEvery', { percent: tier.bonus_percent })
+  }
+  return t('payment.rechargeBonusRule', {
+    amount: tier.min_amount.toLocaleString(),
+    percent: tier.bonus_percent,
+  })
+}
 
 // Adaptive grid: center single card, 2-col for 2 plans, 3-col for 3+
 const planGridClass = computed(() => {

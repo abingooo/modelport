@@ -3,6 +3,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import PaymentView from '../PaymentView.vue'
 import { PAYMENT_RECOVERY_STORAGE_KEY } from '@/components/payment/paymentFlow'
 import { formatPaymentAmount } from '@/components/payment/currency'
+import AmountInput from '@/components/payment/AmountInput.vue'
 import SubscriptionPlanCard from '@/components/payment/SubscriptionPlanCard.vue'
 import type { CheckoutInfoResponse, MethodLimit, SubscriptionPlan } from '@/types/payment'
 
@@ -106,6 +107,8 @@ function checkoutInfoFixture(overrides: Partial<CheckoutInfoResponse> = {}) {
     plans: [],
     balance_disabled: false,
     balance_recharge_multiplier: 1,
+    recharge_bonus_enabled: false,
+    recharge_bonus_tiers: [],
     subscription_usd_to_cny_rate: 0,
     recharge_fee_rate: 0,
     help_text: '',
@@ -276,6 +279,62 @@ async function mountSubscriptionPlanList(planCount: number) {
   await flushPromises()
   return wrapper
 }
+
+async function mountRecharge(checkout: Partial<CheckoutInfoResponse> = {}) {
+  vi.useRealTimers()
+  routeState.path = '/purchase'
+  routeState.query = { tab: 'recharge' }
+  routerReplace.mockReset().mockResolvedValue(undefined)
+  routerPush.mockReset().mockResolvedValue(undefined)
+  routerResolve.mockClear()
+  createOrder.mockReset()
+  refreshUser.mockReset()
+  fetchActiveSubscriptions.mockReset().mockResolvedValue(undefined)
+  showError.mockReset()
+  showInfo.mockReset()
+  showWarning.mockReset()
+  getCheckoutInfo.mockReset().mockResolvedValue(checkoutInfoFixture(checkout))
+  bridgeInvoke.mockReset()
+  window.localStorage.clear()
+
+  const wrapper = shallowMount(PaymentView, {
+    global: {
+      stubs: {
+        AppLayout: {
+          template: '<div><slot /></div>',
+        },
+        Teleport: true,
+        Transition: false,
+      },
+    },
+  })
+  await flushPromises()
+  return wrapper
+}
+
+describe('PaymentView recharge bonus', () => {
+  it('shows the matched tier bonus and total credited balance', async () => {
+    const wrapper = await mountRecharge({
+      balance_recharge_multiplier: 0.5,
+      recharge_bonus_enabled: true,
+      recharge_bonus_tiers: [
+        { min_amount: 0, bonus_percent: 3 },
+        { min_amount: 100, bonus_percent: 5 },
+        { min_amount: 500, bonus_percent: 8 },
+      ],
+    })
+
+    wrapper.findComponent(AmountInput).vm.$emit('update:modelValue', 100)
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text).toContain('payment.rechargeBonusTitle')
+    expect(text).toContain('￥50.00')
+    expect(text).toContain('+￥2.50')
+    expect(text).toContain('￥52.50')
+    expect(text).toContain('(5%)')
+  })
+})
 
 describe('PaymentView subscription plan grid', () => {
   it.each([3, 4, 6])('keeps %i plans on the existing mobile/tablet/desktop grid', async (planCount) => {
