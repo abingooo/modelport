@@ -777,7 +777,7 @@ const adminNavItems = computed((): NavItem[] => {
       label: t('nav.affiliateManagement'),
       icon: UsersIcon,
       hideInSimpleMode: true,
-      expandOnly: true,
+      expandOnly: false,
       featureFlag: flagAffiliate,
       children: [
         { path: '/admin/affiliates/reviews', label: t('nav.affiliateRewardReviews'), icon: ShieldIcon },
@@ -880,13 +880,19 @@ function toggleGroup(item: NavItem) {
 
 /**
  * Click handler for collapsible parent items.
- * - When sidebar is collapsed: do nothing (children are not visible).
+ * - When sidebar is collapsed: navigable groups still open their landing page;
+ *   expand-only groups do nothing because their children are not visible.
  * - When `expandOnly` is true: only toggle expand state.
  * - Otherwise (default, e.g. /admin/orders): navigate to the parent path
  *   (router-link semantics) and ensure the group is expanded.
  */
 function handleGroupClick(item: NavItem) {
-  if (sidebarCollapsed.value) return
+  if (sidebarCollapsed.value) {
+    if (!item.expandOnly && route.path !== item.path) {
+      router.push(item.path)
+    }
+    return
+  }
   if (item.expandOnly) {
     toggleGroup(item)
     return
