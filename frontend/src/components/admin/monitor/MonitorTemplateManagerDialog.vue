@@ -130,7 +130,7 @@
           {{ t('admin.channelMonitor.form.provider') }}
           <span class="text-red-500">*</span>
         </label>
-        <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
           <button
             v-for="opt in providerTabs"
             :key="opt.value"
@@ -245,10 +245,8 @@ import MonitorAdvancedRequestConfig from '@/components/admin/monitor/MonitorAdva
 import MonitorTemplateApplyPickerDialog from '@/components/admin/monitor/MonitorTemplateApplyPickerDialog.vue'
 import { useChannelMonitorFormat } from '@/composables/useChannelMonitorFormat'
 import {
-  PROVIDER_ANTHROPIC,
   PROVIDER_OPENAI,
-  PROVIDER_GEMINI,
-  PROVIDER_GROK,
+  PROVIDERS,
   API_MODE_CHAT_COMPLETIONS,
   API_MODE_RESPONSES,
 } from '@/constants/channelMonitor'
@@ -265,13 +263,13 @@ const appStore = useAppStore()
 const { providerPickerClass } = useChannelMonitorFormat()
 
 const providerTabs = computed<{ value: Provider; label: string }[]>(() => [
-  { value: PROVIDER_ANTHROPIC, label: t('monitorCommon.providers.anthropic') },
-  { value: PROVIDER_OPENAI, label: t('monitorCommon.providers.openai') },
-  { value: PROVIDER_GEMINI, label: t('monitorCommon.providers.gemini') },
-  { value: PROVIDER_GROK, label: t('monitorCommon.providers.grok') },
+  ...PROVIDERS.map((value) => ({
+    value,
+    label: t(`monitorCommon.providers.${value}`),
+  })),
 ])
 
-const activeProvider = ref<Provider>(PROVIDER_ANTHROPIC)
+const activeProvider = ref<Provider>(PROVIDERS[0])
 const templates = ref<ChannelMonitorTemplate[]>([])
 const loading = ref(false)
 
@@ -280,12 +278,7 @@ const templatesForActiveProvider = computed(() =>
 )
 
 const countByProvider = computed<Record<Provider, number>>(() => {
-  const out: Record<Provider, number> = {
-    anthropic: 0,
-    openai: 0,
-    gemini: 0,
-    grok: 0,
-  }
+  const out = Object.fromEntries(PROVIDERS.map((provider) => [provider, 0])) as Record<Provider, number>
   for (const t of templates.value) out[t.provider]++
   return out
 })
@@ -304,7 +297,7 @@ interface TemplateForm {
 
 const editing = ref<null | 'new' | number>(null) // null = list view; 'new' = create; <id> = edit
 const submitting = ref(false)
-const form = reactive<TemplateForm>(emptyForm(PROVIDER_ANTHROPIC))
+const form = reactive<TemplateForm>(emptyForm(PROVIDERS[0]))
 
 function emptyForm(provider: Provider): TemplateForm {
   return {

@@ -481,7 +481,13 @@ export default {
       anthropic: 'Anthropic',
       gemini: 'Gemini',
       grok: 'Grok',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      qwen: 'Qwen',
+      glm: 'Zhipu AI',
+      kimi: 'Kimi',
+      doubao: 'ByteDance',
+      minimax: 'MiniMax',
+      mimo: 'Xiaomi MiMo'
     },
     extraModelsHeader: 'Extra Models',
     extraModelsEmpty: 'No extra models',

@@ -13,6 +13,13 @@ export const PROVIDER_OPENAI: Provider = 'openai'
 export const PROVIDER_ANTHROPIC: Provider = 'anthropic'
 export const PROVIDER_GEMINI: Provider = 'gemini'
 export const PROVIDER_GROK: Provider = 'grok'
+export const PROVIDER_DEEPSEEK: Provider = 'deepseek'
+export const PROVIDER_QWEN: Provider = 'qwen'
+export const PROVIDER_GLM: Provider = 'glm'
+export const PROVIDER_KIMI: Provider = 'kimi'
+export const PROVIDER_DOUBAO: Provider = 'doubao'
+export const PROVIDER_MINIMAX: Provider = 'minimax'
+export const PROVIDER_MIMO: Provider = 'mimo'
 
 export const DEFAULT_GROK_ENDPOINT = 'https://api.x.ai'
 export const DEFAULT_GROK_MODEL = 'grok-4.5'
@@ -25,7 +32,30 @@ export const PROVIDERS: readonly Provider[] = [
   PROVIDER_ANTHROPIC,
   PROVIDER_GEMINI,
   PROVIDER_GROK,
+  PROVIDER_DEEPSEEK,
+  PROVIDER_QWEN,
+  PROVIDER_GLM,
+  PROVIDER_KIMI,
+  PROVIDER_DOUBAO,
+  PROVIDER_MINIMAX,
+  PROVIDER_MIMO,
 ]
+
+export const OPENAI_COMPATIBLE_MONITOR_PROVIDERS: readonly Provider[] = [
+  PROVIDER_OPENAI,
+  PROVIDER_GROK,
+  PROVIDER_DEEPSEEK,
+  PROVIDER_QWEN,
+  PROVIDER_GLM,
+  PROVIDER_KIMI,
+  PROVIDER_DOUBAO,
+  PROVIDER_MINIMAX,
+  PROVIDER_MIMO,
+]
+
+export function isOpenAICompatibleMonitorProvider(provider?: string): boolean {
+  return OPENAI_COMPATIBLE_MONITOR_PROVIDERS.includes(provider as Provider)
+}
 
 export const API_MODES: readonly APIMode[] = [
   API_MODE_CHAT_COMPLETIONS,
