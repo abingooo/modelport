@@ -288,6 +288,10 @@ describe('UseKeyModal', () => {
     expect(codeBlocks).toContain('{\n  "OPENAI_API_KEY": "sk-test"\n}')
     expect(wrapper.text()).toContain('auth.json')
     expect(wrapper.get('[data-testid="codex-auth-mode-api-key"]').attributes('aria-checked')).toBe('true')
+    expect(wrapper.findAll('[role="radio"]').map((button) => button.attributes('data-testid'))).toEqual([
+      'codex-auth-mode-api-key',
+      'codex-auth-mode-legacy'
+    ])
     expect(wrapper.find('[data-testid="codex-api-key-restart-notice"]').exists()).toBe(true)
   })
 

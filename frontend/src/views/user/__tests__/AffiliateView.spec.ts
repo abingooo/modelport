@@ -11,7 +11,6 @@ const { copyToClipboard, getAffiliateDetail } = vi.hoisted(() => ({
 vi.mock('@/api/user', () => ({
   default: {
     getAffiliateDetail,
-    transferAffiliateQuota: vi.fn(),
   },
 }))
 
@@ -19,12 +18,6 @@ vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError: vi.fn(),
     showSuccess: vi.fn(),
-  }),
-}))
-
-vi.mock('@/stores/auth', () => ({
-  useAuthStore: () => ({
-    refreshUser: vi.fn(),
   }),
 }))
 
@@ -140,6 +133,8 @@ describe('AffiliateView', () => {
     expect(wrapper.text()).toContain('f***@e***.com')
     expect(wrapper.text()).toContain('affiliate.status.paid')
     expect(wrapper.text()).toContain('affiliate.status.pending')
+    expect(wrapper.text()).not.toContain('affiliate.continuous.title')
+    expect(wrapper.text()).not.toContain('affiliate.transfer.button')
 
     await copyButtons[0].trigger('click')
     await copyButtons[1].trigger('click')
@@ -153,7 +148,7 @@ describe('AffiliateView', () => {
     )
   })
 
-  it('keeps the continuous rebate view when fixed rewards are unavailable', async () => {
+  it('does not expose continuous rebate controls when fixed rewards are unavailable', async () => {
     getAffiliateDetail.mockResolvedValueOnce({
       user_id: 1,
       aff_code: affiliateCode,
@@ -176,8 +171,9 @@ describe('AffiliateView', () => {
     })
     await flushPromises()
 
-    expect(wrapper.text()).toContain('affiliate.program.legacyOnly')
-    expect(wrapper.text()).toContain('affiliate.continuous.title')
+    expect(wrapper.text()).toContain('affiliate.program.unavailable')
+    expect(wrapper.text()).not.toContain('affiliate.continuous.title')
+    expect(wrapper.text()).not.toContain('affiliate.transfer.button')
     expect(wrapper.text()).not.toContain('affiliate.progress.title')
   })
 })

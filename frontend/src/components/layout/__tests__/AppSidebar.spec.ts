@@ -43,17 +43,13 @@ describe('AppSidebar scroll position persistence', () => {
 })
 
 describe('AppSidebar affiliate navigation', () => {
-  it('opens the native reward review workspace from the affiliate parent item', () => {
-    const affiliateGroup = componentSource.match(
-      /path: '\/admin\/affiliates',[\s\S]*?children: \[/
-    )?.[0]
-
-    expect(affiliateGroup).toBeDefined()
-    expect(affiliateGroup).toContain("label: t('nav.affiliateManagement')")
-    expect(affiliateGroup).toContain('expandOnly: false')
+  it('exposes reward reviews as the single affiliate main menu item', () => {
     expect(componentSource).toContain("path: '/admin/affiliates/reviews'")
-    expect(componentSource).toContain("label: t('nav.affiliateRewardReviews')")
-    expect(componentSource).toContain('if (!item.expandOnly && route.path !== item.path)')
+    expect(componentSource).toContain("label: t('nav.affiliateManagement')")
+    expect(componentSource).not.toContain("path: '/admin/affiliates/invites'")
+    expect(componentSource).not.toContain("path: '/admin/affiliates/rebates'")
+    expect(componentSource).not.toContain("path: '/admin/affiliates/transfers'")
+    expect(componentSource).not.toContain("label: t('nav.affiliateRewardReviews')")
   })
 })
 
