@@ -72,8 +72,7 @@
         </div>
       </div>
 
-      <div class="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <section class="card p-5 sm:p-6">
+      <section class="card p-5 sm:p-6">
           <div class="flex items-center gap-3">
             <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary-100 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300">
               <Icon name="gift" size="md" />
@@ -108,47 +107,12 @@
               </span>
             </div>
           </div>
-          <p v-else class="mt-5 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.program.legacyOnly') }}</p>
+          <p v-else class="mt-5 text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.program.unavailable') }}</p>
           <div class="mt-4 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2.5 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
             <Icon name="clock" size="sm" class="mt-0.5 shrink-0" />
             <span>{{ t('affiliate.program.reviewNotice') }}</span>
           </div>
-        </section>
-
-        <section class="card p-5 sm:p-6">
-          <div class="flex items-center gap-3">
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-cyan-100 text-cyan-700 dark:bg-cyan-950/50 dark:text-cyan-300">
-              <Icon name="dollar" size="md" />
-            </div>
-            <div>
-              <h3 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('affiliate.continuous.title') }}</h3>
-              <p class="text-sm text-gray-500 dark:text-dark-400">{{ t('affiliate.continuous.description') }}</p>
-            </div>
-          </div>
-          <div class="mt-5 grid grid-cols-2 gap-4 border-y border-gray-100 py-4 dark:border-dark-700">
-            <div>
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.rebateRate') }}</p>
-              <p class="mt-1 text-xl font-semibold text-primary-700 dark:text-primary-300">{{ formattedRebateRate }}%</p>
-            </div>
-            <div>
-              <p class="text-xs text-gray-500 dark:text-dark-400">{{ t('affiliate.stats.availableQuota') }}</p>
-              <p class="mt-1 text-xl font-semibold text-teal-700 dark:text-teal-300">{{ formatCurrency(detail.aff_quota) }}</p>
-            </div>
-          </div>
-          <p v-if="detail.aff_frozen_quota > 0" class="mt-3 text-xs text-amber-700 dark:text-amber-300">
-            {{ t('affiliate.stats.frozenQuota') }}: {{ formatCurrency(detail.aff_frozen_quota) }}
-          </p>
-          <button
-            type="button"
-            class="btn btn-primary mt-5 w-full"
-            :disabled="transferring || detail.aff_quota <= 0"
-            @click="transferQuota"
-          >
-            <Icon :name="transferring ? 'refresh' : 'dollar'" size="sm" :class="{ 'animate-spin': transferring }" />
-            {{ transferring ? t('affiliate.transfer.transferring') : t('affiliate.transfer.button') }}
-          </button>
-        </section>
-      </div>
+      </section>
 
       <section v-if="rewardDashboard" class="card overflow-hidden">
         <div class="flex flex-col gap-2 border-b border-gray-200 px-5 py-4 dark:border-dark-700 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -205,17 +169,14 @@ import Icon from '@/components/icons/Icon.vue'
 import userAPI from '@/api/user'
 import type { UserAffiliateDetail } from '@/types'
 import { useAppStore } from '@/stores/app'
-import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
 import { formatCurrency, formatDateTime } from '@/utils/format'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 const { t } = useI18n()
 const appStore = useAppStore()
-const authStore = useAuthStore()
 const { copyToClipboard } = useClipboard()
 const loading = ref(true)
-const transferring = ref(false)
 const detail = ref<UserAffiliateDetail | null>(null)
 
 const rewardDashboard = computed(() => detail.value?.reward_program || null)
@@ -227,10 +188,6 @@ const inviteLink = computed(() => {
   if (!detail.value) return ''
   const path = `/register?aff=${encodeURIComponent(detail.value.aff_code)}`
   return typeof window === 'undefined' ? path : `${window.location.origin}${path}`
-})
-const formattedRebateRate = computed(() => {
-  const value = Math.round((detail.value?.effective_rebate_rate_percent ?? 0) * 100) / 100
-  return String(value)
 })
 const registrationRuleText = computed(() => {
   const config = rewardDashboard.value?.program.registration
@@ -284,19 +241,5 @@ async function copyCode(): Promise<void> {
 async function copyInviteLink(): Promise<void> {
   if (inviteLink.value) await copyToClipboard(inviteLink.value, t('affiliate.linkCopied'))
 }
-async function transferQuota(): Promise<void> {
-  if (!detail.value || detail.value.aff_quota <= 0 || transferring.value) return
-  transferring.value = true
-  try {
-    const response = await userAPI.transferAffiliateQuota()
-    appStore.showSuccess(t('affiliate.transfer.success', { amount: formatCurrency(response.transferred_quota) }))
-    await Promise.all([loadAffiliateDetail(true), authStore.refreshUser().catch(() => undefined)])
-  } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, t('affiliate.transferFailed')))
-  } finally {
-    transferring.value = false
-  }
-}
-
 onMounted(() => void loadAffiliateDetail())
 </script>

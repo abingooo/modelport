@@ -688,7 +688,7 @@ export default {
 
   affiliate: {
     title: 'Affiliate Rebates',
-    description: 'Share your ModelPort invite link and track signup, first top-up, and ongoing rebates',
+    description: 'Share your ModelPort invite link and track signup and first top-up rewards',
     yourCode: 'Your Affiliate Code',
     inviteLink: 'Invite Link',
     copyCode: 'Copy Code',
@@ -696,18 +696,11 @@ export default {
     codeCopied: 'Affiliate code copied',
     linkCopied: 'Invite link copied',
     loadFailed: 'Failed to load affiliate data',
-    transferFailed: 'Failed to transfer affiliate quota',
     stats: {
-      rebateRate: 'My Rebate Rate',
-      rebateRateHint: 'What you earn each time an invitee recharges',
       invitedUsers: 'Invited Users',
       firstRechargeUsers: 'First Top-ups',
       pendingReward: 'Pending Review',
-      paidReward: 'Rewards Paid',
-      availableQuota: 'Available Rebate Quota',
-      frozenQuota: 'Frozen',
-      frozenQuotaHint: 'Recently earned rebates pending release',
-      totalQuota: 'Historical Rebate Quota'
+      paidReward: 'Rewards Paid'
     },
     program: {
       title: 'Signup & First Top-up Rewards',
@@ -716,7 +709,7 @@ export default {
       inactive: 'Reward program inactive',
       enabled: 'Enabled',
       disabled: 'Disabled',
-      legacyOnly: 'Only ongoing recharge rebates are currently enabled.',
+      unavailable: 'Signup and first top-up rewards are not currently enabled.',
       reviewNotice: 'New rewards enter manual review and are credited automatically when approved. Fixed rewards do not need a balance transfer.',
       registration: {
         title: 'Invited Signup',
@@ -726,10 +719,6 @@ export default {
         title: 'Invitee First Top-up',
         rule: 'The inviter receives {inviter}; the invitee receives {percent}% of the amount paid as balance'
       }
-    },
-    continuous: {
-      title: 'Ongoing Recharge Rebate',
-      description: 'Accumulates from later invitee recharges and can be transferred to balance'
     },
     progress: {
       title: 'Invite Reward Progress',
@@ -744,14 +733,6 @@ export default {
       paid: 'Paid',
       rejected: 'Rejected',
       none: 'Not Triggered'
-    },
-    transfer: {
-      title: 'Transfer Rebate Quota',
-      description: 'Move available rebate quota into your account balance',
-      button: 'Transfer to Balance',
-      transferring: 'Transferring...',
-      empty: 'No available rebate quota',
-      success: '{amount} has been transferred to your balance'
     },
     invitees: {
       title: 'Invited Users',

@@ -693,7 +693,7 @@ export default {
 
   affiliate: {
     title: '邀请返利',
-    description: '分享模型港邀请链接，查看好友注册、首充与持续返利进度',
+    description: '分享模型港邀请链接，查看好友注册与首充奖励进度',
     yourCode: '我的邀请码',
     inviteLink: '邀请链接',
     copyCode: '复制邀请码',
@@ -701,18 +701,11 @@ export default {
     codeCopied: '邀请码已复制',
     linkCopied: '邀请链接已复制',
     loadFailed: '加载邀请返利数据失败',
-    transferFailed: '转入余额失败',
     stats: {
-      rebateRate: '我的返利比例',
-      rebateRateHint: '被邀请用户每次充值后你可获得的返利比例',
       invitedUsers: '邀请人数',
       firstRechargeUsers: '完成首充',
       pendingReward: '待审核奖励',
-      paidReward: '已到账奖励',
-      availableQuota: '可转返利额度',
-      frozenQuota: '冻结中',
-      frozenQuotaHint: '新产生的返利正在冻结期中',
-      totalQuota: '历史返利额度'
+      paidReward: '已到账奖励'
     },
     program: {
       title: '注册与首充奖励',
@@ -721,7 +714,7 @@ export default {
       inactive: '奖励计划未开启',
       enabled: '已开启',
       disabled: '未开启',
-      legacyOnly: '当前仅启用持续充值返利。',
+      unavailable: '当前未启用注册与首充奖励。',
       reviewNotice: '新奖励进入人工审核，审核通过后自动到账；固定奖励无需手动转入余额。',
       registration: {
         title: '邀请注册',
@@ -731,10 +724,6 @@ export default {
         title: '好友首充',
         rule: '邀请人可得 {inviter}；好友可获实付金额 {percent}% 的余额奖励'
       }
-    },
-    continuous: {
-      title: '持续充值返利',
-      description: '按好友后续充值累计返利额度，可手动转入余额'
     },
     progress: {
       title: '邀请奖励进度',
@@ -749,14 +738,6 @@ export default {
       paid: '已到账',
       rejected: '未通过',
       none: '未触发'
-    },
-    transfer: {
-      title: '返利额度转余额',
-      description: '将当前可用返利额度一键转入账户余额',
-      button: '转入余额',
-      transferring: '转入中...',
-      empty: '当前没有可转入额度',
-      success: '已转入余额：{amount}'
     },
     invitees: {
       title: '已邀请用户',
