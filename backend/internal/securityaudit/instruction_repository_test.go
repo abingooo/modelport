@@ -14,7 +14,10 @@ import (
 func TestInstructionRepositoryListEventsAppliesLegacyUserAndModelFilters(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
 
 	filterClause := `(?s).*\$11 = 0 OR e\.user_id = \$11.*\$12 = '%%' OR e\.model ILIKE \$12.*cardinality\(\$13::TEXT\[\]\).*`
 	args := []driver.Value{
@@ -40,6 +43,7 @@ func TestInstructionRepositoryListEventsAppliesLegacyUserAndModelFilters(t *test
 			false, "", "missing", "blocked", "hash_mismatch", []byte("[]"), int64(1), 2,
 			"stored", nil, "pending", "sent", time.Now().UTC(),
 		))
+	mock.ExpectClose()
 
 	page, err := NewInstructionRepository(db).ListEvents(context.Background(), 1, 20, InstructionEventFilter{
 		UserID: 42,
@@ -50,5 +54,4 @@ func TestInstructionRepositoryListEventsAppliesLegacyUserAndModelFilters(t *test
 	require.Len(t, page.Items, 1)
 	require.EqualValues(t, 42, *page.Items[0].UserID)
 	require.Equal(t, InstructionClientCodexCLI, page.Items[0].ClientType)
-	require.NoError(t, mock.ExpectationsWereMet())
 }
