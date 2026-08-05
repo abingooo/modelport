@@ -168,6 +168,30 @@ func TestNormalizeOpenAIResponsesCompactRequest_NoTriggerUntouched(t *testing.T)
 	require.True(t, gjson.GetBytes(normalized, "stream").Bool())
 }
 
+func TestNormalizeOpenAIResponsesCompactRequest_AmbiguousTriggerIsNotPromoted(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}],"input":[{"type":"message"}]}`)
+	c := newCompactBodySignalTestContext(t, "/v1/responses", body)
+
+	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	require.True(t, ok)
+	require.Equal(t, "/v1/responses", c.Request.URL.Path)
+	require.Equal(t, body, normalized)
+}
+
+func TestOpenAIInstructionAuditExclusionRequiresExplicitHTTPCompactPath(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"compaction_trigger"}]}`)
+
+	responses := newCompactBodySignalTestContext(t, "/v1/responses", body)
+	responses.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
+	require.False(t, isOpenAIInstructionAuditExcluded(responses, false))
+	require.False(t, isOpenAIInstructionAuditExcluded(responses, true))
+
+	compact := newCompactBodySignalTestContext(t, "/v1/responses/compact", body)
+	require.True(t, isOpenAIInstructionAuditExcluded(compact, false))
+	require.False(t, isOpenAIInstructionAuditExcluded(compact, true))
+}
+
 func TestNormalizeOpenAIResponsesCompactRequest_PathBasedNoDoubleSuffix(t *testing.T) {
 	h := &OpenAIGatewayHandler{}
 	body := []byte(`{"model":"gpt-5.5","stream":true,"store":true,"input":[{"type":"message","role":"user","content":"hello"}]}`)

@@ -30,6 +30,16 @@ type fakePromptEngine struct {
 	evaluates atomic.Int64
 }
 
+type fakeInstructionEngine struct {
+	decision *InstructionDecision
+	calls    atomic.Int64
+}
+
+func (f *fakeInstructionEngine) EvaluateInstruction(context.Context, Request) *InstructionDecision {
+	f.calls.Add(1)
+	return f.decision
+}
+
 func (f *fakePromptEngine) EffectiveMode() Mode { return f.mode }
 func (f *fakePromptEngine) Enqueue(context.Context, Request) error {
 	f.enqueues.Add(1)
@@ -72,6 +82,50 @@ func TestCoordinatorModesAndPriority(t *testing.T) {
 			require.Equal(t, tt.wantEvaluation, prompt.evaluates.Load())
 		})
 	}
+}
+
+func TestCoordinatorInstructionAuditRunsFirstAndShortCircuits(t *testing.T) {
+	legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+	prompt := &fakePromptEngine{mode: ModeBlocking, decision: &PromptDecision{Kind: DecisionAllow, AllowNextStage: true}}
+	instruction := &fakeInstructionEngine{decision: &InstructionDecision{Applicable: true, Allow: false, Reason: "hash_mismatch"}}
+
+	decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), Request{})
+
+	require.Equal(t, DecisionBlock, decision.Kind)
+	require.Equal(t, http.StatusForbidden, decision.HTTPStatus)
+	require.Equal(t, InstructionErrorCodeRejected, decision.ErrorCode)
+	require.Equal(t, InstructionClientMessage, decision.ClientMessage)
+	require.Same(t, instruction.decision, decision.Instruction)
+	require.False(t, decision.AllowNextStage)
+	require.Equal(t, int64(1), instruction.calls.Load())
+	require.Zero(t, legacy.calls.Load())
+	require.Zero(t, prompt.evaluates.Load())
+}
+
+func TestCoordinatorContinuesAfterInstructionAuditAllows(t *testing.T) {
+	legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+	prompt := &fakePromptEngine{mode: ModeOff}
+	instruction := &fakeInstructionEngine{decision: &InstructionDecision{Applicable: true, Allow: true}}
+
+	decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), Request{})
+
+	require.True(t, decision.AllowNextStage)
+	require.Equal(t, int64(1), instruction.calls.Load())
+	require.Equal(t, int64(1), legacy.calls.Load())
+}
+
+func TestCoordinatorSkipsInstructionAuditWhenAlreadyCompleted(t *testing.T) {
+	legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+	prompt := &fakePromptEngine{mode: ModeOff}
+	instruction := &fakeInstructionEngine{decision: &InstructionDecision{Applicable: true, Allow: false}}
+
+	decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), Request{
+		InstructionAuditCompleted: true,
+	})
+
+	require.True(t, decision.AllowNextStage)
+	require.Zero(t, instruction.calls.Load())
+	require.Equal(t, int64(1), legacy.calls.Load())
 }
 
 func TestCoordinatorDoesNotMutateRequestBody(t *testing.T) {

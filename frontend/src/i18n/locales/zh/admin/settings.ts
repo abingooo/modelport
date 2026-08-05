@@ -2,6 +2,15 @@ export default {
     settings: {
       title: '系统设置',
       description: '管理注册、邮箱验证、默认值和 SMTP 设置',
+      instructionAudit: {
+        title: '指令审核',
+        description: '对已绑定的下游用户和原始模型执行 Responses 哈希准入。',
+        configure: '管理规则',
+        enabled: '启用指令审核',
+        summary: '有效哈希 {hashes} 条，有效绑定 {bindings} 条',
+        confirmTitle: '确认启用指令审核',
+        confirmMessage: '当前没有有效规则。启用后，配置不完整的受保护请求可能被拒绝。',
+      },
       tabs: {
         general: '通用设置',
         agreement: '登录条款',

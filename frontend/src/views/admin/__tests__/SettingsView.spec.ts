@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h } from "vue";
-import { flushPromises, mount } from "@vue/test-utils";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 
 import SettingsView from "../SettingsView.vue";
+
+enableAutoUnmount(afterEach);
 
 const {
   getSettings,
@@ -30,6 +32,12 @@ const {
   deleteProvider,
   fetchPublicSettings,
   adminSettingsFetch,
+  instructionAuditGetOverview,
+  affiliateListUsers,
+  affiliateLookupUsers,
+  affiliateUpdateUserSettings,
+  affiliateClearUserSettings,
+  affiliateBatchSetRate,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -71,6 +79,21 @@ const {
   deleteProvider: vi.fn(),
   fetchPublicSettings: vi.fn(),
   adminSettingsFetch: vi.fn(),
+  instructionAuditGetOverview: vi.fn().mockResolvedValue({
+    enabled: false,
+    config_version: 1,
+    load_error: '',
+    hash_count: 0,
+    active_hash_count: 0,
+    rule_set_count: 0,
+    active_binding_count: 0,
+    pending_email_count: 0,
+  }),
+  affiliateListUsers: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+  affiliateLookupUsers: vi.fn().mockResolvedValue([]),
+  affiliateUpdateUserSettings: vi.fn().mockResolvedValue(undefined),
+  affiliateClearUserSettings: vi.fn().mockResolvedValue(undefined),
+  affiliateBatchSetRate: vi.fn().mockResolvedValue(undefined),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }));
@@ -139,7 +162,25 @@ vi.mock("@/composables/useClipboard", () => ({
 
 vi.mock("@/utils/apiError", () => ({
   extractApiErrorMessage: () => "error",
+  extractI18nErrorMessage: () => "error",
 }));
+
+vi.mock("@/features/instruction-audit/api", () => ({
+  default: {
+    getOverview: instructionAuditGetOverview,
+  },
+}));
+
+vi.mock("@/api/admin/affiliates", () => {
+  const api = {
+    listUsers: affiliateListUsers,
+    lookupUsers: affiliateLookupUsers,
+    updateUserSettings: affiliateUpdateUserSettings,
+    clearUserSettings: affiliateClearUserSettings,
+    batchSetRate: affiliateBatchSetRate,
+  };
+  return { default: api, affiliatesAPI: api };
+});
 
 vi.mock("vue-i18n", async () => {
   const actual = await vi.importActual<typeof import("vue-i18n")>("vue-i18n");

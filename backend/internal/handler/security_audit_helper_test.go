@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -48,9 +49,56 @@ func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {
 	require.Equal(t, int64(2), engine.enqueues.Load(), "subsequent WebSocket turns must be audited again")
 }
 
+func TestRunSecurityAuditPreservesDedicatedInstructionPayload(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &capturingInstructionEngine{}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	subject := middleware2.AuthSubject{UserID: 7, Concurrency: 1}
+	forwardBody := []byte(`{"model":"mapped","instructions":"changed"}`)
+	originalBody := []byte(`{"model":"original","instructions":"exact"}`)
+
+	decision := runSecurityAuditWithInstructionPayload(c, nil, coordinator, nil, nil, subject,
+		"openai_responses", "original", forwardBody, originalBody, true, "http", false)
+
+	require.NotNil(t, decision)
+	require.True(t, decision.AllowNextStage)
+	require.Equal(t, forwardBody, instruction.request.Body)
+	require.Equal(t, originalBody, instruction.request.InstructionBody)
+	require.True(t, instruction.request.InstructionAuditExcluded)
+}
+
+func TestRunInstructionAuditUsesCompositePublicModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &capturingInstructionEngine{}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	ctx := service.WithCompositeRouteDecision(context.Background(), service.CompositeRouteDecision{
+		Matched: true, PublicModel: "public-model", UpstreamModel: "mapped-model", TargetPlatform: service.PlatformOpenAI,
+	})
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+
+	decision := runInstructionAudit(c, nil, coordinator, nil, middleware2.AuthSubject{UserID: 7},
+		"openai_responses", "mapped-model", []byte(`{"model":"mapped-model","instructions":"exact"}`), false, "http")
+
+	require.Nil(t, decision)
+	require.Equal(t, "public-model", instruction.request.Model)
+	require.True(t, instruction.request.InstructionModelOverride)
+}
+
 type turnCountingEngine struct {
 	mode     securityaudit.Mode
 	enqueues atomic.Int64
+}
+
+type capturingInstructionEngine struct{ request securityaudit.Request }
+
+func (e *capturingInstructionEngine) EvaluateInstruction(_ context.Context, request securityaudit.Request) *securityaudit.InstructionDecision {
+	e.request = request
+	return &securityaudit.InstructionDecision{Allow: true}
 }
 
 func (e *turnCountingEngine) EffectiveMode() securityaudit.Mode { return e.mode }

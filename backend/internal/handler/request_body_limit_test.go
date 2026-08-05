@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+func TestLenientResponsesReaderPreservesDecodedStrictAuditSource(t *testing.T) {
+	raw := []byte("{\"instructions\":\"line\nline\"}")
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressed.Bytes()))
+	request.Header.Set("Content-Encoding", "gzip")
+	normalized, auditSource, err := readLenientJSONRequestBodyWithAuditSource(request, nil)
+	require.NoError(t, err)
+	require.Equal(t, raw, auditSource)
+	require.Contains(t, string(normalized), `\u000a`)
+}
 
 func TestRequestBodyLimitTooLarge(t *testing.T) {
 	gin.SetMode(gin.TestMode)

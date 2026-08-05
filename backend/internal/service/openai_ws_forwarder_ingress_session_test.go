@@ -41,6 +41,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 			[]byte(`{"type":"response.output_item.done","item":{"id":"ig_ingress_1","type":"image_generation_call","status":"generating","result":"iVBORw0KGgoAAAANSUhEUg/+=="}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_ingress_turn_3","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -73,8 +74,22 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	}
 
 	serverErrCh := make(chan error, 1)
-	turnTerminalCh := make(chan string, 2)
+	turnTerminalCh := make(chan string, 3)
+	type instructionHookCall struct {
+		turn  int
+		model string
+		body  string
+	}
+	var instructionHookMu sync.Mutex
+	instructionHookCalls := make([]instructionHookCall, 0, 2)
 	hooks := &OpenAIWSIngressHooks{
+		MaxReasoningEffort: "medium",
+		BeforeInstructionRequest: func(turn int, payload []byte, originalModel string) error {
+			instructionHookMu.Lock()
+			instructionHookCalls = append(instructionHookCalls, instructionHookCall{turn: turn, model: originalModel, body: string(payload)})
+			instructionHookMu.Unlock()
+			return nil
+		},
 		AfterTurn: func(_ int, result *OpenAIForwardResult, turnErr error) {
 			if turnErr == nil && result != nil {
 				turnTerminalCh <- result.UpstreamTerminalEvent
@@ -147,12 +162,20 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	require.Equal(t, "response.completed", gjson.GetBytes(firstTurnEvent, "type").String())
 	require.Equal(t, "resp_ingress_turn_1", gjson.GetBytes(firstTurnEvent, "response.id").String())
 
-	writeMessage(`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_ingress_turn_1"}`)
+	secondClientFrame := `{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"resp_ingress_turn_1","reasoning":{"effort":"high"}}`
+	writeMessage(secondClientFrame)
 	secondTurnEvent := readMessage()
 	require.Equal(t, "response.completed", gjson.GetBytes(secondTurnEvent, "type").String())
 	require.Equal(t, "resp_ingress_turn_2", gjson.GetBytes(secondTurnEvent, "response.id").String())
+
+	thirdClientFrame := `{"type":"response.create","stream":false,"previous_response_id":"resp_ingress_turn_2","instructions":"third"}`
+	writeMessage(thirdClientFrame)
+	thirdTurnEvent := readMessage()
+	require.Equal(t, "response.completed", gjson.GetBytes(thirdTurnEvent, "type").String())
+	require.Equal(t, "resp_ingress_turn_3", gjson.GetBytes(thirdTurnEvent, "response.id").String())
 	require.Equal(t, "response.completed", <-turnTerminalCh, "首轮 turn 应保留成功终态")
 	require.Equal(t, "response.completed", <-turnTerminalCh, "第二轮 turn 应保留成功终态")
+	require.Equal(t, "response.completed", <-turnTerminalCh, "第三轮 turn 应保留成功终态")
 
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
 
@@ -166,7 +189,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 	metrics := svc.SnapshotOpenAIWSPoolMetrics()
 	require.Equal(t, int64(1), metrics.AcquireTotal, "同一 ingress 会话多 turn 应只获取一次上游 lease")
 	require.Equal(t, 1, captureDialer.DialCount(), "同一 ingress 会话应保持同一上游连接")
-	require.Len(t, captureConn.writes, 2, "应向同一上游连接发送两轮 response.create")
+	require.Len(t, captureConn.writes, 3, "应向同一上游连接发送三轮 response.create")
+	instructionHookMu.Lock()
+	calls := append([]instructionHookCall(nil), instructionHookCalls...)
+	instructionHookMu.Unlock()
+	require.Equal(t, []instructionHookCall{
+		{turn: 2, model: "gpt-5.1", body: secondClientFrame},
+		{turn: 3, model: "gpt-5.1", body: thirdClientFrame},
+	}, calls, "每个后续 turn 应只审核一次未经改写的客户端原始帧")
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_IdleTimeoutReleasesStoreDisabledSession(t *testing.T) {

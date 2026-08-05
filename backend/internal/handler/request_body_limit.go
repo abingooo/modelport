@@ -30,7 +30,20 @@ func buildBodyTooLargeMessage(limit int64) string {
 }
 
 func readLenientJSONRequestBodyWithPrealloc(req *http.Request, cfg *config.Config) ([]byte, error) {
-	return pkghttputil.ReadLenientJSONRequestBodyWithPrealloc(req, gatewayMaxBodySize(cfg))
+	body, _, err := readLenientJSONRequestBodyWithAuditSource(req, cfg)
+	return body, err
+}
+
+func readLenientJSONRequestBodyWithAuditSource(req *http.Request, cfg *config.Config) ([]byte, []byte, error) {
+	decoded, err := pkghttputil.ReadRequestBodyWithPrealloc(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	body, err := pkghttputil.NormalizeLenientJSONRequestBody(decoded, gatewayMaxBodySize(cfg))
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, decoded, nil
 }
 
 func gatewayMaxBodySize(cfg *config.Config) int64 {

@@ -1374,6 +1374,41 @@
 
         <!-- Tab: Security — Registration, Turnstile, LinuxDo -->
         <div v-show="activeTab === 'security'" class="space-y-6">
+          <div class="card">
+            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+              <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                    {{ t('admin.settings.instructionAudit.title') }}
+                  </h2>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.instructionAudit.description') }}
+                  </p>
+                </div>
+                <router-link to="/admin/instruction-audit" class="text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">
+                  {{ t('admin.settings.instructionAudit.configure') }}
+                </router-link>
+              </div>
+            </div>
+            <div class="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p class="font-medium text-gray-900 dark:text-white">{{ t('admin.settings.instructionAudit.enabled') }}</p>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                  {{ t('admin.settings.instructionAudit.summary', {
+                    hashes: instructionAuditOverview?.active_hash_count ?? 0,
+                    bindings: instructionAuditOverview?.active_binding_count ?? 0,
+                  }) }}
+                </p>
+              </div>
+              <div :class="{ 'pointer-events-none opacity-50': instructionAuditSaving || instructionAuditLoading }">
+                <Toggle
+                  :model-value="instructionAuditOverview?.enabled ?? false"
+                  @update:model-value="requestInstructionAuditEnabled"
+                />
+              </div>
+            </div>
+          </div>
+
           <!-- Registration Settings -->
           <div class="card">
             <div
@@ -8180,6 +8215,13 @@
       />
       <!-- 关闭 step-up 开关等敏感保存操作触发的 TOTP 二次验证 -->
       <TotpStepUpDialog :controller="settingsStepUp" />
+      <ConfirmDialog
+        :show="showInstructionAuditRiskDialog"
+        :title="t('admin.settings.instructionAudit.confirmTitle')"
+        :message="t('admin.settings.instructionAudit.confirmMessage')"
+        @confirm="confirmInstructionAuditEnable"
+        @cancel="showInstructionAuditRiskDialog = false"
+      />
     </div>
   </AppLayout>
 </template>
@@ -8241,11 +8283,13 @@ import {
 } from "@/composables/useStepUp";
 import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
 import { affiliatesAPI, type AffiliateAdminEntry, type SimpleUser as AffiliateSimpleUser } from "@/api/admin/affiliates";
-import { extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
+import { extractApiErrorCode, extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
 import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { CONCRETE_PLATFORM_ORDER } from "@/utils/providerPresets";
 import { normalizeVisibleMethod } from "@/components/payment/paymentFlow";
+import instructionAuditAPI from "@/features/instruction-audit/api";
+import type { InstructionOverview } from "@/features/instruction-audit/types";
 import {
   isRegistrationEmailSuffixDomainValid,
   normalizeRegistrationEmailSuffixDomain,
@@ -8265,6 +8309,10 @@ const appStore = useAppStore();
 const settingsStepUp = useStepUp();
 const adminSettingsStore = useAdminSettingsStore();
 const isZhLocale = computed(() => locale.value.startsWith("zh"));
+const instructionAuditOverview = ref<InstructionOverview | null>(null);
+const instructionAuditLoading = ref(false);
+const instructionAuditSaving = ref(false);
+const showInstructionAuditRiskDialog = ref(false);
 
 function localText(zh: string, en: string): string {
   return isZhLocale.value ? zh : en;
@@ -10289,6 +10337,46 @@ async function loadSettings() {
   }
 }
 
+async function loadInstructionAuditOverview() {
+  instructionAuditLoading.value = true;
+  try {
+    instructionAuditOverview.value = await instructionAuditAPI.getOverview();
+  } catch (err: unknown) {
+    appStore.showError(extractI18nErrorMessage(err, t, "admin.instructionAudit.errors", t("common.error")));
+  } finally {
+    instructionAuditLoading.value = false;
+  }
+}
+
+async function requestInstructionAuditEnabled(enabled: boolean) {
+  if (enabled && (instructionAuditOverview.value?.active_binding_count ?? 0) === 0) {
+    showInstructionAuditRiskDialog.value = true;
+    return;
+  }
+  await updateInstructionAuditEnabled(enabled, false);
+}
+
+async function confirmInstructionAuditEnable() {
+  showInstructionAuditRiskDialog.value = false;
+  await updateInstructionAuditEnabled(true, true);
+}
+
+async function updateInstructionAuditEnabled(enabled: boolean, confirmNoRules: boolean) {
+  instructionAuditSaving.value = true;
+  try {
+    instructionAuditOverview.value = await instructionAuditAPI.updateEnabled(enabled, confirmNoRules);
+    appStore.showSuccess(t("common.saved"));
+  } catch (err: unknown) {
+    if (enabled && !confirmNoRules && extractApiErrorCode(err) === "instruction_audit_confirmation_required") {
+      showInstructionAuditRiskDialog.value = true;
+      return;
+    }
+    appStore.showError(extractI18nErrorMessage(err, t, "admin.instructionAudit.errors", t("common.error")));
+  } finally {
+    instructionAuditSaving.value = false;
+  }
+}
+
 async function loadSubscriptionGroups() {
   try {
     const groups = await adminAPI.groups.getAll();
@@ -11854,6 +11942,7 @@ async function handleDeleteProvider() {
 
 onMounted(() => {
   loadSettings();
+  loadInstructionAuditOverview();
   loadSubscriptionGroups();
   loadAdminApiKey();
   loadUpstreamBillingProbeSettings();

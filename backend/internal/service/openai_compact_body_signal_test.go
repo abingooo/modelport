@@ -54,3 +54,16 @@ func TestHasCompactionTriggerInInput_CompactTriggerOnly(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}]}`)
 	require.True(t, HasCompactionTriggerInInput(body))
 }
+
+func TestHasCompactionTriggerInInput_RejectsAmbiguousOrForgedSignals(t *testing.T) {
+	for _, body := range [][]byte{
+		[]byte(`{"input":[{"type":"compaction_trigger"}],"input":[{"type":"message"}]}`),
+		[]byte(`{"input":[{"type":"compaction_trigger","type":"message"}]}`),
+		[]byte(`{"input":[{"type":"compaction_trigger","forged":true}]}`),
+		[]byte(`{"input":[{"type":"compaction_trigger"},{"type":"message"}]}`),
+		[]byte(`{"input":[{"type":"message","content":{"x":1,"x":2}},{"type":"compaction_trigger"}]}`),
+		[]byte(`{"input":[{"type":"compaction_trigger"}]`),
+	} {
+		require.False(t, HasCompactionTriggerInInput(body), string(body))
+	}
+}

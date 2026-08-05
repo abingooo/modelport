@@ -18,17 +18,27 @@ type PromptEngine interface {
 }
 
 type Coordinator struct {
-	legacy LegacyEngine
-	prompt PromptEngine
+	legacy      LegacyEngine
+	prompt      PromptEngine
+	instruction InstructionEngine
 }
 
 func NewCoordinator(legacy LegacyEngine, prompt PromptEngine) *Coordinator {
 	return &Coordinator{legacy: legacy, prompt: prompt}
 }
 
+func NewCoordinatorWithInstruction(legacy LegacyEngine, prompt PromptEngine, instruction InstructionEngine) *Coordinator {
+	return &Coordinator{legacy: legacy, prompt: prompt, instruction: instruction}
+}
+
 func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 	if c == nil {
 		return allowDecision(nil, nil)
+	}
+	if !req.InstructionAuditCompleted {
+		if decision := c.CheckInstruction(ctx, req); decision != nil {
+			return *decision
+		}
 	}
 	mode := ModeOff
 	if c.prompt != nil {
@@ -46,6 +56,21 @@ func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 	default:
 		legacy, _ := c.checkLegacy(ctx, req)
 		return prioritize(legacy, nil)
+	}
+}
+
+func (c *Coordinator) CheckInstruction(ctx context.Context, req Request) *Decision {
+	if c == nil || c.instruction == nil {
+		return nil
+	}
+	instruction := c.instruction.EvaluateInstruction(ctx, req)
+	if instruction == nil || !instruction.Applicable || instruction.Allow {
+		return nil
+	}
+	return &Decision{
+		Kind: DecisionBlock, HTTPStatus: http.StatusForbidden,
+		ErrorCode: InstructionErrorCodeRejected, ClientMessage: InstructionClientMessage,
+		Instruction: instruction, AllowNextStage: false,
 	}
 }
 

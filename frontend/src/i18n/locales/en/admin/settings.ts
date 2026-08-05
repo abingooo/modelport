@@ -2,6 +2,15 @@ export default {
     settings: {
       title: 'System Settings',
       description: 'Manage registration, email verification, default values, and SMTP settings',
+      instructionAudit: {
+        title: 'Instruction Audit',
+        description: 'Apply Responses hash admission to bound downstream users and original model names.',
+        configure: 'Manage Rules',
+        enabled: 'Enable Instruction Audit',
+        summary: '{hashes} active hashes and {bindings} active bindings',
+        confirmTitle: 'Enable Instruction Audit',
+        confirmMessage: 'No effective rules exist. Protected requests may be rejected while configuration is incomplete.',
+      },
       tabs: {
         general: 'General',
         agreement: 'Agreement',

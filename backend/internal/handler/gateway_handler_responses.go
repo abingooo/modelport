@@ -44,7 +44,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 	)
 
 	// Read request body
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	body, instructionAuditBody, err := readLenientJSONRequestBodyWithAuditSource(c.Request, h.cfg)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.responsesErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
@@ -56,6 +56,12 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	if len(body) == 0 {
 		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		return
+	}
+	instructionAuditExcluded := isOpenAIRemoteCompactPath(c)
+	preAuditModel := gjson.GetBytes(body, "model").String()
+	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http"); decision != nil && !decision.AllowNextStage {
+		h.responsesSecurityAuditError(c, decision)
 		return
 	}
 
@@ -115,7 +121,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.AllowNextStage {
+	if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body, "http"); decision != nil && !decision.AllowNextStage {
 		h.responsesSecurityAuditError(c, decision)
 		return
 	}

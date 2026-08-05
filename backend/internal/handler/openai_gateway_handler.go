@@ -267,7 +267,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 
 	// Read request body
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	body, instructionAuditBody, err := readLenientJSONRequestBodyWithAuditSource(c.Request, h.cfg)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
@@ -279,6 +279,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	if len(body) == 0 {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
+		return
+	}
+	instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, false)
+	preAuditModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http"); decision != nil && !decision.AllowNextStage {
+		h.openAISecurityAuditError(c, decision)
 		return
 	}
 
@@ -350,7 +356,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.AllowNextStage {
+	if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body, "http"); decision != nil && !decision.AllowNextStage {
 		h.openAISecurityAuditError(c, decision)
 		return
 	}
@@ -741,6 +747,10 @@ func isOpenAIRemoteCompactPath(c *gin.Context) bool {
 	}
 	normalizedPath := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
 	return strings.HasSuffix(normalizedPath, "/responses/compact")
+}
+
+func isOpenAIInstructionAuditExcluded(c *gin.Context, websocket bool) bool {
+	return !websocket && isOpenAIRemoteCompactPath(c)
 }
 
 // isBareOpenAIResponsesPath 仅匹配裸 /responses 端点（无 /compact 等子路径），
@@ -1690,6 +1700,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "unsupported websocket message type")
 		return
 	}
+	preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
+	firstInstructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, true)
+	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, firstMessage, firstInstructionAuditExcluded, "first_turn"); decision != nil && !decision.AllowNextStage {
+		writeSecurityAuditWSError(ctx, wsConn, decision)
+		closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
+		return
+	}
 	if !gjson.ValidBytes(firstMessage) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
@@ -1725,7 +1742,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, true)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeWSV2))
 
-	if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, "first_turn"); decision != nil && !decision.AllowNextStage {
+	if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, "first_turn"); decision != nil && !decision.AllowNextStage {
 		writeSecurityAuditWSError(ctx, wsConn, decision)
 		closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
 		return
@@ -2031,10 +2048,22 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			InitialRequestModel:     reqModel,
 			MaxReasoningEffort:      maxReasoningEffort,
 			ReasoningEffortMappings: reasoningEffortMappings,
-			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
-				if turn == 1 {
-					return nil
+			BeforeInstructionRequest: func(_ int, payload []byte, originalModel string) error {
+				preAuditModel := strings.TrimSpace(originalModel)
+				if preAuditModel == "" {
+					preAuditModel = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
 				}
+				if preAuditModel == "" {
+					preAuditModel = reqModel
+				}
+				instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, true)
+				if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, payload, instructionAuditExcluded, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
+					writeSecurityAuditWSError(ctx, wsConn, decision)
+					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
+				}
+				return nil
+			},
+			BeforeRequest: func(_ int, payload []byte, originalModel string) error {
 				if !gjson.ValidBytes(payload) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 				}
@@ -2045,7 +2074,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if model == "" {
 					model = reqModel
 				}
-				if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
+				if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
 					writeSecurityAuditWSError(ctx, wsConn, decision)
 					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
 				}

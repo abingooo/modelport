@@ -176,6 +176,11 @@ func runMainServer() {
 			log.Printf("Prompt Audit started in degraded state: %v", err)
 		}
 	}
+	if app.InstructionAudit != nil {
+		if err := app.InstructionAudit.Start(context.Background()); err != nil {
+			log.Printf("Instruction Audit started in degraded state: %v", err)
+		}
+	}
 
 	// 启动服务器
 	go func() {

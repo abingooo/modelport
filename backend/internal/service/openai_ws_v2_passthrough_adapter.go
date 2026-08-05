@@ -924,11 +924,24 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		// capturedSessionModel 的读写都发生在该 goroutine 内，因此无需
 		// 加锁/原子化。
 		filter: func(msgType coderws.MessageType, payload []byte) (out []byte, blocked *OpenAIFastBlockedError, filterErr error) {
-			if msgType != coderws.MessageText {
+			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
 				return payload, nil, nil
 			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
+			turnNo := int(completedTurns.Load()) + 1
+			if turnNo < 2 {
+				turnNo = 2
+			}
+			if openAIWSInstructionCandidateFrame(payload) && hooks != nil && hooks.BeforeInstructionRequest != nil {
+				requestModelForAudit := usageMeta.requestModelForFrame(payload)
+				if requestModelForAudit == "" {
+					requestModelForAudit = capturedSessionModel
+				}
+				if err := hooks.BeforeInstructionRequest(turnNo, payload, requestModelForAudit); err != nil {
+					return payload, nil, err
+				}
+			}
 			acceptedTurn := false
 			if isResponseCreate {
 				if !turnLifecycle.beginResponseCreate(clientFrameConn.markTurnStarted) {
@@ -954,10 +967,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						payload = capped
 					}
 				}
-			}
-			turnNo := int(completedTurns.Load()) + 1
-			if turnNo < 2 {
-				turnNo = 2
 			}
 			requestModelForThisFrame := ""
 			if isResponseCreate {

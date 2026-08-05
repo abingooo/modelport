@@ -126,3 +126,89 @@ func TestPassthroughIngressNeverCallsBeforeTurn(t *testing.T) {
 	require.Zero(t, gotBefore, "透传 ingress 没有 turn 起始回调，BeforeTurn 不应被调用")
 	require.Positive(t, gotAfter, "透传 ingress 仍应回调 AfterTurn 提交用量")
 }
+
+func TestPassthroughInstructionHookReceivesEachOriginalFollowUpFrameOnce(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	controlCtx, cancelControl := context.WithCancelCause(context.Background())
+	defer cancelControl(context.Canceled)
+
+	upstream := newStagedPassthroughConn()
+	type hookCall struct {
+		turn  int
+		model string
+		body  string
+	}
+	var hooksMu sync.Mutex
+	calls := make([]hookCall, 0, 2)
+	hooks := &OpenAIWSIngressHooks{
+		MaxReasoningEffort: "medium",
+		BeforeInstructionRequest: func(turn int, payload []byte, originalModel string) error {
+			hooksMu.Lock()
+			calls = append(calls, hookCall{turn: turn, model: originalModel, body: string(payload)})
+			hooksMu.Unlock()
+			return nil
+		},
+		MapRequestModel: func(_ int, originalModel string) (string, error) {
+			if originalModel == "client-alias" {
+				return "gpt-5.1", nil
+			}
+			return originalModel, nil
+		},
+	}
+
+	server, serverErr := startPassthroughHookRecordingServer(
+		t,
+		controlCtx,
+		newPassthroughLifecycleService(passthroughLifecycleConfig(), upstream),
+		passthroughLifecycleAccount(),
+		hooks,
+	)
+	defer server.Close()
+	clientConn := dialPassthroughLifecycleClient(t, server)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	require.NotEmpty(t, requirePassthroughUpstreamWrite(t, upstream, 3*time.Second))
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_instruction_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	firstEvent, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "resp_instruction_1", gjson.GetBytes(firstEvent, "response.id").String())
+
+	writeFrame := func(messageType coderws.MessageType, payload string) {
+		writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancelWrite()
+		require.NoError(t, clientConn.Write(writeCtx, messageType, []byte(payload)))
+	}
+	secondFrame := `{"type":"response.create","model":"client-alias","stream":false,"reasoning":{"effort":"high"},"instructions":"second"}`
+	writeFrame(coderws.MessageText, secondFrame)
+	secondUpstream := requirePassthroughUpstreamWrite(t, upstream, 3*time.Second)
+	require.Equal(t, "gpt-5.1", gjson.GetBytes(secondUpstream, "model").String())
+	require.Equal(t, "medium", gjson.GetBytes(secondUpstream, "reasoning.effort").String())
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_instruction_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	secondEvent, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "resp_instruction_2", gjson.GetBytes(secondEvent, "response.id").String())
+
+	thirdFrame := `{"type":"response.create","stream":false,"instructions":"third"}`
+	writeFrame(coderws.MessageBinary, thirdFrame)
+	require.NotEmpty(t, requirePassthroughUpstreamWrite(t, upstream, 3*time.Second))
+	upstream.Send(`{"type":"response.completed","response":{"id":"resp_instruction_3","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	thirdEvent, err := readPassthroughLifecycleFrame(t, clientConn, 3*time.Second)
+	require.NoError(t, err)
+	require.Equal(t, "resp_instruction_3", gjson.GetBytes(thirdEvent, "response.id").String())
+
+	hooksMu.Lock()
+	gotCalls := append([]hookCall(nil), calls...)
+	hooksMu.Unlock()
+	require.Equal(t, []hookCall{
+		{turn: 2, model: "client-alias", body: secondFrame},
+		{turn: 3, model: "gpt-5.1", body: thirdFrame},
+	}, gotCalls)
+
+	require.NoError(t, clientConn.CloseNow())
+	cancelControl(context.Canceled)
+	select {
+	case <-serverErr:
+	case <-time.After(5 * time.Second):
+		t.Fatal("passthrough ingress did not exit")
+	}
+}

@@ -25,6 +25,21 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
+func openAIWSInstructionCandidateFrame(payload []byte) bool {
+	firstType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+	if firstType == "" || firstType == "response.create" {
+		return true
+	}
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return false
+	}
+	lastType := strings.TrimSpace(envelope.Type)
+	return lastType == "" || lastType == "response.create"
+}
+
 func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	ctx context.Context,
 	c *gin.Context,
@@ -172,6 +187,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		trimmed := bytes.TrimSpace(raw)
 		if len(trimmed) == 0 {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "empty websocket request payload", nil)
+		}
+		rawOriginalModel := strings.TrimSpace(gjson.GetBytes(trimmed, "model").String())
+		if rawOriginalModel == "" {
+			rawOriginalModel = ingressSessionOriginalModel
+		}
+		if rawOriginalModel == "" && hooks != nil {
+			rawOriginalModel = strings.TrimSpace(hooks.InitialRequestModel)
+		}
+		if turn > 1 && openAIWSInstructionCandidateFrame(trimmed) && hooks != nil && hooks.BeforeInstructionRequest != nil {
+			if err := hooks.BeforeInstructionRequest(turn, trimmed, rawOriginalModel); err != nil {
+				return openAIWSClientPayload{}, err
+			}
 		}
 		if !gjson.ValidBytes(trimmed) {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))

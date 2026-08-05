@@ -146,6 +146,24 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 	}
 }
 
+func TestInstructionAuditMutationRoutesHaveStableActionsAndOmitBodies(t *testing.T) {
+	expected := map[string]string{
+		"PUT /api/v1/admin/instruction-audit/enabled":                "admin.instruction_audit.enabled.update",
+		"POST /api/v1/admin/instruction-audit/hashes":                "admin.instruction_audit.hash.create",
+		"PUT /api/v1/admin/instruction-audit/hashes/:id":             "admin.instruction_audit.hash.update",
+		"POST /api/v1/admin/instruction-audit/rule-sets":             "admin.instruction_audit.rule_set.create",
+		"PUT /api/v1/admin/instruction-audit/rule-sets/:id":          "admin.instruction_audit.rule_set.update",
+		"POST /api/v1/admin/instruction-audit/bindings":              "admin.instruction_audit.binding.create",
+		"DELETE /api/v1/admin/instruction-audit/bindings/:id":        "admin.instruction_audit.binding.delete",
+		"POST /api/v1/admin/instruction-audit/events/:id/candidates": "admin.instruction_audit.candidate.create",
+	}
+	for route, action := range expected {
+		require.Equal(t, action, auditActionOverrides[route])
+		_, omitted := auditBodyOmittedRoutes[route]
+		require.Truef(t, omitted, "%s must never persist hash-management request bodies", route)
+	}
+}
+
 func TestPasskeyLoginAuditUsesCanonicalLoginActionAndOmitsCredentialBody(t *testing.T) {
 	route := "POST /api/v1/auth/passkey/login/finish"
 	require.Equal(t, service.AuditActionLogin, auditActionOverrides[route])

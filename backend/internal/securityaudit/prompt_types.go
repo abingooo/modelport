@@ -67,24 +67,29 @@ const (
 )
 
 type Request struct {
-	RequestID  string
-	UserID     int64
-	Username   string
-	UserEmail  string
-	APIKeyID   int64
-	APIKeyName string
-	GroupID    *int64
-	GroupName  string
-	Provider   string
-	Endpoint   string
-	Protocol   string
-	Model      string
-	Body       []byte
-	Stage      string
+	RequestID                 string
+	UserID                    int64
+	Username                  string
+	UserEmail                 string
+	APIKeyID                  int64
+	APIKeyName                string
+	GroupID                   *int64
+	GroupName                 string
+	Provider                  string
+	Endpoint                  string
+	Protocol                  string
+	Model                     string
+	Body                      []byte
+	InstructionBody           []byte
+	InstructionModelOverride  bool
+	InstructionAuditExcluded  bool
+	InstructionAuditCompleted bool
+	Stage                     string
 }
 
 func (r Request) Clone() Request {
 	r.Body = append([]byte(nil), r.Body...)
+	r.InstructionBody = append([]byte(nil), r.InstructionBody...)
 	if r.GroupID != nil {
 		id := *r.GroupID
 		r.GroupID = &id
@@ -157,13 +162,14 @@ type LegacyDecision struct {
 }
 
 type Decision struct {
-	Kind           DecisionKind    `json:"kind"`
-	HTTPStatus     int             `json:"http_status"`
-	ErrorCode      string          `json:"error_code,omitempty"`
-	ClientMessage  string          `json:"client_message,omitempty"`
-	Legacy         *LegacyDecision `json:"legacy,omitempty"`
-	Prompt         *PromptDecision `json:"prompt,omitempty"`
-	AllowNextStage bool            `json:"allow_next_stage"`
+	Kind           DecisionKind         `json:"kind"`
+	HTTPStatus     int                  `json:"http_status"`
+	ErrorCode      string               `json:"error_code,omitempty"`
+	ClientMessage  string               `json:"client_message,omitempty"`
+	Instruction    *InstructionDecision `json:"instruction,omitempty"`
+	Legacy         *LegacyDecision      `json:"legacy,omitempty"`
+	Prompt         *PromptDecision      `json:"prompt,omitempty"`
+	AllowNextStage bool                 `json:"allow_next_stage"`
 }
 
 type IssueSummary struct {

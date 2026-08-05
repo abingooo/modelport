@@ -116,11 +116,35 @@ func RegisterAdminRoutes(
 		// 独立提示词输入审计
 		registerPromptAuditRoutes(admin, h)
 
+		// Responses 指令哈希审核
+		registerInstructionAuditRoutes(admin, h)
+
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	instructionAudit := admin.Group("/instruction-audit")
+	{
+		instructionAudit.GET("/overview", h.Admin.InstructionAudit.GetOverview)
+		instructionAudit.PUT("/enabled", h.Admin.InstructionAudit.UpdateEnabled)
+		instructionAudit.GET("/hashes", h.Admin.InstructionAudit.ListHashes)
+		instructionAudit.POST("/hashes", h.Admin.InstructionAudit.CreateHash)
+		instructionAudit.PUT("/hashes/:id", h.Admin.InstructionAudit.UpdateHash)
+		instructionAudit.GET("/rule-sets", h.Admin.InstructionAudit.ListRuleSets)
+		instructionAudit.POST("/rule-sets", h.Admin.InstructionAudit.CreateRuleSet)
+		instructionAudit.PUT("/rule-sets/:id", h.Admin.InstructionAudit.UpdateRuleSet)
+		instructionAudit.GET("/bindings", h.Admin.InstructionAudit.ListBindings)
+		instructionAudit.POST("/bindings", h.Admin.InstructionAudit.SaveBinding)
+		instructionAudit.DELETE("/bindings/:id", h.Admin.InstructionAudit.DeleteBinding)
+		instructionAudit.GET("/users", h.Admin.InstructionAudit.SearchUsers)
+		instructionAudit.GET("/events", h.Admin.InstructionAudit.ListEvents)
+		instructionAudit.GET("/events/:id", h.Admin.InstructionAudit.GetEvent)
+		instructionAudit.POST("/events/:id/candidates", h.Admin.InstructionAudit.CreateCandidate)
 	}
 }
 

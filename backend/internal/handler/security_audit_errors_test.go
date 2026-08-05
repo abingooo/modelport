@@ -134,6 +134,32 @@ func TestPromptGuardGeminiErrorEnvelopeGolden(t *testing.T) {
 	}
 }
 
+func TestInstructionAuditResponsesUseGeneric403Envelope(t *testing.T) {
+	decision := &securityaudit.Decision{
+		Kind:          securityaudit.DecisionBlock,
+		HTTPStatus:    http.StatusForbidden,
+		ErrorCode:     securityaudit.InstructionErrorCodeRejected,
+		ClientMessage: securityaudit.InstructionClientMessage,
+		Instruction:   &securityaudit.InstructionDecision{Applicable: true, Allow: false, Reason: "hash_mismatch"},
+	}
+	for _, writeError := range []func(*gin.Context){
+		func(c *gin.Context) { (&OpenAIGatewayHandler{}).openAISecurityAuditError(c, decision) },
+		func(c *gin.Context) { (&GatewayHandler{}).responsesSecurityAuditError(c, decision) },
+	} {
+		c, recorder := securityAuditErrorTestContext(t)
+		writeError(c)
+		require.Equal(t, http.StatusForbidden, recorder.Code)
+		require.JSONEq(t, `{"error":{"type":"request_rejected","message":"Request rejected by security policy."}}`, recorder.Body.String())
+		body := recorder.Body.String()
+		require.NotContains(t, body, "instruction")
+		require.NotContains(t, body, "input1")
+		require.NotContains(t, body, "hash")
+		require.NotContains(t, body, "allowlist")
+	}
+	require.Equal(t, int64(4403), int64(securityAuditWSCloseStatus(decision)))
+	require.Equal(t, securityaudit.InstructionErrorCodeRejected, securityAuditWSCloseReason(decision))
+}
+
 func TestPromptGuardWebSocketCloseMappingGolden(t *testing.T) {
 	require.Equal(t, int64(4403), int64(securityAuditWSCloseStatus(promptGuardDecision(securityaudit.DecisionBlock))))
 	require.Equal(t, securityaudit.ErrorCodeBlocked, securityAuditWSCloseReason(promptGuardDecision(securityaudit.DecisionBlock)))

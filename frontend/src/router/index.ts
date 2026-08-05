@@ -622,6 +622,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/instruction-audit',
+    name: 'AdminInstructionAudit',
+    component: () => import('@/features/instruction-audit/InstructionAuditView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Instruction Audit',
+      titleKey: 'admin.instructionAudit.title',
+      descriptionKey: 'admin.instructionAudit.description'
+    }
+  },
+  {
     path: '/admin/usage',
     name: 'AdminUsage',
     component: () => import('@/views/admin/UsageView.vue'),
