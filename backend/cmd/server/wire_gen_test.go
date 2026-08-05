@@ -72,6 +72,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		idempotencyCleanupSvc,
 		pricingSvc,
 		emailQueueSvc,
+		nil,
 		billingCacheSvc,
 		&service.UsageRecordWorkerPool{},
 		&service.SubscriptionService{},

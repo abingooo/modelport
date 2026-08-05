@@ -138,7 +138,7 @@ func buildCyberPolicyNoticeEmailBody(siteName string, log *ContentModerationLog)
         <table style="width:100%%;border-collapse:collapse;font-size:16px;">
           <tr><td style="padding:12px 0;color:#888;border-bottom:1px solid #fee2e2;">触发时间</td><td style="padding:12px 0;border-bottom:1px solid #fee2e2;">%s</td></tr>
           <tr><td style="padding:12px 0;color:#888;border-bottom:1px solid #fee2e2;">模型</td><td style="padding:12px 0;border-bottom:1px solid #fee2e2;">%s</td></tr>
-          <tr><td style="padding:12px 0;color:#888;">上游说明</td><td style="padding:12px 0;">%s</td></tr>
+		  <tr><td style="padding:12px 0;color:#888;">请求 ID</td><td style="padding:12px 0;">%s</td></tr>
         </table>
       </div>
       <p style="font-size:15px;line-height:1.8;color:#666;">如认为系误判，可调整请求措辞后重试，或申请获得授权的安全访问权限。</p>
@@ -149,7 +149,7 @@ func buildCyberPolicyNoticeEmailBody(siteName string, log *ContentModerationLog)
 		html.EscapeString(userName),
 		html.EscapeString(log.CreatedAt.Format("2006-01-02 15:04:05")),
 		html.EscapeString(defaultContentModerationString(log.Model, "-")),
-		html.EscapeString(defaultContentModerationString(log.Error, "-")),
+		html.EscapeString(defaultContentModerationString(log.RequestID, "-")),
 		html.EscapeString(siteName),
 	)
 }

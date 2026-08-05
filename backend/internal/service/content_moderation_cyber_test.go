@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -207,6 +208,44 @@ func TestRecordCyberPolicyEvent_CreateLogBeforeEmail(t *testing.T) {
 	// be called (logPersisted && emailSent guard correctly suppresses the patch).
 	require.NotContains(t, calls, "update_email_sent",
 		"UpdateLogEmailSent must not be called when no email was sent")
+}
+
+func TestRecordCyberPolicyEventEnqueuesUserAndOperationsNotificationsWithoutUpstreamBody(t *testing.T) {
+	repo := &cyberOrderingTestRepo{}
+	notificationRepo := &securityNotificationRepositoryStub{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: `{"cyber_policy_exclude_from_ban_count":true}`,
+		}},
+		repo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	svc.SetSecurityNotificationService(&SecurityNotificationService{repository: notificationRepo})
+
+	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
+		RequestID: "req-cyber-1", UserID: 7, UserEmail: "user@example.com", APIKeyID: 11,
+		GroupName: "OpenAI", Model: "gpt-test", UpstreamMessage: "do not email this detail",
+		UpstreamBody: `{"error":{"code":"cyber_policy","message":"sensitive upstream body"}}`,
+	})
+
+	require.Len(t, notificationRepo.inputs, 2)
+	require.Equal(t, "user", notificationRepo.inputs[0].Audience)
+	require.Equal(t, NotificationEmailEventCyberPolicyNotice, notificationRepo.inputs[0].TemplateEvent)
+	require.Equal(t, "ops", notificationRepo.inputs[1].Audience)
+	require.Equal(t, NotificationEmailEventCyberPolicyOpsNotice, notificationRepo.inputs[1].TemplateEvent)
+	for _, input := range notificationRepo.inputs {
+		encoded, err := json.Marshal(input.Variables)
+		require.NoError(t, err)
+		require.NotContains(t, string(encoded), "do not email this detail")
+		require.NotContains(t, string(encoded), "sensitive upstream body")
+		require.Equal(t, "req-cyber-1", input.Variables["request_id"])
+	}
 }
 
 // banCountArgsTestRepo 在 contentModerationTestRepo 基础上记录

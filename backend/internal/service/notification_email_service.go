@@ -31,6 +31,9 @@ const (
 	NotificationEmailEventContentModerationViolation  = "content_moderation.violation_notice"
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
 	NotificationEmailEventCyberPolicyNotice           = "content_moderation.cyber_policy_notice"
+	NotificationEmailEventCyberPolicyOpsNotice        = "content_moderation.cyber_policy_ops_notice"
+	NotificationEmailEventInstructionAuditUserNotice  = "instruction_audit.user_notice"
+	NotificationEmailEventInstructionAuditOpsNotice   = "instruction_audit.ops_notice"
 	NotificationEmailEventOpsAlert                    = "ops.alert"
 	NotificationEmailEventOpsScheduledReport          = "ops.scheduled_report"
 
@@ -971,6 +974,13 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		"quota_remaining":     "20.00",
 		"quota_threshold":     "20%",
 		"triggered_at":        "2026-05-20 12:00:00",
+		"request_id":          "req_01JMODELPORT",
+		"user_id":             "1001",
+		"user_email":          "user@example.com",
+		"api_key_id":          "2048",
+		"group_id":            "12",
+		"model":               "gpt-5.6-sol",
+		"admin_qq":            "2145236436",
 		"group_name":          "Default group",
 		"moderation_category": "violence",
 		"moderation_score":    "0.982",
@@ -1032,6 +1042,9 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventContentModerationViolation,
 	NotificationEmailEventContentModerationDisabled,
 	NotificationEmailEventCyberPolicyNotice,
+	NotificationEmailEventCyberPolicyOpsNotice,
+	NotificationEmailEventInstructionAuditUserNotice,
+	NotificationEmailEventInstructionAuditOpsNotice,
 	NotificationEmailEventOpsAlert,
 	NotificationEmailEventOpsScheduledReport,
 }
@@ -1127,7 +1140,34 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Category:    "risk_control",
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
-			"triggered_at", "model", "group_name", "upstream_message"),
+			"request_id", "triggered_at", "model", "group_name", "admin_qq"),
+	},
+	NotificationEmailEventCyberPolicyOpsNotice: {
+		Event:       NotificationEmailEventCyberPolicyOpsNotice,
+		Label:       "Cyber policy operations notice",
+		Description: "Sent to operations recipients when an upstream returns the exact cyber_policy code.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"request_id", "triggered_at", "user_id", "user_email", "api_key_id", "group_id", "group_name", "model"),
+	},
+	NotificationEmailEventInstructionAuditUserNotice: {
+		Event:       NotificationEmailEventInstructionAuditUserNotice,
+		Label:       "Instruction audit user notice",
+		Description: "Sent to a user when a request is rejected by instruction audit.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"request_id", "triggered_at", "model", "group_name", "admin_qq"),
+	},
+	NotificationEmailEventInstructionAuditOpsNotice: {
+		Event:       NotificationEmailEventInstructionAuditOpsNotice,
+		Label:       "Instruction audit operations notice",
+		Description: "Sent to operations recipients when instruction audit rejects a request.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"request_id", "triggered_at", "user_id", "user_email", "api_key_id", "group_id", "group_name", "model"),
 	},
 	NotificationEmailEventOpsAlert: {
 		Event:       NotificationEmailEventOpsAlert,
@@ -1383,12 +1423,12 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>Hello {{recipient_name}},</p>
 <p>Your request was blocked by the upstream provider's cyber-security policy.</p>
 <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-  <tr><td style="width:128px;vertical-align:top;">Triggered at</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{triggered_at}}</td></tr>
+	  <tr><td style="width:128px;vertical-align:top;">Request ID</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{request_id}}</td></tr>
+	  <tr><td style="width:128px;vertical-align:top;">Triggered at</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{triggered_at}}</td></tr>
   <tr><td style="width:128px;vertical-align:top;">Model</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{model}}</td></tr>
   <tr><td style="width:128px;vertical-align:top;">Group</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{group_name}}</td></tr>
-  <tr><td style="width:128px;vertical-align:top;">Upstream message</td><td style="overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap;">{{upstream_message}}</td></tr>
 </table>
-<p>If you believe this is a mistake, try rephrasing your request, or apply for authorized security access.</p>`),
+<p>If you believe this is a mistake, contact the site administrator (QQ {{admin_qq}}).</p>`),
 		},
 		notificationEmailLocaleChinese: {
 			Subject: "[{{site_name}}] 网络安全策略拦截提醒",
@@ -1396,12 +1436,80 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>{{recipient_name}}，您好：</p>
 <p>您的请求被上游服务商的网络安全策略（cyber policy）拦截。</p>
 <table style="width:100%;border-collapse:collapse;table-layout:fixed;">
-  <tr><td style="width:128px;vertical-align:top;">触发时间</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{triggered_at}}</td></tr>
+	  <tr><td style="width:128px;vertical-align:top;">请求 ID</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{request_id}}</td></tr>
+	  <tr><td style="width:128px;vertical-align:top;">触发时间</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{triggered_at}}</td></tr>
   <tr><td style="width:128px;vertical-align:top;">模型</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{model}}</td></tr>
   <tr><td style="width:128px;vertical-align:top;">所属分组</td><td style="overflow-wrap:anywhere;word-break:break-word;">{{group_name}}</td></tr>
-  <tr><td style="width:128px;vertical-align:top;">上游说明</td><td style="overflow-wrap:anywhere;word-break:break-all;white-space:pre-wrap;">{{upstream_message}}</td></tr>
 </table>
-<p>如认为系误判，可调整请求措辞后重试，或申请获得授权的安全访问权限。</p>`),
+<p>如认为系误判，请联系本站管理员 QQ {{admin_qq}}。</p>`),
+		},
+	},
+	NotificationEmailEventCyberPolicyOpsNotice: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Cyber policy operations alert",
+			HTML: notificationEmailCard("#ef4444", "Cyber policy operations alert", `
+<p>An upstream request returned the exact cyber_policy code.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Request ID</td><td>{{request_id}}</td></tr><tr><td>Triggered at</td><td>{{triggered_at}}</td></tr>
+  <tr><td>User</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
+  <tr><td>Group</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>Model</td><td>{{model}}</td></tr>
+</table>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 上游网络安全策略告警",
+			HTML: notificationEmailCard("#ef4444", "上游网络安全策略告警", `
+<p>上游返回了明确的 cyber_policy 错误码。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>请求 ID</td><td>{{request_id}}</td></tr><tr><td>触发时间</td><td>{{triggered_at}}</td></tr>
+  <tr><td>用户</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
+  <tr><td>分组</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>模型</td><td>{{model}}</td></tr>
+</table>`),
+		},
+	},
+	NotificationEmailEventInstructionAuditUserNotice: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Request rejected by security review",
+			HTML: notificationEmailCard("#2563eb", "Security review notice", `
+<p>Hello {{recipient_name}},</p>
+<p>Your request was suspected of attempting to bypass safety restrictions and was rejected.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Request ID</td><td>{{request_id}}</td></tr><tr><td>Time</td><td>{{triggered_at}}</td></tr>
+  <tr><td>Model</td><td>{{model}}</td></tr><tr><td>Group</td><td>{{group_name}}</td></tr>
+</table>
+<p>If this was not your request, rotate the affected API key. For false positives, contact the administrator (QQ {{admin_qq}}).</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 请求已被安全审核拒绝",
+			HTML: notificationEmailCard("#2563eb", "安全审核提醒", `
+<p>{{recipient_name}}，您好：</p>
+<p>您的请求疑似尝试绕过安全限制，已被拒绝。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>请求 ID</td><td>{{request_id}}</td></tr><tr><td>时间</td><td>{{triggered_at}}</td></tr>
+  <tr><td>模型</td><td>{{model}}</td></tr><tr><td>分组</td><td>{{group_name}}</td></tr>
+</table>
+<p>如非本人操作，请及时更换相关 API 密钥；如有误判，请联系本站管理员 QQ {{admin_qq}}。</p>`),
+		},
+	},
+	NotificationEmailEventInstructionAuditOpsNotice: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Instruction audit rejection",
+			HTML: notificationEmailCard("#2563eb", "Instruction audit rejection", `
+<p>A request was rejected by instruction audit.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Request ID</td><td>{{request_id}}</td></tr><tr><td>Time</td><td>{{triggered_at}}</td></tr>
+  <tr><td>User</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
+  <tr><td>Group</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>Model</td><td>{{model}}</td></tr>
+</table>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 指令审核拦截通知",
+			HTML: notificationEmailCard("#2563eb", "指令审核拦截通知", `
+<p>指令审核拒绝了一次请求。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>请求 ID</td><td>{{request_id}}</td></tr><tr><td>时间</td><td>{{triggered_at}}</td></tr>
+  <tr><td>用户</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
+  <tr><td>分组</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>模型</td><td>{{model}}</td></tr>
+</table>`),
 		},
 	},
 	NotificationEmailEventOpsAlert: {

@@ -15,6 +15,8 @@ export interface InstructionOverview {
   queued_event_count: number
   dropped_event_count: number
   persist_failure_count: number
+  evidence_encryption_available: boolean
+  evidence_retention_days: number
 }
 
 export interface InstructionHashEntry {
@@ -82,8 +84,49 @@ export interface InstructionEvent {
   rule_set_ids: number[]
   config_version: number
   latency_ms: number
-  notification_status: string
+  evidence_status: InstructionEvidenceStatus
+  evidence_expires_at?: string | null
+  user_notification_status: string
+  ops_notification_status: string
   created_at: string
+}
+
+export type InstructionEvidenceStatus =
+  | 'stored'
+  | 'not_available'
+  | 'encryption_unavailable'
+  | 'expired'
+  | 'legacy_unavailable'
+
+export interface InstructionEvidenceField {
+  source: 'instructions' | 'input1'
+  available: boolean
+  plaintext?: string
+  sha256: string
+  plaintext_bytes: number
+  recomputed_sha256?: string
+  digest_consistent: boolean
+}
+
+export interface InstructionEvidenceReview {
+  event_id: number
+  request_id: string
+  status: InstructionEvidenceStatus
+  expires_at?: string | null
+  fields: InstructionEvidenceField[]
+  access_count: number
+}
+
+export interface InstructionEventFilters {
+  q?: string
+  from?: string
+  to?: string
+  group_ids?: string
+  reasons?: string
+  instructions_results?: string
+  input1_results?: string
+  user_notifications?: string
+  ops_notifications?: string
 }
 
 export interface InstructionEventPage {

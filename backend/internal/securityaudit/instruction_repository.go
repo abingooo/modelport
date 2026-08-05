@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -575,26 +576,57 @@ func (r *InstructionRepository) DeleteGroupBinding(ctx context.Context, id int64
 	return tx.Commit()
 }
 
-func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize int, userID int64, model string) (*InstructionEventPage, error) {
+const instructionEventFilterSQL = `
+	WHERE ($1 = '' OR
+		e.user_email_snapshot ILIKE $2 OR e.request_id ILIKE $2 OR e.model ILIKE $2 OR
+		COALESCE(e.user_id::TEXT, '') = $1 OR COALESCE(e.api_key_id::TEXT, '') = $1)
+	  AND ($3::TIMESTAMPTZ IS NULL OR e.created_at >= $3)
+	  AND ($4::TIMESTAMPTZ IS NULL OR e.created_at < $4)
+	  AND (cardinality($5::BIGINT[]) = 0 OR e.group_id = ANY($5::BIGINT[]))
+	  AND (cardinality($6::TEXT[]) = 0 OR e.reason = ANY($6::TEXT[]))
+	  AND (cardinality($7::TEXT[]) = 0 OR e.instructions_result = ANY($7::TEXT[]))
+	  AND (cardinality($8::TEXT[]) = 0 OR e.input1_result = ANY($8::TEXT[]))
+	  AND (cardinality($9::TEXT[]) = 0 OR COALESCE(un.status, 'no_recipient') = ANY($9::TEXT[]))
+	  AND (cardinality($10::TEXT[]) = 0 OR COALESCE(op.status, 'no_recipient') = ANY($10::TEXT[]))
+	  AND ($11 = 0 OR e.user_id = $11)
+	  AND ($12 = '%%' OR e.model ILIKE $12)`
+
+func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize int, filter InstructionEventFilter) (*InstructionEventPage, error) {
 	offset := (page - 1) * pageSize
-	pattern := "%" + strings.TrimSpace(model) + "%"
+	query := strings.TrimSpace(filter.Query)
+	pattern := "%" + query + "%"
+	args := []any{
+		query, pattern, filter.From, filter.To, pq.Array(filter.GroupIDs), pq.Array(filter.Reasons),
+		pq.Array(filter.InstructionResults), pq.Array(filter.Input1Results),
+		pq.Array(filter.UserNotifications), pq.Array(filter.OpsNotifications), filter.UserID,
+		"%" + strings.TrimSpace(filter.Model) + "%",
+	}
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM instruction_audit_events
-		WHERE ($1 = 0 OR user_id = $1) AND ($2 = '%%' OR model ILIKE $2)`, userID, pattern).Scan(&total); err != nil {
+		SELECT COUNT(*) FROM instruction_audit_events e
+		LEFT JOIN security_notification_outbox un
+			ON un.source_type = 'instruction_audit' AND un.source_id = e.id AND un.audience = 'user'
+		LEFT JOIN security_notification_outbox op
+			ON op.source_type = 'instruction_audit' AND op.source_id = e.id AND op.audience = 'ops'
+		`+instructionEventFilterSQL, args...).Scan(&total); err != nil {
 		return nil, err
 	}
+	args = append(args, pageSize, offset)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id,
 			e.group_id, e.group_name_snapshot, e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
 			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
-			COALESCE(o.status, 'rate_limited'), e.created_at
+			e.evidence_status, e.evidence_expires_at,
+			COALESCE(un.status, 'no_recipient'), COALESCE(op.status, 'no_recipient'), e.created_at
 		FROM instruction_audit_events e
-		LEFT JOIN instruction_audit_notification_outbox o ON o.event_id = e.id
-		WHERE ($1 = 0 OR e.user_id = $1) AND ($2 = '%%' OR e.model ILIKE $2)
-		ORDER BY e.created_at DESC, e.id DESC LIMIT $3 OFFSET $4`, userID, pattern, pageSize, offset)
+		LEFT JOIN security_notification_outbox un
+			ON un.source_type = 'instruction_audit' AND un.source_id = e.id AND un.audience = 'user'
+		LEFT JOIN security_notification_outbox op
+			ON op.source_type = 'instruction_audit' AND op.source_id = e.id AND op.audience = 'ops'
+		`+instructionEventFilterSQL+`
+		ORDER BY e.created_at DESC, e.id DESC LIMIT $13 OFFSET $14`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -619,6 +651,7 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) {
 	var item InstructionEvent
 	var userID, apiKeyID, groupID sql.NullInt64
+	var evidenceExpiresAt sql.NullTime
 	var ruleSetJSON []byte
 	err := scanner.Scan(
 		&item.ID, &item.RequestID, &userID, &item.UserEmailSnapshot, &apiKeyID,
@@ -627,7 +660,8 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 		&item.Instructions.Present, &item.Instructions.SHA256, &item.Instructions.Result,
 		&item.Input1.Present, &item.Input1.SHA256, &item.Input1.Result,
 		&item.Decision, &item.Reason, &ruleSetJSON, &item.ConfigVersion, &item.LatencyMS,
-		&item.NotificationStatus, &item.CreatedAt,
+		&item.EvidenceStatus, &evidenceExpiresAt,
+		&item.UserNotificationStatus, &item.OpsNotificationStatus, &item.CreatedAt,
 	)
 	if userID.Valid {
 		item.UserID = &userID.Int64
@@ -637,6 +671,9 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 	}
 	if groupID.Valid {
 		item.GroupID = &groupID.Int64
+	}
+	if evidenceExpiresAt.Valid {
+		item.EvidenceExpiresAt = &evidenceExpiresAt.Time
 	}
 	if len(ruleSetJSON) > 0 {
 		_ = json.Unmarshal(ruleSetJSON, &item.RuleSetIDs)
@@ -654,9 +691,13 @@ func (r *InstructionRepository) GetEvent(ctx context.Context, id int64) (*Instru
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
 			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
-			COALESCE(o.status, 'rate_limited'), e.created_at
+			e.evidence_status, e.evidence_expires_at,
+			COALESCE(un.status, 'no_recipient'), COALESCE(op.status, 'no_recipient'), e.created_at
 		FROM instruction_audit_events e
-		LEFT JOIN instruction_audit_notification_outbox o ON o.event_id = e.id
+		LEFT JOIN security_notification_outbox un
+			ON un.source_type = 'instruction_audit' AND un.source_id = e.id AND un.audience = 'user'
+		LEFT JOIN security_notification_outbox op
+			ON op.source_type = 'instruction_audit' AND op.source_id = e.id AND op.audience = 'ops'
 		WHERE e.id = $1`, id))
 	if err != nil {
 		return nil, err
@@ -664,13 +705,20 @@ func (r *InstructionRepository) GetEvent(ctx context.Context, id int64) (*Instru
 	return &item, nil
 }
 
-func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, decision *InstructionDecision) error {
+func (r *InstructionRepository) RecordBlocked(
+	ctx context.Context,
+	req Request,
+	decision *InstructionDecision,
+	evidenceStatus string,
+	evidenceExpiresAt *time.Time,
+	evidence []InstructionEvidence,
+) (int64, error) {
 	if decision == nil {
-		return errors.New("instruction audit decision required")
+		return 0, errors.New("instruction audit decision required")
 	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	ruleSetIDs := decision.RuleSetIDs
@@ -679,7 +727,7 @@ func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, 
 	}
 	ruleSets, err := json.Marshal(ruleSetIDs)
 	if err != nil {
-		return fmt.Errorf("marshal instruction audit rule set ids: %w", err)
+		return 0, fmt.Errorf("marshal instruction audit rule set ids: %w", err)
 	}
 	latencyMS := int(decision.Latency.Milliseconds())
 	if latencyMS < 0 {
@@ -691,135 +739,122 @@ func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, 
 			(request_id, user_id, user_email_snapshot, api_key_id, group_id, group_name_snapshot,
 			 model, endpoint, stage,
 			 instructions_present, instructions_sha256, instructions_result,
-			 input1_present, input1_sha256, input1_result, reason, rule_set_ids, config_version, latency_ms)
+			 input1_present, input1_sha256, input1_result, reason, rule_set_ids, config_version, latency_ms,
+			 evidence_status, evidence_expires_at)
 		VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), NULLIF($5, 0), $6, $7, $8, $9,
-			$10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+			$10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		RETURNING id`,
 		req.RequestID, req.UserID, req.UserEmail, req.APIKeyID, instructionGroupID(req.GroupID), req.GroupName,
 		req.Model, req.Endpoint, req.Stage,
 		decision.Instructions.Present, decision.Instructions.SHA256, decision.Instructions.Result,
 		decision.Input1.Present, decision.Input1.SHA256, decision.Input1.Result,
-		decision.Reason, ruleSets, decision.ConfigVersion, latencyMS).Scan(&eventID)
+		decision.Reason, ruleSets, decision.ConfigVersion, latencyMS,
+		evidenceStatus, evidenceExpiresAt).Scan(&eventID)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	bucket := time.Now().UTC().Truncate(15 * time.Minute).Format(time.RFC3339)
-	dedupRaw := fmt.Sprintf("%d\x00%d\x00%s\x00%s", req.UserID, instructionGroupID(req.GroupID), decision.Reason, bucket)
-	dedupSum := sha256.Sum256([]byte(dedupRaw))
-	_, err = tx.ExecContext(ctx, `
-			INSERT INTO instruction_audit_notification_outbox (event_id, dedup_key)
-			VALUES ($1, $2) ON CONFLICT (dedup_key) DO NOTHING`, eventID, hex.EncodeToString(dedupSum[:]))
-	if err != nil {
-		return err
+	for _, item := range evidence {
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO instruction_audit_evidence
+				(event_id, source, digest, ciphertext, key_version, plaintext_bytes, expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			eventID, item.Source, item.Digest, item.Ciphertext, item.KeyVersion,
+			item.PlaintextBytes, item.ExpiresAt); err != nil {
+			return 0, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
-		return err
+		return 0, err
 	}
-	return nil
+	return eventID, nil
 }
 
-type instructionOutboxItem struct {
-	ID               int64
-	EventID          int64
-	Attempts         int
-	MaxAttempts      int
-	SentRecipientIDs []int64
+func (r *InstructionRepository) GetEvidenceRetentionDays(ctx context.Context) (int, error) {
+	var raw string
+	if err := r.db.QueryRowContext(ctx, `
+		SELECT value FROM settings WHERE key = $1`, SettingKeyInstructionEvidenceRetentionDays).Scan(&raw); err != nil {
+		return 0, err
+	}
+	days, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return 0, fmt.Errorf("invalid instruction evidence retention setting: %w", err)
+	}
+	return days, nil
 }
 
-type instructionAdminRecipient struct {
-	ID       int64
-	Email    string
-	Username string
-}
-
-func (r *InstructionRepository) ReclaimStaleOutbox(ctx context.Context) error {
+func (r *InstructionRepository) SetEvidenceRetentionDays(ctx context.Context, days int) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE instruction_audit_notification_outbox
-		SET status = 'retry', claimed_at = NULL, available_at = NOW(), updated_at = NOW(), last_error = 'stale claim recovered'
-		WHERE status = 'processing' AND claimed_at < NOW() - INTERVAL '5 minutes'`)
+		INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+		SettingKeyInstructionEvidenceRetentionDays, strconv.Itoa(days))
 	return err
 }
 
-func (r *InstructionRepository) ClaimOutbox(ctx context.Context) (*instructionOutboxItem, error) {
-	var item instructionOutboxItem
-	var sentRecipientIDs pq.Int64Array
-	err := r.db.QueryRowContext(ctx, `
-		WITH candidate AS (
-			SELECT id FROM instruction_audit_notification_outbox
-			WHERE status IN ('pending', 'retry') AND available_at <= NOW()
-			ORDER BY available_at, id
-			FOR UPDATE SKIP LOCKED LIMIT 1
-		)
-		UPDATE instruction_audit_notification_outbox o
-		SET status = 'processing', attempts = attempts + 1, claimed_at = NOW(), updated_at = NOW()
-		FROM candidate c WHERE o.id = c.id
-			RETURNING o.id, o.event_id, o.attempts, o.max_attempts, o.sent_recipient_ids`).Scan(
-		&item.ID, &item.EventID, &item.Attempts, &item.MaxAttempts, &sentRecipientIDs)
-	if err != nil {
-		return nil, err
-	}
-	item.SentRecipientIDs = append([]int64(nil), sentRecipientIDs...)
-	return &item, nil
-}
-
-func (r *InstructionRepository) ListAdminRecipients(ctx context.Context) ([]instructionAdminRecipient, error) {
+func (r *InstructionRepository) ListEvidence(ctx context.Context, eventID int64) ([]InstructionEvidence, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, email, COALESCE(username, '') FROM users
-		WHERE role = 'admin' AND status = 'active' AND deleted_at IS NULL AND btrim(email) <> ''
-		ORDER BY id`)
+		SELECT source, digest, ciphertext, key_version, plaintext_bytes, expires_at
+		FROM instruction_audit_evidence WHERE event_id = $1 ORDER BY source`, eventID)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	items := make([]instructionAdminRecipient, 0)
+	items := make([]InstructionEvidence, 0, 2)
 	for rows.Next() {
-		var item instructionAdminRecipient
-		if err := rows.Scan(&item.ID, &item.Email, &item.Username); err != nil {
+		var item InstructionEvidence
+		if err := rows.Scan(&item.Source, &item.Digest, &item.Ciphertext, &item.KeyVersion, &item.PlaintextBytes, &item.ExpiresAt); err != nil {
 			return nil, err
 		}
+		item.Digest = strings.TrimSpace(item.Digest)
 		items = append(items, item)
 	}
 	return items, rows.Err()
 }
 
-func (r *InstructionRepository) MarkOutboxSent(ctx context.Context, id int64) error {
+func (r *InstructionRepository) RecordEvidenceAccess(ctx context.Context, eventID int64, access InstructionEvidenceAccess) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE instruction_audit_notification_outbox
-		SET status = 'sent', claimed_at = NULL, last_error = '', updated_at = NOW()
-		WHERE id = $1`, id)
+		INSERT INTO instruction_audit_evidence_access_logs
+			(event_id, actor_id, action, source, request_id, client_ip, user_agent, succeeded, error_code)
+		VALUES ($1, NULLIF($2, 0), $3, LEFT($4, 48), LEFT($5, 128), LEFT($6, 64), LEFT($7, 512), $8, LEFT($9, 64))`,
+		eventID, access.ActorID, access.Action, access.Source, access.RequestID,
+		access.ClientIP, access.UserAgent, access.Succeeded, access.ErrorCode)
 	return err
 }
 
-func (r *InstructionRepository) MarkOutboxRecipientSent(ctx context.Context, id, recipientID int64) error {
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE instruction_audit_notification_outbox
-		SET sent_recipient_ids = CASE
-				WHEN $2 = ANY(sent_recipient_ids) THEN sent_recipient_ids
-				ELSE array_append(sent_recipient_ids, $2)
-			END,
-			claimed_at = NOW(), updated_at = NOW()
-		WHERE id = $1`, id, recipientID)
-	return err
+func (r *InstructionRepository) CountEvidenceAccesses(ctx context.Context, eventID int64) (int64, error) {
+	var count int64
+	err := r.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM instruction_audit_evidence_access_logs WHERE event_id = $1`, eventID).Scan(&count)
+	return count, err
 }
 
-func (r *InstructionRepository) MarkOutboxFailed(ctx context.Context, item instructionOutboxItem, sendErr error, delay time.Duration) error {
-	status := "retry"
-	if item.Attempts >= item.MaxAttempts {
-		status = "failed"
+func (r *InstructionRepository) HasSuccessfulEvidenceReveal(ctx context.Context, eventID, actorID int64) (bool, error) {
+	var exists bool
+	err := r.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM instruction_audit_evidence_access_logs
+			WHERE event_id = $1 AND actor_id = $2 AND action = 'reveal' AND succeeded = TRUE
+		)`, eventID, actorID).Scan(&exists)
+	return exists, err
+}
+
+func (r *InstructionRepository) ExpireEvidence(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `
+		WITH expired AS (
+			DELETE FROM instruction_audit_evidence
+			WHERE expires_at <= NOW()
+			RETURNING event_id
+		), affected AS (
+			SELECT DISTINCT event_id FROM expired
+		)
+		UPDATE instruction_audit_events e
+		SET evidence_status = 'expired'
+		FROM affected a
+		WHERE e.id = a.event_id
+		  AND NOT EXISTS (SELECT 1 FROM instruction_audit_evidence x WHERE x.event_id = e.id)`)
+	if err != nil {
+		return 0, err
 	}
-	message := "notification failed"
-	if sendErr != nil {
-		message = sendErr.Error()
-	}
-	if len(message) > 512 {
-		message = message[:512]
-	}
-	_, err := r.db.ExecContext(ctx, `
-		UPDATE instruction_audit_notification_outbox
-		SET status = $2, claimed_at = NULL, available_at = NOW() + ($3 * INTERVAL '1 second'),
-			last_error = $4, updated_at = NOW()
-		WHERE id = $1`, item.ID, status, int(delay.Seconds()), message)
-	return err
+	return result.RowsAffected()
 }
 
 func (r *InstructionRepository) OverviewCounts(ctx context.Context) (hashes, activeHashes, ruleSets, auditedGroups, effectiveGroups, pendingEmails int64, err error) {
@@ -840,7 +875,8 @@ func (r *InstructionRepository) OverviewCounts(ctx context.Context) (hashes, act
 				AND (h.valid_from IS NULL OR h.valid_from <= NOW())
 				AND (h.valid_until IS NULL OR h.valid_until > NOW())
 			 WHERE b.enabled = TRUE),
-			(SELECT COUNT(*) FROM instruction_audit_notification_outbox WHERE status IN ('pending', 'processing', 'retry'))`).Scan(
+			(SELECT COUNT(*) FROM security_notification_outbox
+			 WHERE source_type = 'instruction_audit' AND status IN ('pending', 'processing', 'retry'))`).Scan(
 		&hashes, &activeHashes, &ruleSets, &auditedGroups, &effectiveGroups, &pendingEmails)
 	return
 }

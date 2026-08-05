@@ -7,10 +7,11 @@ import (
 )
 
 const (
-	SettingKeyInstructionAuditEnabled    = "instruction_audit_enabled"
-	InstructionConfigInvalidationChannel = "modelport:instruction_audit:config:invalidate"
-	InstructionErrorCodeRejected         = "request_rejected"
-	InstructionClientMessage             = "Request rejected by security policy."
+	SettingKeyInstructionAuditEnabled          = "instruction_audit_enabled"
+	SettingKeyInstructionEvidenceRetentionDays = "instruction_audit_evidence_retention_days"
+	InstructionConfigInvalidationChannel       = "modelport:instruction_audit:config:invalidate"
+	InstructionErrorCodeRejected               = "request_rejected"
+	InstructionClientMessage                   = "Request rejected by security policy."
 )
 
 var ErrInstructionAuditNoEffectiveGroupRules = errors.New("instruction audit requires effective group rules")
@@ -20,9 +21,10 @@ type InstructionEngine interface {
 }
 
 type InstructionFieldResult struct {
-	Present bool   `json:"present"`
-	SHA256  string `json:"sha256"`
-	Result  string `json:"result"`
+	Present   bool   `json:"present"`
+	SHA256    string `json:"sha256"`
+	Result    string `json:"result"`
+	Plaintext string `json:"-"`
 }
 
 type InstructionDecision struct {
@@ -124,25 +126,85 @@ type InstructionGroupOption struct {
 }
 
 type InstructionEvent struct {
-	ID                 int64                  `json:"id"`
-	RequestID          string                 `json:"request_id"`
-	UserID             *int64                 `json:"user_id,omitempty"`
-	UserEmailSnapshot  string                 `json:"user_email"`
-	APIKeyID           *int64                 `json:"api_key_id,omitempty"`
-	GroupID            *int64                 `json:"group_id,omitempty"`
-	GroupNameSnapshot  string                 `json:"group_name"`
-	Model              string                 `json:"model"`
-	Endpoint           string                 `json:"endpoint"`
-	Stage              string                 `json:"stage"`
-	Instructions       InstructionFieldResult `json:"instructions"`
-	Input1             InstructionFieldResult `json:"input1"`
-	Decision           string                 `json:"decision"`
-	Reason             string                 `json:"reason"`
-	RuleSetIDs         []int64                `json:"rule_set_ids"`
-	ConfigVersion      int64                  `json:"config_version"`
-	LatencyMS          int                    `json:"latency_ms"`
-	NotificationStatus string                 `json:"notification_status"`
-	CreatedAt          time.Time              `json:"created_at"`
+	ID                     int64                  `json:"id"`
+	RequestID              string                 `json:"request_id"`
+	UserID                 *int64                 `json:"user_id,omitempty"`
+	UserEmailSnapshot      string                 `json:"user_email"`
+	APIKeyID               *int64                 `json:"api_key_id,omitempty"`
+	GroupID                *int64                 `json:"group_id,omitempty"`
+	GroupNameSnapshot      string                 `json:"group_name"`
+	Model                  string                 `json:"model"`
+	Endpoint               string                 `json:"endpoint"`
+	Stage                  string                 `json:"stage"`
+	Instructions           InstructionFieldResult `json:"instructions"`
+	Input1                 InstructionFieldResult `json:"input1"`
+	Decision               string                 `json:"decision"`
+	Reason                 string                 `json:"reason"`
+	RuleSetIDs             []int64                `json:"rule_set_ids"`
+	ConfigVersion          int64                  `json:"config_version"`
+	LatencyMS              int                    `json:"latency_ms"`
+	EvidenceStatus         string                 `json:"evidence_status"`
+	EvidenceExpiresAt      *time.Time             `json:"evidence_expires_at,omitempty"`
+	UserNotificationStatus string                 `json:"user_notification_status"`
+	OpsNotificationStatus  string                 `json:"ops_notification_status"`
+	CreatedAt              time.Time              `json:"created_at"`
+}
+
+type InstructionEventFilter struct {
+	Query              string
+	UserID             int64
+	Model              string
+	From               *time.Time
+	To                 *time.Time
+	GroupIDs           []int64
+	Reasons            []string
+	InstructionResults []string
+	Input1Results      []string
+	UserNotifications  []string
+	OpsNotifications   []string
+}
+
+type InstructionEvidence struct {
+	Source         string
+	Digest         string
+	Ciphertext     []byte
+	KeyVersion     string
+	PlaintextBytes int
+	ExpiresAt      time.Time
+}
+
+type InstructionEvidenceField struct {
+	Source           string `json:"source"`
+	Available        bool   `json:"available"`
+	Plaintext        string `json:"plaintext,omitempty"`
+	SHA256           string `json:"sha256"`
+	PlaintextBytes   int    `json:"plaintext_bytes"`
+	RecomputedSHA256 string `json:"recomputed_sha256,omitempty"`
+	DigestConsistent bool   `json:"digest_consistent"`
+}
+
+type InstructionEvidenceReview struct {
+	EventID     int64                      `json:"event_id"`
+	RequestID   string                     `json:"request_id"`
+	Status      string                     `json:"status"`
+	ExpiresAt   *time.Time                 `json:"expires_at,omitempty"`
+	Fields      []InstructionEvidenceField `json:"fields"`
+	AccessCount int64                      `json:"access_count"`
+}
+
+type InstructionEvidenceAccess struct {
+	ActorID   int64
+	Action    string
+	Source    string
+	RequestID string
+	ClientIP  string
+	UserAgent string
+	Succeeded bool
+	ErrorCode string
+}
+
+type RecordInstructionEvidenceAccessRequest struct {
+	Source string `json:"source"`
 }
 
 type InstructionEventPage struct {
@@ -154,31 +216,38 @@ type InstructionEventPage struct {
 }
 
 type InstructionOverview struct {
-	Enabled             bool       `json:"enabled"`
-	ConfigVersion       int64      `json:"config_version"`
-	LoadedAt            *time.Time `json:"loaded_at,omitempty"`
-	LoadError           string     `json:"load_error"`
-	HashCount           int64      `json:"hash_count"`
-	ActiveHashCount     int64      `json:"active_hash_count"`
-	RuleSetCount        int64      `json:"rule_set_count"`
-	AuditedGroupCount   int64      `json:"audited_group_count"`
-	EffectiveGroupCount int64      `json:"effective_group_count"`
-	PendingEmailCount   int64      `json:"pending_email_count"`
-	QueuedEventCount    int64      `json:"queued_event_count"`
-	DroppedEventCount   int64      `json:"dropped_event_count"`
-	PersistFailureCount int64      `json:"persist_failure_count"`
+	Enabled                     bool       `json:"enabled"`
+	ConfigVersion               int64      `json:"config_version"`
+	LoadedAt                    *time.Time `json:"loaded_at,omitempty"`
+	LoadError                   string     `json:"load_error"`
+	HashCount                   int64      `json:"hash_count"`
+	ActiveHashCount             int64      `json:"active_hash_count"`
+	RuleSetCount                int64      `json:"rule_set_count"`
+	AuditedGroupCount           int64      `json:"audited_group_count"`
+	EffectiveGroupCount         int64      `json:"effective_group_count"`
+	PendingEmailCount           int64      `json:"pending_email_count"`
+	QueuedEventCount            int64      `json:"queued_event_count"`
+	DroppedEventCount           int64      `json:"dropped_event_count"`
+	PersistFailureCount         int64      `json:"persist_failure_count"`
+	EvidenceEncryptionAvailable bool       `json:"evidence_encryption_available"`
+	EvidenceRetentionDays       int        `json:"evidence_retention_days"`
 }
 
 type UpdateInstructionEnabledRequest struct {
 	Enabled bool `json:"enabled"`
 }
 
+type UpdateInstructionEvidenceRetentionRequest struct {
+	Days int `json:"days"`
+}
+
 type CreateInstructionCandidateRequest struct {
-	Source        string `json:"source"`
-	Name          string `json:"name"`
-	Note          string `json:"note"`
-	ClientName    string `json:"client_name"`
-	ClientVersion string `json:"client_version"`
+	Source          string `json:"source"`
+	Name            string `json:"name"`
+	Note            string `json:"note"`
+	ClientName      string `json:"client_name"`
+	ClientVersion   string `json:"client_version"`
+	ReviewConfirmed bool   `json:"review_confirmed"`
 }
 
 type instructionPolicy struct {

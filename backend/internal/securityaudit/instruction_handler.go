@@ -3,6 +3,7 @@ package securityaudit
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -43,6 +44,23 @@ func (h *InstructionAdminHandler) UpdateEnabled(c *gin.Context) {
 		return
 	}
 	h.setAdminAudit(c, "success", "", fields)
+	response.Success(c, overview)
+}
+
+func (h *InstructionAdminHandler) UpdateEvidenceRetention(c *gin.Context) {
+	var request UpdateInstructionEvidenceRetentionRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_evidence_retention", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_evidence_retention", "明文保留配置无效"))
+		return
+	}
+	overview, err := h.service.UpdateEvidenceRetention(c.Request.Context(), request.Days)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"days": request.Days})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"days": request.Days})
 	response.Success(c, overview)
 }
 
@@ -191,17 +209,53 @@ func (h *InstructionAdminHandler) ListEvents(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	userID, err := optionalInstructionUserID(c.Query("user_id"))
+	filter, err := instructionEventFilterFromQuery(c)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	items, err := h.service.ListEvents(c.Request.Context(), page, pageSize, userID, c.Query("model"))
+	items, err := h.service.ListEvents(c.Request.Context(), page, pageSize, filter)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
 	response.Success(c, items)
+}
+
+func (h *InstructionAdminHandler) RevealEvidence(c *gin.Context) {
+	id, ok := instructionIDParam(c, "event")
+	if !ok {
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	item, err := h.service.RevealEvidence(c.Request.Context(), id, instructionEvidenceAccess(c, "reveal", "all"))
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"event_id": id, "action": "reveal"})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"event_id": id, "action": "reveal", "evidence_status": item.Status})
+	response.Success(c, item)
+}
+
+func (h *InstructionAdminHandler) RecordEvidenceCopy(c *gin.Context) {
+	id, ok := instructionIDParam(c, "event")
+	if !ok {
+		return
+	}
+	var request RecordInstructionEvidenceAccessRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_copy_source", "复制内容类型无效"))
+		return
+	}
+	access := instructionEvidenceAccess(c, "copy", strings.TrimSpace(request.Source))
+	if err := h.service.RecordEvidenceCopy(c.Request.Context(), id, access); err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"event_id": id, "action": "copy", "source": request.Source})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"event_id": id, "action": "copy", "source": request.Source})
+	response.Success(c, gin.H{"recorded": true})
 }
 
 func (h *InstructionAdminHandler) GetEvent(c *gin.Context) {
@@ -257,6 +311,72 @@ func optionalInstructionUserID(value string) (int64, error) {
 		return 0, infraerrors.BadRequest("instruction_audit_invalid_user_id", "用户 ID 无效")
 	}
 	return id, nil
+}
+
+func instructionEventFilterFromQuery(c *gin.Context) (InstructionEventFilter, error) {
+	filter := InstructionEventFilter{
+		Query: c.Query("q"), Model: c.Query("model"), Reasons: splitInstructionQuery(c.Query("reasons")),
+		InstructionResults: splitInstructionQuery(c.Query("instructions_results")),
+		Input1Results:      splitInstructionQuery(c.Query("input1_results")),
+		UserNotifications:  splitInstructionQuery(c.Query("user_notifications")),
+		OpsNotifications:   splitInstructionQuery(c.Query("ops_notifications")),
+	}
+	var err error
+	if filter.UserID, err = optionalInstructionUserID(c.Query("user_id")); err != nil {
+		return InstructionEventFilter{}, err
+	}
+	for _, raw := range splitInstructionQuery(c.Query("group_ids")) {
+		id, parseErr := strconv.ParseInt(raw, 10, 64)
+		if parseErr != nil || id <= 0 {
+			return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_invalid_group_filter", "分组筛选无效")
+		}
+		filter.GroupIDs = append(filter.GroupIDs, id)
+	}
+	if filter.From, err = optionalInstructionTime(c.Query("from")); err != nil {
+		return InstructionEventFilter{}, err
+	}
+	if filter.To, err = optionalInstructionTime(c.Query("to")); err != nil {
+		return InstructionEventFilter{}, err
+	}
+	if filter.From != nil && filter.To != nil && !filter.From.Before(*filter.To) {
+		return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_invalid_time_range", "时间范围无效")
+	}
+	return filter, nil
+}
+
+func splitInstructionQuery(value string) []string {
+	parts := strings.Split(strings.TrimSpace(value), ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if item := strings.TrimSpace(part); item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func optionalInstructionTime(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_time_range", "时间范围无效")
+	}
+	parsed = parsed.UTC()
+	return &parsed, nil
+}
+
+func instructionEvidenceAccess(c *gin.Context, action, source string) InstructionEvidenceAccess {
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-Id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(c.Writer.Header().Get("X-Request-Id"))
+	}
+	return InstructionEvidenceAccess{
+		ActorID: adminID(c), Action: action, Source: source, RequestID: requestID,
+		ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent"),
+	}
 }
 
 func setInstructionAdminAudit(c *gin.Context, result, errorCode string, fields map[string]any) {

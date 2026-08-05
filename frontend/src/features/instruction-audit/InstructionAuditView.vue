@@ -47,6 +47,31 @@
         {{ t('admin.instructionAudit.eventPersistenceWarning', { failed: overview.persist_failure_count }) }}
       </div>
 
+      <div
+        v-if="overview"
+        class="flex flex-col gap-3 rounded-md border px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+        :class="overview.evidence_encryption_available
+          ? 'border-primary-200 bg-primary-50/60 dark:border-primary-900/60 dark:bg-primary-950/20'
+          : 'border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/30'"
+      >
+        <div>
+          <p class="text-sm font-medium" :class="overview.evidence_encryption_available ? 'text-primary-800 dark:text-primary-200' : 'text-red-700 dark:text-red-300'">
+            {{ overview.evidence_encryption_available
+              ? t('admin.instructionAudit.evidenceEncryptionReady')
+              : t('admin.instructionAudit.evidenceEncryptionUnavailable') }}
+          </p>
+          <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.evidenceRetentionHint') }}</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <input v-model.number="retentionDays" type="number" min="1" max="3650" class="input h-9 w-24 py-1.5 text-sm" :aria-label="t('admin.instructionAudit.evidenceRetentionDays')" />
+          <span class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.days') }}</span>
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="saving" @click="saveEvidenceRetention">
+            <Icon name="check" size="sm" />
+            {{ t('common.save') }}
+          </button>
+        </div>
+      </div>
+
       <div class="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
         <div v-for="stat in overviewStats" :key="stat.label" class="card px-4 py-4">
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ stat.label }}</p>
@@ -219,17 +244,112 @@
       </section>
 
       <section v-else class="card overflow-hidden">
-        <div class="flex flex-col gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.auditLogs') }}</h2>
-            <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.eventCount', { count: eventPage.total }) }}</p>
+        <div class="space-y-4 border-b border-gray-100 px-5 py-4 dark:border-dark-700">
+          <div class="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.auditLogs') }}</h2>
+              <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.eventCount', { count: eventPage.total }) }}</p>
+            </div>
+            <div class="flex min-w-0 flex-1 flex-col gap-2 xl:max-w-4xl xl:flex-row xl:justify-end">
+              <div class="flex min-w-0 flex-1">
+                <input
+                  v-model.trim="eventFilters.q"
+                  type="search"
+                  class="input h-9 min-w-0 rounded-r-none py-1.5 text-sm"
+                  :placeholder="t('admin.instructionAudit.searchPlaceholder')"
+                  @keyup.enter="applyEventFilters"
+                />
+                <button type="button" class="btn btn-primary h-9 rounded-l-none" @click="applyEventFilters">
+                  <Icon name="search" size="sm" />
+                  {{ t('common.search') }}
+                </button>
+              </div>
+              <div class="flex max-w-full gap-1 overflow-x-auto rounded-md bg-gray-100 p-1 dark:bg-dark-700">
+                <button
+                  v-for="range in timeRanges"
+                  :key="range.value"
+                  type="button"
+                  class="min-w-max rounded px-3 py-1.5 text-xs font-medium"
+                  :class="eventFilters.range === range.value ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-600 dark:text-primary-300' : 'text-gray-500 dark:text-gray-400'"
+                  @click="setTimeRange(range.value)"
+                >
+                  {{ range.label }}
+                </button>
+              </div>
+              <button type="button" class="btn btn-secondary h-9" @click="advancedFiltersOpen = !advancedFiltersOpen">
+                <Icon name="filter" size="sm" />
+                {{ t('admin.instructionAudit.advancedFilters') }}
+                <span v-if="activeFilterCount" class="rounded-full bg-primary-100 px-1.5 py-0.5 text-[10px] text-primary-700 dark:bg-primary-900/50 dark:text-primary-200">{{ activeFilterCount }}</span>
+              </button>
+            </div>
           </div>
-          <div class="grid gap-2 sm:grid-cols-[10rem_15rem_auto]">
-            <input v-model.trim="eventFilters.userId" type="number" min="1" class="input h-9 py-1.5 text-sm" :placeholder="t('admin.instructionAudit.userId')" @keyup.enter="loadEvents(1)" />
-            <input v-model.trim="eventFilters.model" type="search" class="input h-9 py-1.5 text-sm" :placeholder="t('admin.instructionAudit.model')" @keyup.enter="loadEvents(1)" />
-            <button type="button" class="btn btn-secondary" @click="loadEvents(1)">
-              <Icon name="search" size="sm" />
-              {{ t('common.search') }}
+
+          <div v-if="eventFilters.range === 'custom'" class="grid gap-3 rounded-md border border-gray-200 p-3 dark:border-dark-600 sm:grid-cols-2">
+            <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+              {{ t('admin.instructionAudit.fromTime') }}
+              <input v-model="eventFilters.from" type="datetime-local" class="input mt-1" />
+            </label>
+            <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
+              {{ t('admin.instructionAudit.toTime') }}
+              <input v-model="eventFilters.to" type="datetime-local" class="input mt-1" />
+            </label>
+          </div>
+
+          <div v-if="advancedFiltersOpen" class="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.group') }}</legend>
+              <div class="filter-options">
+                <label v-for="group in groupOptions" :key="group.id" class="filter-option">
+                  <input v-model="eventFilters.groupIds" type="checkbox" :value="group.id" />
+                  <span class="truncate">{{ group.name }}</span>
+                  <span class="ml-auto text-[10px] text-gray-400">#{{ group.id }}</span>
+                </label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.reason') }}</legend>
+              <div class="filter-options">
+                <label v-for="reason in reasonOptions" :key="reason" class="filter-option">
+                  <input v-model="eventFilters.reasons" type="checkbox" :value="reason" />
+                  <span>{{ reasonLabel(reason) }}</span>
+                </label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.validationResults') }}</legend>
+              <div class="filter-options">
+                <label v-for="result in fieldResultOptions" :key="`i-${result}`" class="filter-option">
+                  <input v-model="eventFilters.instructionsResults" type="checkbox" :value="result" />
+                  <span>instructions: {{ fieldResultLabel(result) }}</span>
+                </label>
+                <label v-for="result in fieldResultOptions" :key="`f-${result}`" class="filter-option">
+                  <input v-model="eventFilters.input1Results" type="checkbox" :value="result" />
+                  <span>input[1]: {{ fieldResultLabel(result) }}</span>
+                </label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.notification') }}</legend>
+              <div class="filter-options">
+                <label v-for="status in notificationOptions" :key="`u-${status}`" class="filter-option">
+                  <input v-model="eventFilters.userNotifications" type="checkbox" :value="status" />
+                  <span>{{ t('admin.instructionAudit.userNotification') }}: {{ notificationLabel(status) }}</span>
+                </label>
+                <label v-for="status in notificationOptions" :key="`o-${status}`" class="filter-option">
+                  <input v-model="eventFilters.opsNotifications" type="checkbox" :value="status" />
+                  <span>{{ t('admin.instructionAudit.opsNotification') }}: {{ notificationLabel(status) }}</span>
+                </label>
+              </div>
+            </fieldset>
+          </div>
+
+          <div v-if="filterChips.length" class="flex flex-wrap items-center gap-2">
+            <button v-for="chip in filterChips" :key="chip.key" type="button" class="filter-chip" @click="chip.remove">
+              <span>{{ chip.label }}</span>
+              <Icon name="x" size="xs" />
+            </button>
+            <button type="button" class="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400" @click="resetEventFilters">
+              {{ t('admin.instructionAudit.resetFilters') }}
             </button>
           </div>
         </div>
@@ -245,27 +365,44 @@
                 <th class="table-th">{{ t('admin.instructionAudit.fieldTwo') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.reason') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.notification') }}</th>
+                <th class="table-th">{{ t('admin.instructionAudit.evidence') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-800">
               <tr v-for="event in eventPage.items" :key="event.id" class="align-top">
                 <td class="table-td whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
                   {{ formatDate(event.created_at) }}
-                  <p class="mt-1 font-mono text-[11px] text-gray-400">#{{ event.id }}</p>
+                  <button type="button" class="mt-1 block font-mono text-[11px] text-primary-600 hover:underline dark:text-primary-400" @click="setQueryFilter(event.request_id)">{{ event.request_id || `#${event.id}` }}</button>
                 </td>
                 <td class="table-td">
-                  <p class="text-sm text-gray-900 dark:text-white">{{ event.user_email || '-' }}</p>
-                  <p class="text-xs text-gray-400">#{{ event.user_id || '-' }} / key #{{ event.api_key_id || '-' }}</p>
+                  <button type="button" class="block text-left text-sm text-gray-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-300" @click="setQueryFilter(event.user_email)">{{ event.user_email || '-' }}</button>
+                  <p class="text-xs text-gray-400">
+                    <button type="button" class="hover:text-primary-600" @click="setQueryFilter(String(event.user_id || ''))">#{{ event.user_id || '-' }}</button>
+                    /
+                    <button type="button" class="hover:text-primary-600" @click="setQueryFilter(String(event.api_key_id || ''))">key #{{ event.api_key_id || '-' }}</button>
+                  </p>
                 </td>
                 <td class="table-td">
-                  <p class="text-sm text-gray-900 dark:text-white">{{ event.group_name || '-' }}</p>
+                  <button type="button" class="text-left text-sm text-gray-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-300" @click="addArrayFilter('groupIds', event.group_id)">{{ event.group_name || '-' }}</button>
                   <p class="text-xs text-gray-400">#{{ event.group_id || '-' }}</p>
                 </td>
-                <td class="table-td font-mono text-xs">{{ event.model }}</td>
-                <td class="table-td"><FieldDigest :field="event.instructions" @candidate="createCandidate(event.id, 'instructions')" /></td>
-                <td class="table-td"><FieldDigest :field="event.input1" @candidate="createCandidate(event.id, 'input1')" /></td>
-                <td class="table-td text-xs">{{ reasonLabel(event.reason) }}<p class="mt-1 text-gray-400 dark:text-gray-500">v{{ event.config_version }} · {{ event.latency_ms }}ms</p></td>
-                <td class="table-td"><span :class="notificationPill(event.notification_status)">{{ notificationLabel(event.notification_status) }}</span></td>
+                <td class="table-td"><button type="button" class="font-mono text-xs hover:text-primary-600" @click="setQueryFilter(event.model)">{{ event.model }}</button></td>
+                <td class="table-td"><FieldDigest :field="event.instructions" @filter="addArrayFilter('instructionsResults', $event)" /></td>
+                <td class="table-td"><FieldDigest :field="event.input1" @filter="addArrayFilter('input1Results', $event)" /></td>
+                <td class="table-td text-xs"><button type="button" class="text-left hover:text-primary-600" @click="addArrayFilter('reasons', event.reason)">{{ reasonLabel(event.reason) }}</button><p class="mt-1 text-gray-400 dark:text-gray-500">v{{ event.config_version }} · {{ event.latency_ms }}ms</p></td>
+                <td class="table-td">
+                  <div class="space-y-1.5 whitespace-nowrap">
+                    <button type="button" class="block" @click="addArrayFilter('userNotifications', event.user_notification_status)"><span :class="notificationPill(event.user_notification_status)">{{ t('admin.instructionAudit.userNotification') }} · {{ notificationLabel(event.user_notification_status) }}</span></button>
+                    <button type="button" class="block" @click="addArrayFilter('opsNotifications', event.ops_notification_status)"><span :class="notificationPill(event.ops_notification_status)">{{ t('admin.instructionAudit.opsNotification') }} · {{ notificationLabel(event.ops_notification_status) }}</span></button>
+                  </div>
+                </td>
+                <td class="table-td">
+                  <button type="button" class="btn btn-secondary btn-sm whitespace-nowrap" @click="openEvidenceReview(event)">
+                    <Icon name="eye" size="sm" />
+                    {{ t('admin.instructionAudit.reviewEvidence') }}
+                  </button>
+                  <p class="mt-1 text-[11px] text-gray-400">{{ evidenceStatusLabel(event.evidence_status) }}</p>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -422,6 +559,13 @@
       </template>
     </BaseDialog>
 
+    <InstructionEvidenceReviewDialog
+      :show="Boolean(evidenceReviewEvent)"
+      :event="evidenceReviewEvent"
+      @close="evidenceReviewEvent = null"
+      @candidate="createCandidateFromReview"
+    />
+
     <ConfirmDialog
       :show="Boolean(bindingToDelete)"
       :title="t('admin.instructionAudit.deleteBinding')"
@@ -436,6 +580,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, h, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -443,12 +588,14 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import InstructionEvidenceReviewDialog from './InstructionEvidenceReviewDialog.vue'
 import { useAppStore } from '@/stores'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from './api'
 import { resolveInstructionHashDigest } from './hash'
 import type {
   InstructionEventPage,
+  InstructionEvent,
   InstructionFieldResult,
   InstructionGroupBinding,
   InstructionGroupOption,
@@ -464,6 +611,8 @@ type Tab = 'rules' | 'hashes' | 'candidates' | 'events'
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const route = useRoute()
+const router = useRouter()
 const activeTab = ref<Tab>('rules')
 const loading = ref(false)
 const saving = ref(false)
@@ -475,7 +624,25 @@ const groupOptions = ref<InstructionGroupOption[]>([])
 const hashStatusFilter = ref('')
 const bindingToDelete = ref<InstructionGroupBinding | null>(null)
 const eventPage = reactive<InstructionEventPage>({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
-const eventFilters = reactive({ userId: '', model: '' })
+const evidenceReviewEvent = ref<InstructionEvent | null>(null)
+const retentionDays = ref(30)
+const advancedFiltersOpen = ref(false)
+const eventFilters = reactive({
+  q: '', range: '24h' as '1h' | '24h' | '7d' | 'custom', from: '', to: '',
+  groupIds: [] as number[], reasons: [] as string[],
+  instructionsResults: [] as string[], input1Results: [] as string[],
+  userNotifications: [] as string[], opsNotifications: [] as string[],
+})
+
+const timeRanges = computed(() => [
+  { value: '1h' as const, label: t('admin.instructionAudit.lastHour') },
+  { value: '24h' as const, label: t('admin.instructionAudit.lastDay') },
+  { value: '7d' as const, label: t('admin.instructionAudit.lastWeek') },
+  { value: 'custom' as const, label: t('admin.instructionAudit.customRange') },
+])
+const reasonOptions = ['hash_mismatch', 'fields_missing', 'field_invalid', 'invalid_json', 'request_too_large', 'structure_too_complex', 'parse_timeout', 'config_unavailable']
+const fieldResultOptions = ['missing', 'invalid', 'mismatch', 'match', 'not_checked']
+const notificationOptions = ['pending', 'processing', 'retry', 'sent', 'failed', 'suppressed', 'no_recipient']
 
 const tabs = computed(() => [
   { value: 'rules' as const, label: t('admin.instructionAudit.rulesAndBindings'), count: bindings.value.length },
@@ -492,6 +659,32 @@ const overviewStats = computed(() => [
   { label: t('admin.instructionAudit.persistFailures'), value: overview.value?.persist_failure_count ?? 0 },
   { label: t('admin.instructionAudit.pendingEmails'), value: overview.value?.pending_email_count ?? 0 },
 ])
+
+type EventArrayFilterKey = 'groupIds' | 'reasons' | 'instructionsResults' | 'input1Results' | 'userNotifications' | 'opsNotifications'
+
+const activeFilterCount = computed(() =>
+  eventFilters.groupIds.length
+  + eventFilters.reasons.length
+  + eventFilters.instructionsResults.length
+  + eventFilters.input1Results.length
+  + eventFilters.userNotifications.length
+  + eventFilters.opsNotifications.length
+  + (eventFilters.range === 'custom' ? 1 : 0),
+)
+
+const filterChips = computed(() => {
+  const chips: Array<{ key: string; label: string; remove: () => void }> = []
+  for (const id of eventFilters.groupIds) {
+    const group = groupOptions.value.find((item) => item.id === id)
+    chips.push({ key: `group-${id}`, label: `${t('admin.instructionAudit.group')}: ${group?.name || `#${id}`}`, remove: () => removeArrayFilter('groupIds', id) })
+  }
+  for (const reason of eventFilters.reasons) chips.push({ key: `reason-${reason}`, label: reasonLabel(reason), remove: () => removeArrayFilter('reasons', reason) })
+  for (const result of eventFilters.instructionsResults) chips.push({ key: `instructions-${result}`, label: `instructions: ${fieldResultLabel(result)}`, remove: () => removeArrayFilter('instructionsResults', result) })
+  for (const result of eventFilters.input1Results) chips.push({ key: `input1-${result}`, label: `input[1]: ${fieldResultLabel(result)}`, remove: () => removeArrayFilter('input1Results', result) })
+  for (const status of eventFilters.userNotifications) chips.push({ key: `user-${status}`, label: `${t('admin.instructionAudit.userNotification')}: ${notificationLabel(status)}`, remove: () => removeArrayFilter('userNotifications', status) })
+  for (const status of eventFilters.opsNotifications) chips.push({ key: `ops-${status}`, label: `${t('admin.instructionAudit.opsNotification')}: ${notificationLabel(status)}`, remove: () => removeArrayFilter('opsNotifications', status) })
+  return chips
+})
 
 const visibleHashes = computed(() => {
   if (activeTab.value === 'candidates') return hashes.value.filter((item) => item.status === 'candidate')
@@ -535,12 +728,11 @@ const canSaveHash = computed(() => {
 
 const FieldDigest = defineComponent({
   props: { field: { type: Object as () => InstructionFieldResult, required: true } },
-  emits: ['candidate'],
+  emits: ['filter'],
   setup(props, { emit }) {
     return () => h('div', { class: 'min-w-40 space-y-1.5' }, [
-      h('span', { class: statusPill(props.field.result) }, fieldResultLabel(props.field.result)),
-      props.field.sha256 ? h('p', { class: 'font-mono text-[11px] text-gray-500 dark:text-gray-400', title: props.field.sha256 }, compactDigest(props.field.sha256)) : null,
-      props.field.sha256 ? h('button', { type: 'button', class: 'text-xs font-medium text-primary-600 hover:underline dark:text-primary-400', onClick: () => emit('candidate') }, t('admin.instructionAudit.addCandidate')) : null,
+      props.field.result ? h('button', { type: 'button', class: statusPill(props.field.result), onClick: () => emit('filter', props.field.result) }, fieldResultLabel(props.field.result)) : null,
+      props.field.sha256 ? h('button', { type: 'button', class: 'block max-w-44 truncate font-mono text-[11px] text-gray-500 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-300', title: props.field.sha256, onClick: () => emit('filter', props.field.result) }, compactDigest(props.field.sha256)) : null,
     ])
   },
 })
@@ -560,6 +752,7 @@ async function refreshAll() {
       instructionAuditAPI.listGroups(),
     ])
     overview.value = nextOverview
+    retentionDays.value = nextOverview.evidence_retention_days || 30
     hashes.value = nextHashes
     ruleSets.value = nextRules
     bindings.value = nextBindings
@@ -573,13 +766,125 @@ async function refreshAll() {
 }
 
 async function loadEvents(page = 1) {
+  const timeParams = eventTimeParams()
   const result = await instructionAuditAPI.listEvents({
     page,
     page_size: eventPage.page_size,
-    user_id: eventFilters.userId ? Number(eventFilters.userId) : undefined,
-    model: eventFilters.model || undefined,
+    q: eventFilters.q || undefined,
+    from: timeParams.from,
+    to: timeParams.to,
+    group_ids: joinFilter(eventFilters.groupIds),
+    reasons: joinFilter(eventFilters.reasons),
+    instructions_results: joinFilter(eventFilters.instructionsResults),
+    input1_results: joinFilter(eventFilters.input1Results),
+    user_notifications: joinFilter(eventFilters.userNotifications),
+    ops_notifications: joinFilter(eventFilters.opsNotifications),
   })
   Object.assign(eventPage, result)
+  await syncEventFilterURL()
+}
+
+async function applyEventFilters() {
+  await loadEvents(1)
+}
+
+function eventTimeParams(): { from?: string; to?: string } {
+  if (eventFilters.range === 'custom') {
+    return {
+      from: eventFilters.from ? new Date(eventFilters.from).toISOString() : undefined,
+      to: eventFilters.to ? new Date(eventFilters.to).toISOString() : undefined,
+    }
+  }
+  const milliseconds = eventFilters.range === '1h' ? 60 * 60_000 : eventFilters.range === '7d' ? 7 * 24 * 60 * 60_000 : 24 * 60 * 60_000
+  return { from: new Date(Date.now() - milliseconds).toISOString() }
+}
+
+function joinFilter(values: Array<string | number>): string | undefined {
+  return values.length ? values.join(',') : undefined
+}
+
+async function syncEventFilterURL() {
+  const query: Record<string, string> = { tab: activeTab.value }
+  if (activeTab.value === 'events') {
+    query.range = eventFilters.range
+    if (eventFilters.q) query.q = eventFilters.q
+    if (eventFilters.range === 'custom') {
+      if (eventFilters.from) query.from = eventFilters.from
+      if (eventFilters.to) query.to = eventFilters.to
+    }
+    if (eventFilters.groupIds.length) query.group_ids = eventFilters.groupIds.join(',')
+    if (eventFilters.reasons.length) query.reasons = eventFilters.reasons.join(',')
+    if (eventFilters.instructionsResults.length) query.instructions_results = eventFilters.instructionsResults.join(',')
+    if (eventFilters.input1Results.length) query.input1_results = eventFilters.input1Results.join(',')
+    if (eventFilters.userNotifications.length) query.user_notifications = eventFilters.userNotifications.join(',')
+    if (eventFilters.opsNotifications.length) query.ops_notifications = eventFilters.opsNotifications.join(',')
+    if (eventPage.page > 1) query.page = String(eventPage.page)
+    if (eventPage.page_size !== 20) query.page_size = String(eventPage.page_size)
+  }
+  await router.replace({ path: route.path, query })
+}
+
+function hydrateEventFiltersFromURL() {
+  const tab = String(route.query.tab || '')
+  if (['rules', 'hashes', 'candidates', 'events'].includes(tab)) activeTab.value = tab as Tab
+  const range = String(route.query.range || '24h')
+  if (['1h', '24h', '7d', 'custom'].includes(range)) eventFilters.range = range as typeof eventFilters.range
+  eventFilters.q = String(route.query.q || '')
+  eventFilters.from = String(route.query.from || '')
+  eventFilters.to = String(route.query.to || '')
+  eventFilters.groupIds = splitURLFilter(route.query.group_ids).map(Number).filter((id) => Number.isInteger(id) && id > 0)
+  eventFilters.reasons = splitURLFilter(route.query.reasons)
+  eventFilters.instructionsResults = splitURLFilter(route.query.instructions_results)
+  eventFilters.input1Results = splitURLFilter(route.query.input1_results)
+  eventFilters.userNotifications = splitURLFilter(route.query.user_notifications)
+  eventFilters.opsNotifications = splitURLFilter(route.query.ops_notifications)
+  eventPage.page = Math.max(1, Number(route.query.page) || 1)
+  eventPage.page_size = Math.min(100, Math.max(1, Number(route.query.page_size) || 20))
+  advancedFiltersOpen.value = activeFilterCount.value > 0
+}
+
+function splitURLFilter(value: unknown): string[] {
+  return String(value || '').split(',').map((item) => item.trim()).filter(Boolean)
+}
+
+function setTimeRange(range: typeof eventFilters.range) {
+  eventFilters.range = range
+  if (range !== 'custom') {
+    eventFilters.from = ''
+    eventFilters.to = ''
+    void applyEventFilters()
+  }
+}
+
+function setQueryFilter(value: string) {
+  const next = String(value || '').trim()
+  if (!next) return
+  eventFilters.q = next
+  void applyEventFilters()
+}
+
+function addArrayFilter(key: EventArrayFilterKey, value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === '') return
+  const list = eventFilters[key] as Array<string | number>
+  if (!list.includes(value)) list.push(value)
+  advancedFiltersOpen.value = true
+  void applyEventFilters()
+}
+
+function removeArrayFilter(key: EventArrayFilterKey, value: string | number) {
+  const list = eventFilters[key] as Array<string | number>
+  const index = list.indexOf(value)
+  if (index >= 0) list.splice(index, 1)
+  void applyEventFilters()
+}
+
+function resetEventFilters() {
+  Object.assign(eventFilters, {
+    q: '', range: '24h', from: '', to: '', groupIds: [], reasons: [],
+    instructionsResults: [], input1Results: [], userNotifications: [], opsNotifications: [],
+  })
+  advancedFiltersOpen.value = false
+  void applyEventFilters()
 }
 
 async function changeEventPageSize(pageSize: number) {
@@ -742,10 +1047,29 @@ async function deleteBinding() {
   }
 }
 
-async function createCandidate(eventId: number, source: 'instructions' | 'input1') {
+async function saveEvidenceRetention() {
+  if (!Number.isInteger(retentionDays.value) || retentionDays.value < 1 || retentionDays.value > 3650) return
+  saving.value = true
   try {
-    await instructionAuditAPI.createCandidate(eventId, source)
+    overview.value = await instructionAuditAPI.updateEvidenceRetention(retentionDays.value)
+    appStore.showSuccess(t('common.saved'))
+  } catch (error) {
+    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+  } finally {
+    saving.value = false
+  }
+}
+
+function openEvidenceReview(event: InstructionEvent) {
+  evidenceReviewEvent.value = event
+}
+
+async function createCandidateFromReview(source: 'instructions' | 'input1') {
+  if (!evidenceReviewEvent.value) return
+  try {
+    await instructionAuditAPI.createCandidate(evidenceReviewEvent.value.id, source)
     appStore.showSuccess(t('admin.instructionAudit.candidateAdded'))
+    evidenceReviewEvent.value = null
     await refreshAll()
     activeTab.value = 'candidates'
   } catch (error) {
@@ -811,10 +1135,16 @@ function reasonLabel(reason: string): string {
   return t(`admin.instructionAudit.reasons.${reason}`)
 }
 
+function evidenceStatusLabel(status: string): string {
+  return t(`admin.instructionAudit.evidenceStatuses.${status}`)
+}
+
 watch(activeTab, (tab) => {
   if (tab === 'events' && !eventPage.items.length) void loadEvents(1)
+  else void syncEventFilterURL()
 })
 
+hydrateEventFiltersFromURL()
 onMounted(refreshAll)
 </script>
 
@@ -836,5 +1166,29 @@ onMounted(refreshAll)
 :global(.dark) .table-th,
 :global(.dark) .table-td {
   color: rgb(209 213 219);
+}
+
+.filter-fieldset {
+  @apply min-w-0 rounded-md border border-gray-200 p-3 dark:border-dark-600;
+}
+
+.filter-legend {
+  @apply px-1 text-xs font-semibold text-gray-700 dark:text-gray-200;
+}
+
+.filter-options {
+  @apply mt-1 max-h-48 space-y-1 overflow-y-auto;
+}
+
+.filter-option {
+  @apply flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-dark-700;
+}
+
+.filter-option input {
+  @apply h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500;
+}
+
+.filter-chip {
+  @apply inline-flex items-center gap-1 rounded-full bg-primary-50 px-2.5 py-1 text-xs font-medium text-primary-700 hover:bg-primary-100 dark:bg-primary-950/50 dark:text-primary-300 dark:hover:bg-primary-900/60;
 }
 </style>

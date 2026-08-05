@@ -253,7 +253,9 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorRequestTemplateHandler := admin.NewChannelMonitorRequestTemplateHandler(channelMonitorRequestTemplateService)
 	contentModerationRepository := repository.NewContentModerationRepository(db)
 	contentModerationHashCache := repository.NewContentModerationHashCache(redisClient)
-	contentModerationService := service.NewContentModerationService(settingRepository, contentModerationRepository, contentModerationHashCache, groupRepository, userRepository, proxyRepository, apiKeyAuthCacheInvalidator, emailService)
+	securityNotificationRepository := repository.NewSecurityNotificationRepository(db)
+	securityNotificationService := service.ProvideSecurityNotificationService(securityNotificationRepository, settingRepository, userRepository, notificationEmailService)
+	contentModerationService := service.ProvideContentModerationService(settingRepository, contentModerationRepository, contentModerationHashCache, groupRepository, userRepository, proxyRepository, apiKeyAuthCacheInvalidator, emailService, securityNotificationService)
 	contentModerationHandler := admin.NewContentModerationHandler(contentModerationService)
 	configManager := securityaudit.NewConfigManager(db, settingRepository, redisClient, secretEncryptor, configConfig)
 	postgreSQLRepository := securityaudit.NewPostgreSQLRepository(db)
@@ -263,7 +265,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	promptService := securityaudit.NewPromptService(configManager, postgreSQLRepository, redisPayloadStore, openAICompatibleScanner, atomicMetrics)
 	promptAdminHandler := securityaudit.NewPromptAdminHandler(promptService)
 	instructionRepository := securityaudit.NewInstructionRepository(db)
-	instructionService := securityaudit.NewInstructionService(instructionRepository, redisClient, emailService)
+	instructionEvidenceCipher, err := securityaudit.NewInstructionEvidenceCipher(configConfig)
+	if err != nil {
+		return nil, err
+	}
+	instructionService := securityaudit.ProvideInstructionService(instructionRepository, redisClient, emailService, instructionEvidenceCipher, securityNotificationService)
 	instructionAdminHandler := securityaudit.NewInstructionAdminHandler(instructionService)
 	paymentHandler := admin.NewPaymentHandler(paymentService, paymentConfigService)
 	affiliateHandler := admin.NewAffiliateHandler(affiliateService, adminService)
@@ -325,7 +331,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	paymentOrderExpiryService := service.ProvidePaymentOrderExpiryService(paymentService, leaderLockCache, db)
 	channelMonitorRunner := service.ProvideChannelMonitorRunner(channelMonitorService, settingService)
 	userPlatformQuotaUsageFlusher := service.ProvideUserPlatformQuotaUsageFlusher(configConfig, billingCache, serviceUserPlatformQuotaRepository, timingWheelService)
-	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, lotteryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, promptService, instructionService)
+	v := provideCleanup(client, redisClient, opsMetricsCollector, opsAggregationService, opsAlertEvaluatorService, opsCleanupService, opsScheduledReportService, opsSystemLogSink, opsService, opsIngressRejectAggregator, apiKeyService, authCacheInvalidationWorker, schedulerSnapshotService, tokenRefreshService, accountExpiryService, proxyExpiryService, subscriptionExpiryService, lotteryService, usageCleanupService, idempotencyCleanupService, pricingService, emailQueueService, securityNotificationService, billingCacheService, usageRecordWorkerPool, subscriptionService, oAuthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService, openAIGatewayService, scheduledTestRunnerService, backupService, paymentOrderExpiryService, channelMonitorRunner, userPlatformQuotaUsageFlusher, upstreamBillingProbeService, ollamaCloudUsageService, auditLogService, promptService, instructionService)
 	application := &Application{
 		Server:           httpServer,
 		PromptAudit:      promptService,
@@ -378,6 +384,7 @@ func provideCleanup(
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	pricing *service.PricingService,
 	emailQueue *service.EmailQueueService,
+	securityNotifications *service.SecurityNotificationService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	subscriptionService *service.SubscriptionService,
@@ -538,6 +545,12 @@ func provideCleanup(
 			}},
 			{"EmailQueueService", func() error {
 				emailQueue.Stop()
+				return nil
+			}},
+			{"SecurityNotificationService", func() error {
+				if securityNotifications != nil {
+					return securityNotifications.Stop(ctx)
+				}
 				return nil
 			}},
 			{"BillingCacheService", func() error {

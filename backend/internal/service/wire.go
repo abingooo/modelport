@@ -41,6 +41,24 @@ func ProvideEmailQueueService(emailService *EmailService) *EmailQueueService {
 	return NewEmailQueueService(emailService, 3)
 }
 
+func ProvideContentModerationService(
+	settingRepo SettingRepository,
+	repo ContentModerationRepository,
+	hashCache ContentModerationHashCache,
+	groupRepo GroupRepository,
+	userRepo UserRepository,
+	proxyRepo ProxyRepository,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	emailService *EmailService,
+	securityNotifications *SecurityNotificationService,
+) *ContentModerationService {
+	service := NewContentModerationService(
+		settingRepo, repo, hashCache, groupRepo, userRepo, proxyRepo, authCacheInvalidator, emailService,
+	)
+	service.SetSecurityNotificationService(securityNotifications)
+	return service
+}
+
 // ProvideOAuthRefreshAPI creates OAuthRefreshAPI with the default lock TTL.
 func ProvideOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache) *OAuthRefreshAPI {
 	return NewOAuthRefreshAPI(accountRepo, tokenCache)
@@ -733,6 +751,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsScheduledReportService,
 	NewEmailService,
 	NewNotificationEmailService,
+	ProvideSecurityNotificationService,
 	ProvideEmailQueueService,
 	NewTurnstileService,
 	NewSubscriptionService,
@@ -770,7 +789,7 @@ var ProviderSet = wire.NewSet(
 	NewChannelService,
 	ProvideLotteryService,
 	NewModelPricingResolver,
-	NewContentModerationService,
+	ProvideContentModerationService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,

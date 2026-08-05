@@ -4,7 +4,8 @@ import "github.com/google/wire"
 
 var ProviderSet = wire.NewSet(
 	NewInstructionRepository,
-	NewInstructionService,
+	NewInstructionEvidenceCipher,
+	ProvideInstructionService,
 	wire.Bind(new(InstructionEngine), new(*InstructionService)),
 	NewInstructionAdminHandler,
 	NewPostgreSQLRepository,

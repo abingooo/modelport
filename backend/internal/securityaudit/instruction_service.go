@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"html"
 	"log/slog"
 	"regexp"
 	"strconv"
@@ -27,10 +26,25 @@ const (
 
 var instructionDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+var validInstructionEventReasons = map[string]struct{}{
+	"hash_mismatch": {}, "fields_missing": {}, "field_invalid": {}, "invalid_json": {},
+	"request_too_large": {}, "structure_too_complex": {}, "parse_timeout": {}, "config_unavailable": {},
+}
+
+var validInstructionFieldResults = map[string]struct{}{
+	"missing": {}, "invalid": {}, "mismatch": {}, "match": {}, "not_checked": {},
+}
+
+var validSecurityNotificationStatuses = map[string]struct{}{
+	"pending": {}, "processing": {}, "retry": {}, "sent": {}, "failed": {},
+	"suppressed": {}, "no_recipient": {},
+}
+
 type InstructionService struct {
-	repository *InstructionRepository
-	redis      *redis.Client
-	email      *service.EmailService
+	repository     *InstructionRepository
+	redis          *redis.Client
+	evidenceCipher *InstructionEvidenceCipher
+	notifications  *service.SecurityNotificationService
 
 	snapshot                   atomic.Pointer[instructionSnapshot]
 	requiredConfigVersion      atomic.Int64
@@ -54,8 +68,20 @@ func NewInstructionService(repository *InstructionRepository, redisClient *redis
 	return &InstructionService{
 		repository: repository,
 		redis:      redisClient,
-		email:      emailService,
 	}
+}
+
+func ProvideInstructionService(
+	repository *InstructionRepository,
+	redisClient *redis.Client,
+	emailService *service.EmailService,
+	evidenceCipher *InstructionEvidenceCipher,
+	notifications *service.SecurityNotificationService,
+) *InstructionService {
+	result := NewInstructionService(repository, redisClient, emailService)
+	result.evidenceCipher = evidenceCipher
+	result.notifications = notifications
+	return result
 }
 
 func (s *InstructionService) Start(ctx context.Context) error {
@@ -76,12 +102,9 @@ func (s *InstructionService) Start(ctx context.Context) error {
 	s.lifecycleMu.Unlock()
 
 	loadErr := s.Reload(runCtx)
-	if err := s.repository.ReclaimStaleOutbox(runCtx); err != nil {
-		slog.Warn("instruction_audit.outbox_reclaim_failed", "error", err)
-	}
 	s.wg.Add(2)
 	go s.refreshLoop(runCtx)
-	go s.outboxLoop(runCtx)
+	go s.evidenceCleanupLoop(runCtx)
 	if s.redis != nil {
 		s.wg.Add(1)
 		go s.subscribeLoop(runCtx)
@@ -284,12 +307,18 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 	event.Request.Body = nil
 	event.Request.InstructionBody = nil
 	event.Decision.RuleSetIDs = append([]int64(nil), decision.RuleSetIDs...)
+	evidenceStatus, evidenceExpiresAt, evidence := s.prepareEvidence(ctx, decision)
+	event.Decision.Instructions.Plaintext = ""
+	event.Decision.Input1.Plaintext = ""
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), instructionBlockedEventPersistenceTimeout)
 	defer cancel()
-	if err := s.repository.RecordBlocked(recordCtx, event.Request, &event.Decision); err != nil {
+	eventID, err := s.repository.RecordBlocked(
+		recordCtx, event.Request, &event.Decision, evidenceStatus, evidenceExpiresAt, evidence,
+	)
+	if err != nil {
 		s.failedBlockedEventPersists.Add(1)
 		slog.Error("instruction_audit.record_blocked_failed",
 			"request_id", event.Request.RequestID,
@@ -300,7 +329,82 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 			"reason", event.Decision.Reason,
 			"error", err,
 		)
+		return
 	}
+	if s.notifications != nil {
+		groupID := instructionGroupID(event.Request.GroupID)
+		variables := map[string]string{
+			"request_id":   event.Request.RequestID,
+			"triggered_at": time.Now().UTC().Format(time.RFC3339),
+			"user_id":      strconv.FormatInt(event.Request.UserID, 10),
+			"user_email":   event.Request.UserEmail,
+			"api_key_id":   strconv.FormatInt(event.Request.APIKeyID, 10),
+			"group_id":     strconv.FormatInt(groupID, 10),
+			"group_name":   event.Request.GroupName,
+			"model":        event.Request.Model,
+			"admin_qq":     "2145236436",
+		}
+		err = s.notifications.Enqueue(recordCtx, service.SecurityNotificationEnqueueInput{
+			SourceType: service.SecurityNotificationSourceInstructionAudit,
+			SourceID:   eventID, UserID: event.Request.UserID, UserEmail: event.Request.UserEmail,
+			DedupeScope:  fmt.Sprintf("%d:%d:instruction-audit", event.Request.UserID, groupID),
+			UserTemplate: service.NotificationEmailEventInstructionAuditUserNotice,
+			OpsTemplate:  service.NotificationEmailEventInstructionAuditOpsNotice,
+			Variables:    variables,
+		})
+		if err != nil {
+			slog.Warn("instruction_audit.notification_enqueue_failed", "event_id", eventID, "error", err)
+		}
+	}
+}
+
+func (s *InstructionService) prepareEvidence(ctx context.Context, decision *InstructionDecision) (string, *time.Time, []InstructionEvidence) {
+	if decision == nil {
+		return "not_available", nil, nil
+	}
+	fields := []struct {
+		source string
+		field  InstructionFieldResult
+	}{
+		{source: "instructions", field: decision.Instructions},
+		{source: "input1", field: decision.Input1},
+	}
+	hasPlaintext := false
+	for _, item := range fields {
+		if item.field.Plaintext != "" && item.field.SHA256 != "" {
+			hasPlaintext = true
+			break
+		}
+	}
+	if !hasPlaintext {
+		return "not_available", nil, nil
+	}
+	if s.evidenceCipher == nil || !s.evidenceCipher.Available() {
+		return "encryption_unavailable", nil, nil
+	}
+	retentionDays, err := s.repository.GetEvidenceRetentionDays(ctx)
+	if err != nil || retentionDays < 1 || retentionDays > 3650 {
+		retentionDays = 30
+		slog.Warn("instruction_audit.evidence_retention_fallback", "error", err)
+	}
+	expiresAt := time.Now().UTC().Add(time.Duration(retentionDays) * 24 * time.Hour)
+	evidence := make([]InstructionEvidence, 0, 2)
+	for _, item := range fields {
+		if item.field.Plaintext == "" || item.field.SHA256 == "" {
+			continue
+		}
+		ciphertext, err := s.evidenceCipher.Encrypt(item.source, item.field.SHA256, item.field.Plaintext)
+		if err != nil {
+			slog.Error("instruction_audit.evidence_encrypt_failed", "source", item.source, "error", err)
+			return "encryption_unavailable", nil, nil
+		}
+		evidence = append(evidence, InstructionEvidence{
+			Source: item.source, Digest: item.field.SHA256, Ciphertext: ciphertext,
+			KeyVersion: instructionEvidenceKeyVersion, PlaintextBytes: len([]byte(item.field.Plaintext)),
+			ExpiresAt: expiresAt,
+		})
+	}
+	return "stored", &expiresAt, evidence
 }
 
 func (s *InstructionService) Overview(ctx context.Context) (*InstructionOverview, error) {
@@ -312,15 +416,19 @@ func (s *InstructionService) Overview(ctx context.Context) (*InstructionOverview
 		return nil, err
 	}
 	overview := &InstructionOverview{
-		HashCount:           hashes,
-		ActiveHashCount:     activeHashes,
-		RuleSetCount:        ruleSets,
-		AuditedGroupCount:   auditedGroups,
-		EffectiveGroupCount: effectiveGroups,
-		PendingEmailCount:   pendingEmails,
-		QueuedEventCount:    0,
-		DroppedEventCount:   0,
-		PersistFailureCount: int64(s.failedBlockedEventPersists.Load()),
+		HashCount:                   hashes,
+		ActiveHashCount:             activeHashes,
+		RuleSetCount:                ruleSets,
+		AuditedGroupCount:           auditedGroups,
+		EffectiveGroupCount:         effectiveGroups,
+		PendingEmailCount:           pendingEmails,
+		QueuedEventCount:            0,
+		DroppedEventCount:           0,
+		PersistFailureCount:         int64(s.failedBlockedEventPersists.Load()),
+		EvidenceEncryptionAvailable: s.evidenceCipher != nil && s.evidenceCipher.Available(),
+	}
+	if days, retentionErr := s.repository.GetEvidenceRetentionDays(ctx); retentionErr == nil {
+		overview.EvidenceRetentionDays = days
 	}
 	if snapshot := s.snapshot.Load(); snapshot != nil {
 		overview.Enabled = snapshot.Enabled
@@ -485,7 +593,7 @@ func (s *InstructionService) ListGroupOptions(ctx context.Context) ([]Instructio
 	return s.repository.ListGroupOptions(ctx)
 }
 
-func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int, userID int64, model string) (*InstructionEventPage, error) {
+func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int, filter InstructionEventFilter) (*InstructionEventPage, error) {
 	if page <= 0 {
 		page = 1
 	}
@@ -495,7 +603,106 @@ func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int,
 	if pageSize > 100 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_page_size", "每页最多 100 条")
 	}
-	return s.repository.ListEvents(ctx, page, pageSize, userID, model)
+	filter.Query = strings.TrimSpace(filter.Query)
+	filter.Model = strings.TrimSpace(filter.Model)
+	if filter.UserID < 0 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_user_id", "用户 ID 无效")
+	}
+	filter.GroupIDs = uniquePositiveInt64s(filter.GroupIDs)
+	filter.Reasons = normalizeInstructionFilterValues(filter.Reasons, validInstructionEventReasons)
+	filter.InstructionResults = normalizeInstructionFilterValues(filter.InstructionResults, validInstructionFieldResults)
+	filter.Input1Results = normalizeInstructionFilterValues(filter.Input1Results, validInstructionFieldResults)
+	filter.UserNotifications = normalizeInstructionFilterValues(filter.UserNotifications, validSecurityNotificationStatuses)
+	filter.OpsNotifications = normalizeInstructionFilterValues(filter.OpsNotifications, validSecurityNotificationStatuses)
+	if filter.GroupIDs == nil {
+		filter.GroupIDs = []int64{}
+	}
+	if filter.Reasons == nil {
+		filter.Reasons = []string{}
+	}
+	if filter.InstructionResults == nil {
+		filter.InstructionResults = []string{}
+	}
+	if filter.Input1Results == nil {
+		filter.Input1Results = []string{}
+	}
+	if filter.UserNotifications == nil {
+		filter.UserNotifications = []string{}
+	}
+	if filter.OpsNotifications == nil {
+		filter.OpsNotifications = []string{}
+	}
+	return s.repository.ListEvents(ctx, page, pageSize, filter)
+}
+
+func (s *InstructionService) UpdateEvidenceRetention(ctx context.Context, days int) (*InstructionOverview, error) {
+	if days < 1 || days > 3650 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_evidence_retention", "明文保留天数必须在 1 到 3650 之间")
+	}
+	if err := s.repository.SetEvidenceRetentionDays(ctx, days); err != nil {
+		return nil, err
+	}
+	return s.Overview(ctx)
+}
+
+func (s *InstructionService) RevealEvidence(ctx context.Context, eventID int64, access InstructionEvidenceAccess) (*InstructionEvidenceReview, error) {
+	event, err := s.GetEvent(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	review := &InstructionEvidenceReview{
+		EventID: event.ID, RequestID: event.RequestID, Status: event.EvidenceStatus,
+		ExpiresAt: event.EvidenceExpiresAt, Fields: []InstructionEvidenceField{},
+	}
+	if event.EvidenceStatus != "stored" {
+		access.Action, access.Source, access.Succeeded, access.ErrorCode = "reveal", "all", false, event.EvidenceStatus
+		_ = s.repository.RecordEvidenceAccess(ctx, eventID, access)
+		review.AccessCount, _ = s.repository.CountEvidenceAccesses(ctx, eventID)
+		return review, nil
+	}
+	if event.EvidenceExpiresAt != nil && !time.Now().UTC().Before(*event.EvidenceExpiresAt) {
+		_, _ = s.repository.ExpireEvidence(ctx)
+		review.Status = "expired"
+		access.Action, access.Source, access.Succeeded, access.ErrorCode = "reveal", "all", false, "expired"
+		_ = s.repository.RecordEvidenceAccess(ctx, eventID, access)
+		review.AccessCount, _ = s.repository.CountEvidenceAccesses(ctx, eventID)
+		return review, nil
+	}
+	items, err := s.repository.ListEvidence(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range items {
+		plaintext, decryptErr := s.evidenceCipher.Decrypt(item.Source, item.Digest, item.Ciphertext)
+		fieldAccess := access
+		fieldAccess.Action, fieldAccess.Source = "reveal", item.Source
+		if decryptErr != nil {
+			fieldAccess.Succeeded, fieldAccess.ErrorCode = false, "decrypt_failed"
+			_ = s.repository.RecordEvidenceAccess(ctx, eventID, fieldAccess)
+			return nil, errors.New("instruction evidence decryption failed")
+		}
+		recomputed := sha256Hex(plaintext)
+		fieldAccess.Succeeded = true
+		_ = s.repository.RecordEvidenceAccess(ctx, eventID, fieldAccess)
+		review.Fields = append(review.Fields, InstructionEvidenceField{
+			Source: item.Source, Available: true, Plaintext: plaintext, SHA256: item.Digest,
+			PlaintextBytes: item.PlaintextBytes, RecomputedSHA256: recomputed,
+			DigestConsistent: recomputed == item.Digest && len([]byte(plaintext)) == item.PlaintextBytes,
+		})
+	}
+	review.AccessCount, _ = s.repository.CountEvidenceAccesses(ctx, eventID)
+	return review, nil
+}
+
+func (s *InstructionService) RecordEvidenceCopy(ctx context.Context, eventID int64, access InstructionEvidenceAccess) error {
+	if _, err := s.GetEvent(ctx, eventID); err != nil {
+		return err
+	}
+	if !validInstructionEvidenceCopySource(access.Source) {
+		return infraerrors.BadRequest("instruction_audit_invalid_copy_source", "复制内容类型无效")
+	}
+	access.Action, access.Succeeded = "copy", true
+	return s.repository.RecordEvidenceAccess(ctx, eventID, access)
 }
 
 func (s *InstructionService) GetEvent(ctx context.Context, id int64) (*InstructionEvent, error) {
@@ -507,6 +714,16 @@ func (s *InstructionService) GetEvent(ctx context.Context, id int64) (*Instructi
 }
 
 func (s *InstructionService) CreateCandidateFromEvent(ctx context.Context, eventID int64, request CreateInstructionCandidateRequest, actorID int64) (*InstructionHashEntry, error) {
+	if !request.ReviewConfirmed {
+		return nil, infraerrors.BadRequest("instruction_audit_review_confirmation_required", "请先审查并确认证据")
+	}
+	reviewed, err := s.repository.HasSuccessfulEvidenceReveal(ctx, eventID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if !reviewed {
+		return nil, infraerrors.BadRequest("instruction_audit_evidence_review_required", "请先打开证据详情完成审查")
+	}
 	event, err := s.GetEvent(ctx, eventID)
 	if err != nil {
 		return nil, err
@@ -645,6 +862,22 @@ func (s *InstructionService) refreshLoop(ctx context.Context) {
 	}
 }
 
+func (s *InstructionService) evidenceCleanupLoop(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := s.repository.ExpireEvidence(ctx); err != nil {
+				slog.Warn("instruction_audit.evidence_cleanup_failed", "error", err)
+			}
+		}
+	}
+}
+
 func (s *InstructionService) subscribeLoop(ctx context.Context) {
 	defer s.wg.Done()
 	pubsub := s.redis.Subscribe(ctx, InstructionConfigInvalidationChannel)
@@ -671,144 +904,30 @@ func (s *InstructionService) subscribeLoop(ctx context.Context) {
 	}
 }
 
-func (s *InstructionService) outboxLoop(ctx context.Context) {
-	defer s.wg.Done()
-	poll := time.NewTicker(time.Second)
-	reclaim := time.NewTicker(time.Minute)
-	defer poll.Stop()
-	defer reclaim.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-reclaim.C:
-			if err := s.repository.ReclaimStaleOutbox(ctx); err != nil {
-				slog.Warn("instruction_audit.outbox_reclaim_failed", "error", err)
-			}
-		case <-poll.C:
-			s.processOutbox(ctx)
-		}
-	}
-}
-
-func (s *InstructionService) processOutbox(ctx context.Context) {
-	for processed := 0; processed < 20; processed++ {
-		item, err := s.repository.ClaimOutbox(ctx)
-		if errors.Is(err, sql.ErrNoRows) {
-			return
-		}
-		if err != nil {
-			slog.Warn("instruction_audit.outbox_claim_failed", "error", err)
-			return
-		}
-		sendErr := s.sendAdminNotification(ctx, item)
-		if sendErr == nil {
-			if err := s.repository.MarkOutboxSent(ctx, item.ID); err != nil {
-				slog.Warn("instruction_audit.outbox_mark_sent_failed", "outbox_id", item.ID, "error", err)
-			}
+func normalizeInstructionFilterValues(values []string, allowed map[string]struct{}) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, raw := range values {
+		value := strings.TrimSpace(raw)
+		if _, ok := allowed[value]; !ok {
 			continue
 		}
-		delay := instructionRetryDelay(item.Attempts)
-		if err := s.repository.MarkOutboxFailed(ctx, *item, sendErr, delay); err != nil {
-			slog.Warn("instruction_audit.outbox_mark_failed_failed", "outbox_id", item.ID, "error", err)
-		}
-	}
-}
-
-func (s *InstructionService) sendAdminNotification(ctx context.Context, outbox *instructionOutboxItem) error {
-	if s.email == nil {
-		return errors.New("email service unavailable")
-	}
-	if outbox == nil {
-		return errors.New("instruction audit outbox item required")
-	}
-	event, err := s.repository.GetEvent(ctx, outbox.EventID)
-	if err != nil {
-		return err
-	}
-	recipients, err := s.repository.ListAdminRecipients(ctx)
-	if err != nil {
-		return err
-	}
-	if len(recipients) == 0 {
-		return errors.New("no active administrator email recipient")
-	}
-	subject := fmt.Sprintf("[ModelPort] 安全策略拦截通知 #%d", event.ID)
-	body := buildInstructionAuditEmail(event)
-	var sendErrors []error
-	for _, recipient := range recipients {
-		if instructionRecipientAlreadySent(outbox.SentRecipientIDs, recipient.ID) {
+		if _, exists := seen[value]; exists {
 			continue
 		}
-		sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		sendErr := s.email.SendEmail(sendCtx, recipient.Email, subject, body)
-		cancel()
-		if sendErr != nil {
-			sendErrors = append(sendErrors, fmt.Errorf("recipient %d: %w", recipient.ID, sendErr))
-			continue
-		}
-		if err := s.repository.MarkOutboxRecipientSent(ctx, outbox.ID, recipient.ID); err != nil {
-			return fmt.Errorf("record recipient %d delivery: %w", recipient.ID, err)
-		}
-		outbox.SentRecipientIDs = append(outbox.SentRecipientIDs, recipient.ID)
+		seen[value] = struct{}{}
+		result = append(result, value)
 	}
-	return errors.Join(sendErrors...)
+	return result
 }
 
-func instructionRecipientAlreadySent(sent []int64, recipientID int64) bool {
-	for _, id := range sent {
-		if id == recipientID {
-			return true
-		}
+func validInstructionEvidenceCopySource(source string) bool {
+	switch source {
+	case "instructions_plaintext", "instructions_hash", "input1_plaintext", "input1_hash", "request_id", "review_bundle":
+		return true
+	default:
+		return false
 	}
-	return false
-}
-
-func buildInstructionAuditEmail(event *InstructionEvent) string {
-	if event == nil {
-		return "<p>ModelPort blocked a request under the configured security policy.</p>"
-	}
-	escape := html.EscapeString
-	userID := "-"
-	if event.UserID != nil {
-		userID = strconv.FormatInt(*event.UserID, 10)
-	}
-	apiKeyID := "-"
-	if event.APIKeyID != nil {
-		apiKeyID = strconv.FormatInt(*event.APIKeyID, 10)
-	}
-	groupID := "-"
-	if event.GroupID != nil {
-		groupID = strconv.FormatInt(*event.GroupID, 10)
-	}
-	return fmt.Sprintf(`<h2>ModelPort 安全策略拦截通知</h2>
-<table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse">
-<tr><td>请求 ID</td><td>%s</td></tr>
-<tr><td>时间</td><td>%s</td></tr>
-<tr><td>用户</td><td>%s / %s</td></tr>
-<tr><td>API Key ID</td><td>%s</td></tr>
-<tr><td>下游分组</td><td>%s / %s</td></tr>
-<tr><td>模型</td><td>%s</td></tr>
-<tr><td>字段一</td><td>present=%t, sha256=%s, result=%s</td></tr>
-<tr><td>字段二</td><td>present=%t, sha256=%s, result=%s</td></tr>
-<tr><td>拒绝原因</td><td>%s</td></tr>
-<tr><td>配置版本</td><td>%d</td></tr>
-</table>`,
-		escape(event.RequestID), escape(event.CreatedAt.UTC().Format(time.RFC3339)), escape(userID), escape(event.UserEmailSnapshot),
-		escape(apiKeyID), escape(groupID), escape(event.GroupNameSnapshot), escape(event.Model),
-		event.Instructions.Present, escape(event.Instructions.SHA256), escape(event.Instructions.Result),
-		event.Input1.Present, escape(event.Input1.SHA256), escape(event.Input1.Result), escape(event.Reason), event.ConfigVersion)
-}
-
-func instructionRetryDelay(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	delay := 5 * time.Second * time.Duration(1<<min(attempt-1, 8))
-	if delay > 15*time.Minute {
-		return 15 * time.Minute
-	}
-	return delay
 }
 
 func (s *InstructionService) setLoadError(message string) {

@@ -132,6 +132,7 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers)
 	{
 		instructionAudit.GET("/overview", h.Admin.InstructionAudit.GetOverview)
 		instructionAudit.PUT("/enabled", h.Admin.InstructionAudit.UpdateEnabled)
+		instructionAudit.PUT("/evidence-retention", h.Admin.InstructionAudit.UpdateEvidenceRetention)
 		instructionAudit.GET("/hashes", h.Admin.InstructionAudit.ListHashes)
 		instructionAudit.POST("/hashes", h.Admin.InstructionAudit.CreateHash)
 		instructionAudit.PUT("/hashes/:id", h.Admin.InstructionAudit.UpdateHash)
@@ -144,6 +145,8 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers)
 		instructionAudit.GET("/groups", h.Admin.InstructionAudit.ListGroupOptions)
 		instructionAudit.GET("/events", h.Admin.InstructionAudit.ListEvents)
 		instructionAudit.GET("/events/:id", h.Admin.InstructionAudit.GetEvent)
+		instructionAudit.GET("/events/:id/evidence", h.Admin.InstructionAudit.RevealEvidence)
+		instructionAudit.POST("/events/:id/evidence-access", h.Admin.InstructionAudit.RecordEvidenceCopy)
 		instructionAudit.POST("/events/:id/candidates", h.Admin.InstructionAudit.CreateCandidate)
 	}
 }

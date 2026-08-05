@@ -1,6 +1,7 @@
 package securityaudit
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -10,6 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	modelportrepository "github.com/Wei-Shaw/sub2api/internal/repository"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	_ "github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
@@ -69,6 +73,8 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	migration199, err := os.ReadFile(filepath.Join("..", "..", "migrations", "199_instruction_audit_group_scope.sql"))
 	require.NoError(t, err)
+	migration200, err := os.ReadFile(filepath.Join("..", "..", "migrations", "200_instruction_audit_review_notifications.sql"))
+	require.NoError(t, err)
 	for iteration := range 2 {
 		_, err = db.ExecContext(ctx, string(migration198))
 		require.NoError(t, err)
@@ -77,6 +83,8 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 			require.NoError(t, err)
 		}
 		_, err = db.ExecContext(ctx, string(migration199))
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, string(migration200))
 		require.NoError(t, err)
 	}
 	return db
@@ -238,18 +246,26 @@ func TestInstructionAuditPostgresBoundGroupFailsClosedWhenRuleBecomesIneffective
 	require.Equal(t, "[]", persistedRuleSetIDs)
 }
 
-func TestInstructionAuditPostgresPersistsMetadataAndRateLimitsOutbox(t *testing.T) {
+func TestInstructionAuditPostgresPersistsEncryptedEvidenceAndReviewTrail(t *testing.T) {
 	db := openInstructionAuditIntegrationDB(t)
 	repo := NewInstructionRepository(db)
 	ctx := context.Background()
 	userID := insertInstructionAuditUser(t, db, "user@example.test", "user")
-	insertInstructionAuditUser(t, db, "admin@example.test", "admin")
+	adminID := insertInstructionAuditUser(t, db, "admin@example.test", "admin")
 	groupID := insertInstructionAuditGroup(t, db, "Metadata Group")
 	var apiKeyID int64
 	require.NoError(t, db.QueryRow(`INSERT INTO api_keys DEFAULT VALUES RETURNING id`).Scan(&apiKeyID))
 	snapshot := createInstructionAuditPolicy(t, repo, userID, groupID, "trusted")
-	service := NewInstructionService(repo, nil, nil)
-	service.snapshot.Store(snapshot)
+	instructionService := NewInstructionService(repo, nil, nil)
+	evidenceCipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{
+			EncryptionKey:           strings.Repeat("42", 32),
+			EncryptionKeyConfigured: true,
+		},
+	})
+	require.NoError(t, err)
+	instructionService.evidenceCipher = evidenceCipher
+	instructionService.snapshot.Store(snapshot)
 
 	const plaintextCanary = "INSTRUCTION_AUDIT_PLAINTEXT_CANARY_DO_NOT_STORE"
 	request := Request{
@@ -258,20 +274,22 @@ func TestInstructionAuditPostgresPersistsMetadataAndRateLimitsOutbox(t *testing.
 		Endpoint: "/v1/responses", Protocol: instructionAuditProtocol, Model: "gpt-test", Stage: "http",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"` + plaintextCanary + `"}`),
 	}
-	first := service.EvaluateInstruction(ctx, request)
+	first := instructionService.EvaluateInstruction(ctx, request)
 	require.True(t, first.Applicable)
 	require.False(t, first.Allow)
 	require.Equal(t, sha256Hex(plaintextCanary), first.Instructions.SHA256)
 
 	request.RequestID = "request-2"
-	second := service.EvaluateInstruction(ctx, request)
+	second := instructionService.EvaluateInstruction(ctx, request)
 	require.False(t, second.Allow)
 
-	var eventCount, outboxCount int
+	var eventCount, legacyOutboxCount, evidenceCount int
 	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM instruction_audit_events`).Scan(&eventCount))
-	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM instruction_audit_notification_outbox`).Scan(&outboxCount))
 	require.Equal(t, 2, eventCount)
-	require.Equal(t, 1, outboxCount)
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM instruction_audit_notification_outbox`).Scan(&legacyOutboxCount))
+	require.Zero(t, legacyOutboxCount, "new events must use the unified notification queue")
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM instruction_audit_evidence`).Scan(&evidenceCount))
+	require.Equal(t, 2, evidenceCount)
 
 	var persisted string
 	require.NoError(t, db.QueryRow(`
@@ -281,17 +299,57 @@ func TestInstructionAuditPostgresPersistsMetadataAndRateLimitsOutbox(t *testing.
 	require.NotContains(t, persisted, "Bearer ")
 	require.Contains(t, persisted, "Metadata Group")
 
-	service.processOutbox(ctx)
-	var status string
-	var attempts int
-	require.NoError(t, db.QueryRow(`SELECT status, attempts FROM instruction_audit_notification_outbox`).Scan(&status, &attempts))
-	require.Equal(t, "retry", status)
-	require.Equal(t, 1, attempts)
-
-	recipients, err := repo.ListAdminRecipients(ctx)
+	var ciphertext []byte
+	var digest string
+	var plaintextBytes int
+	require.NoError(t, db.QueryRow(`
+		SELECT ciphertext, digest, plaintext_bytes
+		FROM instruction_audit_evidence
+		WHERE event_id = (SELECT id FROM instruction_audit_events WHERE request_id = 'request-1')
+		  AND source = 'instructions'`).Scan(&ciphertext, &digest, &plaintextBytes))
+	require.NotContains(t, string(ciphertext), plaintextCanary)
+	require.False(t, bytes.Contains(ciphertext, []byte(plaintextCanary)))
+	require.Equal(t, len([]byte(plaintextCanary)), plaintextBytes)
+	decrypted, err := evidenceCipher.Decrypt("instructions", digest, ciphertext)
 	require.NoError(t, err)
-	require.Len(t, recipients, 1)
-	require.Equal(t, "admin@example.test", recipients[0].Email)
+	require.Equal(t, plaintextCanary, decrypted)
+
+	var eventID int64
+	require.NoError(t, db.QueryRow(`SELECT id FROM instruction_audit_events WHERE request_id = 'request-1'`).Scan(&eventID))
+	review, err := instructionService.RevealEvidence(ctx, eventID, InstructionEvidenceAccess{ActorID: adminID})
+	require.NoError(t, err)
+	require.Equal(t, "stored", review.Status)
+	require.Len(t, review.Fields, 1)
+	require.Equal(t, plaintextCanary, review.Fields[0].Plaintext)
+	require.True(t, review.Fields[0].DigestConsistent)
+	require.NoError(t, instructionService.RecordEvidenceCopy(ctx, eventID, InstructionEvidenceAccess{
+		ActorID: adminID, Source: "instructions_plaintext",
+	}))
+	var revealCount, copyCount int
+	require.NoError(t, db.QueryRow(`
+		SELECT COUNT(*) FILTER (WHERE action = 'reveal'), COUNT(*) FILTER (WHERE action = 'copy')
+		FROM instruction_audit_evidence_access_logs WHERE event_id = $1`, eventID).Scan(&revealCount, &copyCount))
+	require.Equal(t, 1, revealCount)
+	require.Equal(t, 1, copyCount)
+	candidate, err := instructionService.CreateCandidateFromEvent(ctx, eventID, CreateInstructionCandidateRequest{
+		Source: "instructions", ReviewConfirmed: true, Name: "reviewed canary",
+	}, adminID)
+	require.NoError(t, err)
+	require.Equal(t, sha256Hex(plaintextCanary), candidate.Digest)
+
+	notificationRepo := modelportrepository.NewSecurityNotificationRepository(db)
+	for _, input := range []service.SecurityNotificationAudienceInput{
+		{SourceType: service.SecurityNotificationSourceInstructionAudit, SourceID: eventID, Audience: "ops", Recipients: []string{"ops@example.test"}, TemplateEvent: service.NotificationEmailEventInstructionAuditOpsNotice, DedupKey: "same-dedup-key"},
+		{SourceType: service.SecurityNotificationSourceInstructionAudit, SourceID: eventID + 1, Audience: "ops", Recipients: []string{"ops@example.test"}, TemplateEvent: service.NotificationEmailEventInstructionAuditOpsNotice, DedupKey: "same-dedup-key"},
+	} {
+		require.NoError(t, notificationRepo.Enqueue(ctx, input))
+	}
+	var pendingCount, suppressedCount int
+	require.NoError(t, db.QueryRow(`
+		SELECT COUNT(*) FILTER (WHERE status = 'pending'), COUNT(*) FILTER (WHERE status = 'suppressed')
+		FROM security_notification_outbox WHERE audience = 'ops'`).Scan(&pendingCount, &suppressedCount))
+	require.Equal(t, 1, pendingCount)
+	require.Equal(t, 1, suppressedCount)
 }
 
 func TestInstructionAuditPostgresSnapshotEnforcesValidityWindows(t *testing.T) {
@@ -351,9 +409,4 @@ func TestInstructionAuditPostgresSnapshotEnforcesValidityWindows(t *testing.T) {
 	snapshot, err = repo.LoadSnapshot(ctx)
 	require.NoError(t, err)
 	require.False(t, evaluate(snapshot).Allow)
-}
-
-func TestInstructionAuditRetryDelayIsBounded(t *testing.T) {
-	require.Equal(t, 5*time.Second, instructionRetryDelay(1))
-	require.Equal(t, 15*time.Minute, instructionRetryDelay(100))
 }

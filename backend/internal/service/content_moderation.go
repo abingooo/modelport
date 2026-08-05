@@ -506,6 +506,7 @@ type ContentModerationService struct {
 	proxyRepo                ProxyRepository
 	authCacheInvalidator     APIKeyAuthCacheInvalidator
 	emailService             *EmailService
+	securityNotifications    *SecurityNotificationService
 	httpClient               *http.Client
 	moderationProxyCache     atomic.Pointer[moderationProxyURLCacheEntry]
 	asyncQueue               chan contentModerationTask
@@ -601,6 +602,12 @@ func NewContentModerationService(
 		go svc.cleanupWorker()
 	}
 	return svc
+}
+
+func (s *ContentModerationService) SetSecurityNotificationService(notifications *SecurityNotificationService) {
+	if s != nil {
+		s.securityNotifications = notifications
+	}
 }
 
 func (s *ContentModerationService) GetConfig(ctx context.Context) (*ContentModerationConfigView, error) {
@@ -3048,12 +3055,41 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		slog.Warn("content_moderation.cyber_create_log_failed", "user_id", in.UserID, "error", err)
 	}
 	emailSent := false
-	if s.emailService != nil && strings.TrimSpace(log.UserEmail) != "" {
+	if logPersisted && s.securityNotifications != nil {
+		groupIDValue := int64(0)
+		if log.GroupID != nil {
+			groupIDValue = *log.GroupID
+		}
+		variables := map[string]string{
+			"request_id":   defaultContentModerationString(log.RequestID, "-"),
+			"triggered_at": log.CreatedAt.UTC().Format(time.RFC3339),
+			"user_id":      fmt.Sprintf("%d", in.UserID),
+			"user_email":   defaultContentModerationString(log.UserEmail, "-"),
+			"api_key_id":   fmt.Sprintf("%d", in.APIKeyID),
+			"group_id":     fmt.Sprintf("%d", groupIDValue),
+			"group_name":   defaultContentModerationString(log.GroupName, "-"),
+			"model":        defaultContentModerationString(log.Model, "-"),
+			"admin_qq":     "2145236436",
+		}
+		err := s.securityNotifications.Enqueue(ctx, SecurityNotificationEnqueueInput{
+			SourceType: SecurityNotificationSourceCyberPolicy, SourceID: log.ID,
+			UserID: in.UserID, UserEmail: log.UserEmail,
+			DedupeScope:  fmt.Sprintf("%d:%d:cyber_policy", in.UserID, groupIDValue),
+			UserTemplate: NotificationEmailEventCyberPolicyNotice,
+			OpsTemplate:  NotificationEmailEventCyberPolicyOpsNotice,
+			Variables:    variables,
+		})
+		if err != nil {
+			slog.Warn("content_moderation.cyber_notification_enqueue_failed", "log_id", log.ID, "error", err)
+		}
+	} else if s.emailService != nil && strings.TrimSpace(log.UserEmail) != "" {
 		if err := s.sendCyberPolicyEmail(ctx, log); err != nil {
 			slog.Warn("content_moderation.cyber_email_failed", "user_id", in.UserID, "error", err)
 		} else {
 			emailSent = true
 		}
+	}
+	if s.emailService != nil && strings.TrimSpace(log.UserEmail) != "" {
 		if autoBanned {
 			if err := s.sendAccountDisabledEmail(ctx, cfg, log); err != nil {
 				slog.Warn("content_moderation.cyber_ban_email_failed", "user_id", in.UserID, "error", err)
@@ -3073,10 +3109,11 @@ func (s *ContentModerationService) sendCyberPolicyEmail(ctx context.Context, log
 	siteName := s.siteName(ctx)
 	if s.emailService.notificationEmailService != nil {
 		variables := map[string]string{
-			"triggered_at":     log.CreatedAt.UTC().Format(time.RFC3339),
-			"model":            defaultContentModerationString(log.Model, "-"),
-			"group_name":       defaultContentModerationString(log.GroupName, "-"),
-			"upstream_message": defaultContentModerationString(log.Error, "-"),
+			"request_id":   defaultContentModerationString(log.RequestID, "-"),
+			"triggered_at": log.CreatedAt.UTC().Format(time.RFC3339),
+			"model":        defaultContentModerationString(log.Model, "-"),
+			"group_name":   defaultContentModerationString(log.GroupName, "-"),
+			"admin_qq":     "2145236436",
 		}
 		err := s.emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
 			Event:          NotificationEmailEventCyberPolicyNotice,

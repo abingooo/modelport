@@ -4,6 +4,8 @@ import type {
   InstructionGroupOption,
   InstructionEvent,
   InstructionEventPage,
+  InstructionEventFilters,
+  InstructionEvidenceReview,
   InstructionHashEntry,
   InstructionOverview,
   InstructionRuleSet,
@@ -24,6 +26,11 @@ export const instructionAuditAPI = {
     const { data } = await apiClient.put<InstructionOverview>(`${basePath}/enabled`, {
       enabled,
     })
+    return data
+  },
+
+  async updateEvidenceRetention(days: number): Promise<InstructionOverview> {
+    const { data } = await apiClient.put<InstructionOverview>(`${basePath}/evidence-retention`, { days })
     return data
   },
 
@@ -79,11 +86,9 @@ export const instructionAuditAPI = {
     return data
   },
 
-  async listEvents(params: {
+  async listEvents(params: InstructionEventFilters & {
     page: number
     page_size: number
-    user_id?: number
-    model?: string
   }): Promise<InstructionEventPage> {
     const { data } = await apiClient.get<InstructionEventPage>(`${basePath}/events`, { params })
     return data
@@ -94,9 +99,19 @@ export const instructionAuditAPI = {
     return data
   },
 
+  async revealEvidence(id: number): Promise<InstructionEvidenceReview> {
+    const { data } = await apiClient.get<InstructionEvidenceReview>(`${basePath}/events/${id}/evidence`)
+    return data
+  },
+
+  async recordEvidenceCopy(id: number, source: string): Promise<void> {
+    await apiClient.post(`${basePath}/events/${id}/evidence-access`, { source })
+  },
+
   async createCandidate(eventId: number, source: 'instructions' | 'input1'): Promise<InstructionHashEntry> {
     const { data } = await apiClient.post<InstructionHashEntry>(`${basePath}/events/${eventId}/candidates`, {
       source,
+      review_confirmed: true,
     })
     return data
   },

@@ -176,8 +176,6 @@ func TestInstructionServicePersistsBlockedEventBeforeReturning(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery("INSERT INTO instruction_audit_events").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(17)))
-	mock.ExpectExec("INSERT INTO instruction_audit_notification_outbox").
-		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
@@ -366,22 +364,6 @@ func TestInstructionService47KBLatencyBudget(t *testing.T) {
 	require.Less(t, latencies[296], 25*time.Millisecond)
 }
 
-func TestInstructionAuditEmailContainsOnlyMetadataAndDigests(t *testing.T) {
-	userID, apiKeyID := int64(3), int64(9)
-	event := &InstructionEvent{
-		ID: 17, RequestID: "req-17", UserID: &userID, UserEmailSnapshot: "user@example.test", APIKeyID: &apiKeyID,
-		Model: "gpt-test", Reason: "hash_mismatch", ConfigVersion: 4, CreatedAt: time.Unix(1_800_000_000, 0).UTC(),
-		Instructions: InstructionFieldResult{Present: true, SHA256: strings.Repeat("a", 64), Result: "mismatch"},
-		Input1:       InstructionFieldResult{Present: true, SHA256: strings.Repeat("b", 64), Result: "mismatch"},
-	}
-	body := buildInstructionAuditEmail(event)
-	require.Contains(t, body, strings.Repeat("a", 64))
-	require.Contains(t, body, strings.Repeat("b", 64))
-	for _, forbidden := range []string{"Bearer ", "sk-secret", "raw instruction text", "Authorization"} {
-		require.NotContains(t, body, forbidden)
-	}
-}
-
 func TestNormalizeInstructionHashDefaultsToCandidate(t *testing.T) {
 	request, err := normalizeInstructionHashRequest(CreateInstructionHashRequest{
 		Digest: strings.Repeat("A", 64), Name: "Codex stable",
@@ -389,9 +371,4 @@ func TestNormalizeInstructionHashDefaultsToCandidate(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, strings.Repeat("a", 64), request.Digest)
 	require.Equal(t, "candidate", request.Status)
-}
-
-func TestInstructionAuditRecipientRetrySkipsCompletedDeliveries(t *testing.T) {
-	require.True(t, instructionRecipientAlreadySent([]int64{3, 7}, 7))
-	require.False(t, instructionRecipientAlreadySent([]int64{3, 7}, 9))
 }

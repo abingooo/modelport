@@ -96,6 +96,7 @@ func provideCleanup(
 	idempotencyCleanup *service.IdempotencyCleanupService,
 	pricing *service.PricingService,
 	emailQueue *service.EmailQueueService,
+	securityNotifications *service.SecurityNotificationService,
 	billingCache *service.BillingCacheService,
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	subscriptionService *service.SubscriptionService,
@@ -257,6 +258,12 @@ func provideCleanup(
 			}},
 			{"EmailQueueService", func() error {
 				emailQueue.Stop()
+				return nil
+			}},
+			{"SecurityNotificationService", func() error {
+				if securityNotifications != nil {
+					return securityNotifications.Stop(ctx)
+				}
 				return nil
 			}},
 			{"BillingCacheService", func() error {

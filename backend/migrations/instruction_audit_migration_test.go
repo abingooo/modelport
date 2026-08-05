@@ -52,3 +52,20 @@ func TestInstructionAuditGroupScopeMigrationIsAdditiveAndIdempotent(t *testing.T
 		require.NotContains(t, sql, destructive)
 	}
 }
+
+func TestInstructionAuditReviewMigrationEncryptsEvidenceAndSplitsNotifications(t *testing.T) {
+	body, err := FS.ReadFile("200_instruction_audit_review_notifications.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "('instruction_audit_evidence_retention_days', '30'")
+	require.Contains(t, sql, "create table if not exists instruction_audit_evidence")
+	require.Contains(t, sql, "ciphertext        bytea not null")
+	require.Contains(t, sql, "create table if not exists instruction_audit_evidence_access_logs")
+	require.Contains(t, sql, "create table if not exists security_notification_outbox")
+	require.Contains(t, sql, "audience in ('user', 'ops')")
+	require.Contains(t, sql, "'suppressed', 'no_recipient'")
+	require.Contains(t, sql, "create unique index if not exists uq_security_notification_dedup_active")
+	require.NotContains(t, sql, "plaintext text")
+	require.NotContains(t, sql, "request_body")
+	require.NotContains(t, sql, "bearer_token")
+}

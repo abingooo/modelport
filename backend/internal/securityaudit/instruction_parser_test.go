@@ -85,10 +85,12 @@ func TestInspectInstructionPayloadPreservesExactText(t *testing.T) {
 	result := inspectInstructionPayload([]byte(`{"instructions":" Line\n模型港 "}`), allowed)
 	require.True(t, result.Allow)
 	require.Equal(t, "match", result.Instructions.Result)
+	require.Equal(t, " Line\n模型港 ", result.Instructions.Plaintext)
 
 	result = inspectInstructionPayload([]byte(`{"instructions":"Line\n模型港"}`), allowed)
 	require.False(t, result.Allow)
 	require.Equal(t, "mismatch", result.Instructions.Result)
+	require.Equal(t, "Line\n模型港", result.Instructions.Plaintext)
 }
 
 func TestInspectInstructionPayloadFallsBackAfterInvalidInstructions(t *testing.T) {

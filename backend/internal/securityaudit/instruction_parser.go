@@ -97,6 +97,7 @@ func inspectInstructions(root map[string]any, allowed []instructionPolicyHash, e
 		return result
 	}
 	result.SHA256 = sha256Hex(text)
+	result.Plaintext = text
 	result.Result = "mismatch"
 	if matchesInstructionDigest(result.SHA256, allowed, evaluatedAt) {
 		result.Result = "match"
@@ -146,7 +147,8 @@ func inspectInput1(root map[string]any, allowed []instructionPolicyHash, evaluat
 	if builder.Len() == 0 {
 		return result
 	}
-	result.SHA256 = sha256Hex(builder.String())
+	result.Plaintext = builder.String()
+	result.SHA256 = sha256Hex(result.Plaintext)
 	result.Result = "mismatch"
 	if matchesInstructionDigest(result.SHA256, allowed, evaluatedAt) {
 		result.Result = "match"
