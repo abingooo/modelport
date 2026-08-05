@@ -141,7 +141,7 @@ func inspectInput1(root map[string]any, allowed []instructionPolicyHash, evaluat
 		if !ok || builder.Len()+len(text) > maxInstructionAuditTextBytes {
 			return result
 		}
-		builder.WriteString(text)
+		_, _ = builder.WriteString(text)
 	}
 	if builder.Len() == 0 {
 		return result

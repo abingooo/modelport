@@ -57,7 +57,7 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	accumulators := make(map[int64]*instructionPolicyAccumulator)
 	auditedGroups := make(map[int64]struct{})
@@ -265,7 +265,7 @@ func (r *InstructionRepository) ListHashes(ctx context.Context, status string) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionHashEntry, 0)
 	for rows.Next() {
 		item, scanErr := scanInstructionHash(rows)
@@ -377,7 +377,7 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 	if err != nil {
 		return nil, err
 	}
-	defer hashRows.Close()
+	defer func() { _ = hashRows.Close() }()
 	for hashRows.Next() {
 		var ruleSetID int64
 		var hash InstructionHashEntry
@@ -478,7 +478,7 @@ func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]Instru
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionGroupBinding, 0)
 	for rows.Next() {
 		var item InstructionGroupBinding
@@ -500,7 +500,7 @@ func (r *InstructionRepository) ListGroupOptions(ctx context.Context) ([]Instruc
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionGroupOption, 0)
 	for rows.Next() {
 		var item InstructionGroupOption
@@ -598,7 +598,7 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionEvent, 0, pageSize)
 	for rows.Next() {
 		item, scanErr := scanInstructionEvent(rows)
@@ -770,7 +770,7 @@ func (r *InstructionRepository) ListAdminRecipients(ctx context.Context) ([]inst
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]instructionAdminRecipient, 0)
 	for rows.Next() {
 		var item instructionAdminRecipient

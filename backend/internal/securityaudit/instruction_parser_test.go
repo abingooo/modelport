@@ -143,14 +143,14 @@ func TestInspectInstructionPayloadRejectsOversizedAndOverlyComplexBodies(t *test
 	require.Equal(t, "request_too_large", result.Reason)
 
 	var body strings.Builder
-	body.WriteString(`{"metadata":[`)
+	_, _ = body.WriteString(`{"metadata":[`)
 	for index := 0; index < maxInstructionAuditJSONValues; index++ {
 		if index > 0 {
-			body.WriteByte(',')
+			_ = body.WriteByte(',')
 		}
-		body.WriteByte('0')
+		_ = body.WriteByte('0')
 	}
-	body.WriteString(`]}`)
+	_, _ = body.WriteString(`]}`)
 	result = inspectInstructionPayload([]byte(body.String()), nil)
 	require.False(t, result.Allow)
 	require.Equal(t, "structure_too_complex", result.Reason)
