@@ -4,12 +4,10 @@ export default {
       description: 'Manage registration, email verification, default values, and SMTP settings',
       instructionAudit: {
         title: 'Instruction Audit',
-        description: 'Apply Responses hash admission to bound downstream users and original model names.',
+        description: 'Apply Responses hash admission to every request in bound downstream groups.',
         configure: 'Manage Rules',
         enabled: 'Enable Instruction Audit',
-        summary: '{hashes} active hashes and {bindings} active bindings',
-        confirmTitle: 'Enable Instruction Audit',
-        confirmMessage: 'No effective rules exist. Protected requests may be rejected while configuration is incomplete.',
+        summary: '{hashes} active hashes, {groups} audited groups, and {effective} with effective rules',
       },
       tabs: {
         general: 'General',
@@ -51,7 +49,7 @@ export default {
         },
         riskControl: {
           title: 'Risk Control',
-          description: 'Enable the content moderation menu and gateway audit entry point. Disabled by default.',
+          description: 'Manage content moderation, prompt audit, and instruction audit in one place. Disabled by default.',
           configureLink: 'Configure content moderation in Risk Control',
           enabled: 'Enable Risk Control',
           enabledHint: 'When off, the admin sidebar entry is hidden and gateway moderation is skipped.',

@@ -149,8 +149,8 @@ var auditActionOverrides = map[string]string{
 	"PUT /api/v1/admin/instruction-audit/hashes/:id":             "admin.instruction_audit.hash.update",
 	"POST /api/v1/admin/instruction-audit/rule-sets":             "admin.instruction_audit.rule_set.create",
 	"PUT /api/v1/admin/instruction-audit/rule-sets/:id":          "admin.instruction_audit.rule_set.update",
-	"POST /api/v1/admin/instruction-audit/bindings":              "admin.instruction_audit.binding.create",
-	"DELETE /api/v1/admin/instruction-audit/bindings/:id":        "admin.instruction_audit.binding.delete",
+	"POST /api/v1/admin/instruction-audit/group-bindings":        "admin.instruction_audit.group_binding.create",
+	"DELETE /api/v1/admin/instruction-audit/group-bindings/:id":  "admin.instruction_audit.group_binding.delete",
 	"POST /api/v1/admin/instruction-audit/events/:id/candidates": "admin.instruction_audit.candidate.create",
 }
 
@@ -172,8 +172,8 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"PUT /api/v1/admin/instruction-audit/hashes/:id":             {},
 	"POST /api/v1/admin/instruction-audit/rule-sets":             {},
 	"PUT /api/v1/admin/instruction-audit/rule-sets/:id":          {},
-	"POST /api/v1/admin/instruction-audit/bindings":              {},
-	"DELETE /api/v1/admin/instruction-audit/bindings/:id":        {},
+	"POST /api/v1/admin/instruction-audit/group-bindings":        {},
+	"DELETE /api/v1/admin/instruction-audit/group-bindings/:id":  {},
 	"POST /api/v1/admin/instruction-audit/events/:id/candidates": {},
 }
 

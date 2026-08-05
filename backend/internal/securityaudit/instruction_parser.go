@@ -82,18 +82,8 @@ func inspectInstructionRoot(root map[string]any, allowed []instructionPolicyHash
 
 func strictInstructionModel(root map[string]any) (string, bool) {
 	model, ok := root["model"].(string)
-	model = normalizeInstructionAuditModel(model)
+	model = strings.TrimSpace(model)
 	return model, ok && model != ""
-}
-
-func lenientLastInstructionModel(body []byte) string {
-	var envelope struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return ""
-	}
-	return normalizeInstructionAuditModel(envelope.Model)
 }
 
 func inspectInstructions(root map[string]any, allowed []instructionPolicyHash, evaluatedAt time.Time) InstructionFieldResult {

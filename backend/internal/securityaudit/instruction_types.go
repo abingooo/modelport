@@ -13,7 +13,7 @@ const (
 	InstructionClientMessage             = "Request rejected by security policy."
 )
 
-var ErrInstructionAuditConfirmationRequired = errors.New("instruction audit enable confirmation required")
+var ErrInstructionAuditNoEffectiveGroupRules = errors.New("instruction audit requires effective group rules")
 
 type InstructionEngine interface {
 	EvaluateInstruction(context.Context, Request) *InstructionDecision
@@ -96,24 +96,31 @@ type SaveInstructionRuleSetRequest struct {
 	HashIDs     []int64 `json:"hash_ids"`
 }
 
-type InstructionBinding struct {
+type InstructionGroupBinding struct {
 	ID          int64     `json:"id"`
-	UserID      int64     `json:"user_id"`
-	UserEmail   string    `json:"user_email"`
-	Username    string    `json:"username"`
-	Model       string    `json:"model"`
+	GroupID     int64     `json:"group_id"`
+	GroupName   string    `json:"group_name"`
+	Platform    string    `json:"platform"`
+	GroupStatus string    `json:"group_status"`
 	RuleSetID   int64     `json:"rule_set_id"`
 	RuleSetName string    `json:"rule_set_name"`
 	Enabled     bool      `json:"enabled"`
+	Effective   bool      `json:"effective"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-type CreateInstructionBindingRequest struct {
-	UserID    int64  `json:"user_id"`
-	Model     string `json:"model"`
-	RuleSetID int64  `json:"rule_set_id"`
-	Enabled   bool   `json:"enabled"`
+type SaveInstructionGroupBindingsRequest struct {
+	GroupIDs  []int64 `json:"group_ids"`
+	RuleSetID int64   `json:"rule_set_id"`
+	Enabled   bool    `json:"enabled"`
+}
+
+type InstructionGroupOption struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
 }
 
 type InstructionEvent struct {
@@ -122,6 +129,8 @@ type InstructionEvent struct {
 	UserID             *int64                 `json:"user_id,omitempty"`
 	UserEmailSnapshot  string                 `json:"user_email"`
 	APIKeyID           *int64                 `json:"api_key_id,omitempty"`
+	GroupID            *int64                 `json:"group_id,omitempty"`
+	GroupNameSnapshot  string                 `json:"group_name"`
 	Model              string                 `json:"model"`
 	Endpoint           string                 `json:"endpoint"`
 	Stage              string                 `json:"stage"`
@@ -152,7 +161,8 @@ type InstructionOverview struct {
 	HashCount           int64      `json:"hash_count"`
 	ActiveHashCount     int64      `json:"active_hash_count"`
 	RuleSetCount        int64      `json:"rule_set_count"`
-	ActiveBindingCount  int64      `json:"active_binding_count"`
+	AuditedGroupCount   int64      `json:"audited_group_count"`
+	EffectiveGroupCount int64      `json:"effective_group_count"`
 	PendingEmailCount   int64      `json:"pending_email_count"`
 	QueuedEventCount    int64      `json:"queued_event_count"`
 	DroppedEventCount   int64      `json:"dropped_event_count"`
@@ -160,14 +170,7 @@ type InstructionOverview struct {
 }
 
 type UpdateInstructionEnabledRequest struct {
-	Enabled        bool `json:"enabled"`
-	ConfirmNoRules bool `json:"confirm_no_rules"`
-}
-
-type InstructionUserOption struct {
-	ID       int64  `json:"id"`
-	Email    string `json:"email"`
-	Username string `json:"username"`
+	Enabled bool `json:"enabled"`
 }
 
 type CreateInstructionCandidateRequest struct {
@@ -192,7 +195,7 @@ type instructionPolicyHash struct {
 type instructionSnapshot struct {
 	Enabled       bool
 	ConfigVersion int64
-	AuditedUsers  map[int64]struct{}
-	Policies      map[int64]map[string]instructionPolicy
+	AuditedGroups map[int64]struct{}
+	Policies      map[int64]instructionPolicy
 	LoadedAt      time.Time
 }

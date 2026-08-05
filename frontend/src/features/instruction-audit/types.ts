@@ -9,7 +9,8 @@ export interface InstructionOverview {
   hash_count: number
   active_hash_count: number
   rule_set_count: number
-  active_binding_count: number
+  audited_group_count: number
+  effective_group_count: number
   pending_email_count: number
   queued_event_count: number
   dropped_event_count: number
@@ -43,15 +44,16 @@ export interface InstructionRuleSet {
   updated_at: string
 }
 
-export interface InstructionBinding {
+export interface InstructionGroupBinding {
   id: number
-  user_id: number
-  user_email: string
-  username: string
-  model: string
+  group_id: number
+  group_name: string
+  platform: string
+  group_status: string
   rule_set_id: number
   rule_set_name: string
   enabled: boolean
+  effective: boolean
   created_at: string
   updated_at: string
 }
@@ -68,6 +70,8 @@ export interface InstructionEvent {
   user_id?: number | null
   user_email: string
   api_key_id?: number | null
+  group_id?: number | null
+  group_name: string
   model: string
   endpoint: string
   stage: string
@@ -90,10 +94,11 @@ export interface InstructionEventPage {
   pages: number
 }
 
-export interface InstructionUserOption {
+export interface InstructionGroupOption {
   id: number
-  email: string
-  username: string
+  name: string
+  platform: string
+  status: string
 }
 
 export interface SaveInstructionHashRequest {
@@ -115,9 +120,8 @@ export interface SaveInstructionRuleSetRequest {
   hash_ids: number[]
 }
 
-export interface SaveInstructionBindingRequest {
-  user_id: number
-  model: string
+export interface SaveInstructionGroupBindingsRequest {
+  group_ids: number[]
   rule_set_id: number
   enabled: boolean
 }

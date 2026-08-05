@@ -1,13 +1,13 @@
 import { apiClient } from '@/api/client'
 import type {
-  InstructionBinding,
+  InstructionGroupBinding,
+  InstructionGroupOption,
   InstructionEvent,
   InstructionEventPage,
   InstructionHashEntry,
   InstructionOverview,
   InstructionRuleSet,
-  InstructionUserOption,
-  SaveInstructionBindingRequest,
+  SaveInstructionGroupBindingsRequest,
   SaveInstructionHashRequest,
   SaveInstructionRuleSetRequest,
 } from './types'
@@ -20,10 +20,9 @@ export const instructionAuditAPI = {
     return data
   },
 
-  async updateEnabled(enabled: boolean, confirmNoRules = false): Promise<InstructionOverview> {
+  async updateEnabled(enabled: boolean): Promise<InstructionOverview> {
     const { data } = await apiClient.put<InstructionOverview>(`${basePath}/enabled`, {
       enabled,
-      confirm_no_rules: confirmNoRules,
     })
     return data
   },
@@ -61,24 +60,22 @@ export const instructionAuditAPI = {
     return data
   },
 
-  async listBindings(): Promise<InstructionBinding[]> {
-    const { data } = await apiClient.get<InstructionBinding[]>(`${basePath}/bindings`)
+  async listGroupBindings(): Promise<InstructionGroupBinding[]> {
+    const { data } = await apiClient.get<InstructionGroupBinding[]>(`${basePath}/group-bindings`)
     return data
   },
 
-  async saveBinding(payload: SaveInstructionBindingRequest): Promise<InstructionBinding> {
-    const { data } = await apiClient.post<InstructionBinding>(`${basePath}/bindings`, payload)
+  async saveGroupBindings(payload: SaveInstructionGroupBindingsRequest): Promise<InstructionGroupBinding[]> {
+    const { data } = await apiClient.post<InstructionGroupBinding[]>(`${basePath}/group-bindings`, payload)
     return data
   },
 
-  async deleteBinding(id: number): Promise<void> {
-    await apiClient.delete(`${basePath}/bindings/${id}`)
+  async deleteGroupBinding(id: number): Promise<void> {
+    await apiClient.delete(`${basePath}/group-bindings/${id}`)
   },
 
-  async searchUsers(query: string): Promise<InstructionUserOption[]> {
-    const { data } = await apiClient.get<InstructionUserOption[]>(`${basePath}/users`, {
-      params: { q: query },
-    })
+  async listGroups(): Promise<InstructionGroupOption[]> {
+    const { data } = await apiClient.get<InstructionGroupOption[]>(`${basePath}/groups`)
     return data
   },
 

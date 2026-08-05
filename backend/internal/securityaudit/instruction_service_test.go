@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func instructionTestSnapshot(enabled bool, userID int64, model string, values ...string) *instructionSnapshot {
+func instructionTestSnapshot(enabled bool, groupID int64, values ...string) *instructionSnapshot {
 	hashes := make([]instructionPolicyHash, 0, len(values))
 	for _, value := range values {
 		hashes = append(hashes, allowedDigest(value))
@@ -21,16 +21,17 @@ func instructionTestSnapshot(enabled bool, userID int64, model string, values ..
 		Enabled:       enabled,
 		ConfigVersion: 7,
 		LoadedAt:      time.Now().UTC(),
-		AuditedUsers:  map[int64]struct{}{userID: {}},
-		Policies: map[int64]map[string]instructionPolicy{
-			userID: {model: {RuleSetIDs: []int64{11}, Hashes: hashes}},
+		AuditedGroups: map[int64]struct{}{groupID: {}},
+		Policies: map[int64]instructionPolicy{
+			groupID: {RuleSetIDs: []int64{11}, Hashes: hashes},
 		},
 	}
 }
 
+func instructionTestGroupID(value int64) *int64 { return &value }
+
 func TestInstructionServiceEvaluationScopeAndFallback(t *testing.T) {
-	const userID int64 = 42
-	const model = "gpt-5.6-sol"
+	const groupID int64 = 42
 
 	tests := []struct {
 		name       string
@@ -42,80 +43,68 @@ func TestInstructionServiceEvaluationScopeAndFallback(t *testing.T) {
 	}{
 		{
 			name:      "disabled skips malformed body",
-			snapshot:  instructionTestSnapshot(false, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionBody: []byte(`{`)},
+			snapshot:  instructionTestSnapshot(false, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{`)},
 			wantAllow: true,
 		},
 		{
-			name:      "unbound user is unchanged",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: 99, Model: model, InstructionBody: []byte(`{`)},
+			name:      "unbound group is unchanged",
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(99), InstructionBody: []byte(`{`)},
 			wantAllow: true,
 		},
 		{
-			name:      "unbound model is unchanged",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: "other", InstructionBody: []byte(`{"model":"other"}`)},
-			wantAllow: true,
+			name:      "same group audits every user and model",
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, UserID: 99, GroupID: instructionTestGroupID(groupID), Model: "unrelated-model", InstructionBody: []byte(`{"model":"unrelated-model","instructions":"trusted"}`)},
+			wantApply: true, wantAllow: true, wantReason: "instructions_match",
 		},
 		{
-			name:      "unbound model keeps malformed request on original validation path",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: "other", InstructionBody: []byte(`{`)},
-			wantAllow: true,
-		},
-		{
-			name:      "missing model keeps malformed request on original validation path",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, InstructionBody: []byte(`{`)},
-			wantAllow: true,
+			name:      "selected group blocks malformed request without model",
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{`)},
+			wantApply: true, wantReason: "invalid_json",
 		},
 		{
 			name:      "instructions match",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionBody: []byte(`{"model":"gpt-5.6-sol","instructions":"trusted"}`)},
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{"instructions":"trusted"}`)},
 			wantApply: true, wantAllow: true, wantReason: "instructions_match",
 		},
 		{
 			name:      "input1 fallback shares hash pool",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionBody: []byte(`{"model":"gpt-5.6-sol","instructions":"other","input":[{}, {"content":[{"type":"input_text","text":"trust"},{"type":"input_text","text":"ed"}]}]}`)},
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{"instructions":"other","input":[{}, {"content":[{"type":"input_text","text":"trust"},{"type":"input_text","text":"ed"}]}]}`)},
 			wantApply: true, wantAllow: true, wantReason: "input1_match",
 		},
 		{
 			name:      "both mismatch",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionBody: []byte(`{"model":"gpt-5.6-sol","instructions":"other","input":[{}, {"content":[{"type":"input_text","text":"also-other"}]}]}`)},
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{"instructions":"other","input":[{}, {"content":[{"type":"input_text","text":"also-other"}]}]}`)},
 			wantApply: true, wantReason: "hash_mismatch",
 		},
 		{
-			name:      "strict json violation blocks audited user",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionBody: []byte(`{"model":"gpt-5.6-sol","instructions":"one","instructions":"trusted"}`)},
+			name:      "strict json violation blocks audited group",
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{"instructions":"one","instructions":"trusted"}`)},
 			wantApply: true, wantReason: "invalid_json",
 		},
 		{
-			name:      "model whitespace cannot bypass binding",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionBody: []byte(`{"model":" gpt-5.6-sol ","instructions":"untrusted"}`)},
+			name:      "bound group with no effective hashes fails closed",
+			snapshot:  instructionTestSnapshot(true, groupID),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), Model: "any-model", InstructionBody: []byte(`{"instructions":"trusted"}`)},
 			wantApply: true, wantReason: "hash_mismatch",
-		},
-		{
-			name:      "duplicate model cannot hide a protected last model",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: "other", InstructionBody: []byte(`{"model":"other","model":"gpt-5.6-sol","instructions":"trusted"}`)},
-			wantApply: true, wantReason: "invalid_json",
 		},
 		{
 			name:      "compact is explicitly excluded",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: instructionAuditProtocol, UserID: userID, Model: model, InstructionAuditExcluded: true, InstructionBody: []byte(`{`)},
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), InstructionAuditExcluded: true, InstructionBody: []byte(`{`)},
 			wantAllow: true,
 		},
 		{
 			name:      "other protocols are excluded",
-			snapshot:  instructionTestSnapshot(true, userID, model, "trusted"),
-			request:   Request{Protocol: "openai_chat_completions", UserID: userID, Model: model, InstructionBody: []byte(`{`)},
+			snapshot:  instructionTestSnapshot(true, groupID, "trusted"),
+			request:   Request{Protocol: "openai_chat_completions", GroupID: instructionTestGroupID(groupID), InstructionBody: []byte(`{`)},
 			wantAllow: true,
 		},
 	}
@@ -147,12 +136,38 @@ func TestInstructionServiceFailsClosedBeforeFirstValidSnapshot(t *testing.T) {
 	require.Equal(t, "config_unavailable", decision.Reason)
 }
 
+func TestInstructionServiceUnionsRulesAndFollowsAPIKeyGroupChanges(t *testing.T) {
+	snapshot := instructionTestSnapshot(true, 7, "first", "second")
+	policy := snapshot.Policies[7]
+	policy.RuleSetIDs = []int64{11, 12}
+	snapshot.Policies[7] = policy
+	service := &InstructionService{}
+	service.snapshot.Store(snapshot)
+
+	request := Request{
+		Protocol: instructionAuditProtocol, APIKeyID: 91, GroupID: instructionTestGroupID(7), Model: "model-a",
+		InstructionBody: []byte(`{"instructions":"second"}`),
+	}
+	decision := service.EvaluateInstruction(context.Background(), request)
+	require.True(t, decision.Applicable)
+	require.True(t, decision.Allow)
+	require.Equal(t, []int64{11, 12}, decision.RuleSetIDs)
+
+	request.GroupID = instructionTestGroupID(8)
+	request.Model = "model-b"
+	request.InstructionBody = []byte(`{`)
+	decision = service.EvaluateInstruction(context.Background(), request)
+	require.False(t, decision.Applicable)
+	require.True(t, decision.Allow)
+}
+
 func TestInstructionServicePersistsBlockedEventBeforeReturning(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	service := NewInstructionService(NewInstructionRepository(db), nil, nil)
 	request := Request{
 		RequestID: "req-persisted", UserID: 7, APIKeyID: 9, Model: "gpt-test",
+		GroupID: instructionTestGroupID(3), GroupName: "OpenAI",
 		Body:            []byte(`{"authorization":"Bearer secret"}`),
 		InstructionBody: []byte(`{"instructions":"plaintext must not survive"}`),
 	}
@@ -176,9 +191,9 @@ func TestInstructionServicePersistsBlockedEventBeforeReturning(t *testing.T) {
 
 func TestInstructionServiceUsesStrictOriginalModel(t *testing.T) {
 	service := &InstructionService{}
-	service.snapshot.Store(instructionTestSnapshot(true, 7, "original-model", "trusted"))
+	service.snapshot.Store(instructionTestSnapshot(true, 7, "trusted"))
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol:        instructionAuditProtocol,
+		Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(7),
 		UserID:          7,
 		Model:           "mapped-model",
 		InstructionBody: []byte(`{"model":"original-model","instructions":"trusted"}`),
@@ -187,7 +202,7 @@ func TestInstructionServiceUsesStrictOriginalModel(t *testing.T) {
 	require.True(t, decision.Allow)
 
 	decision = service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "original-model", InstructionModelOverride: true,
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "original-model", InstructionModelOverride: true,
 		InstructionBody: []byte(`{"model":"mapped-model","instructions":"trusted"}`),
 	})
 	require.True(t, decision.Applicable)
@@ -198,7 +213,7 @@ func TestInstructionServiceReloadKeepsLastKnownGoodSnapshot(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	service := NewInstructionService(NewInstructionRepository(db), nil, nil)
-	knownGood := instructionTestSnapshot(true, 7, "gpt-test", "trusted")
+	knownGood := instructionTestSnapshot(true, 7, "trusted")
 	service.snapshot.Store(knownGood)
 	mock.ExpectBegin()
 	mock.ExpectQuery("SELECT COALESCE").WillReturnError(errors.New("database unavailable"))
@@ -219,11 +234,11 @@ func TestInstructionServiceReloadKeepsLastKnownGoodSnapshot(t *testing.T) {
 
 func TestInstructionServiceFreshSnapshotSurvivesTransientRefreshFailure(t *testing.T) {
 	service := &InstructionService{}
-	service.snapshot.Store(instructionTestSnapshot(true, 7, "gpt-test", "trusted"))
+	service.snapshot.Store(instructionTestSnapshot(true, 7, "trusted"))
 	service.setLoadError("configuration refresh failed")
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"trusted"}`),
 	})
 	require.True(t, decision.Applicable)
@@ -232,13 +247,13 @@ func TestInstructionServiceFreshSnapshotSurvivesTransientRefreshFailure(t *testi
 
 func TestInstructionServiceFailsClosedAfterSnapshotStalenessLimit(t *testing.T) {
 	service := &InstructionService{}
-	snapshot := instructionTestSnapshot(true, 7, "gpt-test", "trusted")
+	snapshot := instructionTestSnapshot(true, 7, "trusted")
 	snapshot.LoadedAt = time.Now().Add(-instructionSnapshotMaxStaleness - time.Second)
 	service.snapshot.Store(snapshot)
 	service.setLoadError("configuration refresh failed")
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"trusted"}`),
 	})
 	require.True(t, decision.Applicable)
@@ -249,13 +264,13 @@ func TestInstructionServiceFailsClosedAfterSnapshotStalenessLimit(t *testing.T) 
 
 func TestInstructionServiceStaleSnapshotDoesNotEnableDisabledAudit(t *testing.T) {
 	service := &InstructionService{}
-	snapshot := instructionTestSnapshot(false, 7, "gpt-test", "trusted")
+	snapshot := instructionTestSnapshot(false, 7, "trusted")
 	snapshot.LoadedAt = time.Now().Add(-instructionSnapshotMaxStaleness - time.Second)
 	service.snapshot.Store(snapshot)
 	service.setLoadError("configuration refresh failed")
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"untrusted"}`),
 	})
 	require.False(t, decision.Applicable)
@@ -264,30 +279,30 @@ func TestInstructionServiceStaleSnapshotDoesNotEnableDisabledAudit(t *testing.T)
 
 func TestInstructionServiceKeepsLastScopedSnapshotWhileNewerVersionLoads(t *testing.T) {
 	service := &InstructionService{}
-	service.snapshot.Store(instructionTestSnapshot(true, 7, "gpt-test", "trusted"))
+	service.snapshot.Store(instructionTestSnapshot(true, 7, "trusted"))
 	service.requireConfigVersion(8)
 	service.setLoadError("required configuration version is not available")
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"trusted"}`),
 	})
 	require.True(t, decision.Applicable)
 	require.True(t, decision.Allow)
 
-	disabled := instructionTestSnapshot(false, 7, "gpt-test", "trusted")
+	disabled := instructionTestSnapshot(false, 7, "trusted")
 	service.snapshot.Store(disabled)
 	decision = service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"untrusted"}`),
 	})
 	require.False(t, decision.Applicable)
 	require.True(t, decision.Allow)
 
-	enabled := instructionTestSnapshot(true, 7, "gpt-test", "trusted")
+	enabled := instructionTestSnapshot(true, 7, "trusted")
 	service.snapshot.Store(enabled)
 	decision = service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, UserID: 99, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 99, GroupID: instructionTestGroupID(99), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"untrusted"}`),
 	})
 	require.False(t, decision.Applicable)
@@ -296,11 +311,11 @@ func TestInstructionServiceKeepsLastScopedSnapshotWhileNewerVersionLoads(t *test
 
 func TestInstructionServiceRejectsSnapshotVersionRegression(t *testing.T) {
 	service := &InstructionService{}
-	current := instructionTestSnapshot(true, 7, "gpt-test", "trusted")
+	current := instructionTestSnapshot(true, 7, "trusted")
 	current.ConfigVersion = 9
 	require.NoError(t, service.storeSnapshot(current))
 
-	stale := instructionTestSnapshot(false, 7, "gpt-test", "trusted")
+	stale := instructionTestSnapshot(false, 7, "trusted")
 	stale.ConfigVersion = 8
 	require.Error(t, service.storeSnapshot(stale))
 	require.Same(t, current, service.snapshot.Load())
@@ -313,14 +328,14 @@ func TestInstructionServiceRejectsExpiredAndNotYetValidHashes(t *testing.T) {
 		{Digest: allowedDigest("trusted").Digest, ValidFrom: now.Add(time.Hour)},
 	} {
 		service := &InstructionService{}
-		snapshot := instructionTestSnapshot(true, 7, "gpt-test")
-		policy := snapshot.Policies[7]["gpt-test"]
+		snapshot := instructionTestSnapshot(true, 7)
+		policy := snapshot.Policies[7]
 		policy.Hashes = []instructionPolicyHash{hash}
-		snapshot.Policies[7]["gpt-test"] = policy
+		snapshot.Policies[7] = policy
 		service.snapshot.Store(snapshot)
 
 		decision := service.EvaluateInstruction(context.Background(), Request{
-			Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+			Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 			InstructionBody: []byte(`{"model":"gpt-test","instructions":"trusted"}`),
 		})
 		require.True(t, decision.Applicable)
@@ -331,10 +346,10 @@ func TestInstructionServiceRejectsExpiredAndNotYetValidHashes(t *testing.T) {
 
 func TestInstructionService47KBLatencyBudget(t *testing.T) {
 	service := &InstructionService{}
-	service.snapshot.Store(instructionTestSnapshot(true, 7, "gpt-test", "trusted"))
+	service.snapshot.Store(instructionTestSnapshot(true, 7, "trusted"))
 	filler := strings.Repeat("a", 47*1024)
 	request := Request{
-		Protocol: instructionAuditProtocol, UserID: 7, Model: "gpt-test",
+		Protocol: instructionAuditProtocol, UserID: 7, GroupID: instructionTestGroupID(7), Model: "gpt-test",
 		InstructionBody: []byte(`{"model":"gpt-test","instructions":"trusted","metadata":"` + filler + `"}`),
 	}
 	for range 20 {

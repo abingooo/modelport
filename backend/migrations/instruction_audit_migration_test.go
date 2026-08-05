@@ -31,3 +31,24 @@ func TestInstructionAuditMigrationIsDefaultOffAndStoresNoRequestBody(t *testing.
 		require.NotContains(t, sql, forbiddenColumn)
 	}
 }
+
+func TestInstructionAuditGroupScopeMigrationIsAdditiveAndIdempotent(t *testing.T) {
+	body, err := FS.ReadFile("199_instruction_audit_group_scope.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "create table if not exists instruction_audit_group_bindings")
+	require.Contains(t, sql, "group_id          bigint not null references groups(id)")
+	require.Contains(t, sql, "constraint uq_instruction_audit_group_binding unique (group_id, rule_set_id)")
+	require.Contains(t, sql, "add column if not exists group_id")
+	require.Contains(t, sql, "add column if not exists group_name_snapshot")
+	require.Contains(t, sql, "set value = 'false'")
+	require.Contains(t, sql, "not exists (select 1 from instruction_audit_group_bindings)")
+	for _, destructive := range []string{
+		"drop table instruction_audit_bindings",
+		"delete from instruction_audit_bindings",
+		"update instruction_audit_bindings",
+		"truncate instruction_audit_bindings",
+	} {
+		require.NotContains(t, sql, destructive)
+	}
+}
