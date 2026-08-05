@@ -227,6 +227,15 @@ func TestInstructionAuditPostgresBoundGroupFailsClosedWhenRuleBecomesIneffective
 	require.False(t, decision.Allow)
 	require.Equal(t, "hash_mismatch", decision.Reason)
 	require.Empty(t, decision.RuleSetIDs)
+	require.Zero(t, service.failedBlockedEventPersists.Load())
+
+	var persistedRuleSetIDs string
+	require.NoError(t, db.QueryRow(`
+		SELECT rule_set_ids::text
+		FROM instruction_audit_events
+		ORDER BY id DESC
+		LIMIT 1`).Scan(&persistedRuleSetIDs))
+	require.Equal(t, "[]", persistedRuleSetIDs)
 }
 
 func TestInstructionAuditPostgresPersistsMetadataAndRateLimitsOutbox(t *testing.T) {

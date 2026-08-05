@@ -673,7 +673,14 @@ func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	ruleSets, _ := json.Marshal(decision.RuleSetIDs)
+	ruleSetIDs := decision.RuleSetIDs
+	if ruleSetIDs == nil {
+		ruleSetIDs = []int64{}
+	}
+	ruleSets, err := json.Marshal(ruleSetIDs)
+	if err != nil {
+		return fmt.Errorf("marshal instruction audit rule set ids: %w", err)
+	}
 	latencyMS := int(decision.Latency.Milliseconds())
 	if latencyMS < 0 {
 		latencyMS = 0
