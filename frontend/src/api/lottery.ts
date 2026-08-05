@@ -41,6 +41,8 @@ export interface LotteryCampaign {
   starts_at: string
   ends_at: string
   draw_at?: string
+  full_draw_participant_limit: number | null
+  full_draw_reached_at?: string
   per_user_limit: number
   minimum_balance: number
   required_subscription_group_ids: number[]
@@ -48,6 +50,7 @@ export interface LotteryCampaign {
   eligibility_reason?: string
   user_entry_count: number
   entry_count: number
+  participant_count: number
   created_by?: number
   updated_by?: number
   created_at: string
@@ -96,6 +99,7 @@ export interface LotteryCampaignInput {
   starts_at: string
   ends_at: string
   draw_at: string | null
+  full_draw_participant_limit: number | null
   per_user_limit: number
   minimum_balance: number
   required_subscription_group_ids: number[]

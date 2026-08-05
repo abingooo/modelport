@@ -16,8 +16,8 @@ vi.mock('vue-i18n', async (importOriginal) => ({
 
 const campaign: LotteryCampaign = {
   id: 7, name: 'Harbor Launch', description: 'Launch campaign', mode: 'instant', status: 'active', state: 'active',
-  starts_at: '2026-07-01T00:00:00Z', ends_at: '2026-08-01T00:00:00Z', per_user_limit: 2,
-  minimum_balance: 0, required_subscription_group_ids: [], eligible: true, user_entry_count: 0, entry_count: 3,
+  starts_at: '2026-07-01T00:00:00Z', ends_at: '2026-08-01T00:00:00Z', full_draw_participant_limit: null, per_user_limit: 2,
+  minimum_balance: 0, required_subscription_group_ids: [], eligible: true, user_entry_count: 0, entry_count: 3, participant_count: 3,
   created_at: '2026-07-01T00:00:00Z', updated_at: '2026-07-01T00:00:00Z',
   prizes: [{ id: 1, campaign_id: 7, name: 'Port credit', prize_type: 'balance', balance_amount: 10,
     subscription_validity_days: 0, probability_bps: 2500, inventory: 5, awarded_count: 1, is_enabled: true,
@@ -67,5 +67,30 @@ describe('LotteryView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('lottery.balancePrize')
     expect(wrapper.text()).not.toContain('$')
+  })
+
+  it('shows unique participant progress for a full draw campaign', async () => {
+    api.list.mockResolvedValue(response([{
+      ...campaign, mode: 'scheduled', draw_at: '2026-08-01T00:00:00Z',
+      full_draw_participant_limit: 10, participant_count: 4, entry_count: 6,
+    }]))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('lottery.participantProgress')
+    expect(wrapper.text()).toContain('lottery.fullDrawRule')
+    expect(wrapper.get('[data-testid="full-draw-progress"]').attributes('style')).toContain('40%')
+  })
+
+  it('does not show the drawing message after a full draw completes', async () => {
+    api.list.mockResolvedValue(response([{
+      ...campaign, mode: 'scheduled', status: 'completed', state: 'completed', eligible: false,
+      draw_at: '2026-08-01T00:00:00Z', full_draw_participant_limit: 3,
+      full_draw_reached_at: '2026-07-20T00:00:00Z', participant_count: 3,
+    }]))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('lottery.fullDrawDrawing')
   })
 })

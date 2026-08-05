@@ -25,6 +25,9 @@ export default {
     probability: '概率 {value}%',
     attempts: '剩余 {remaining}/{total} 次',
     entryCount: '{count} 人次参与',
+    participantProgress: '{count}/{limit} 人已参与',
+    fullDrawRule: '满 {limit} 人提前开奖',
+    fullDrawDrawing: '已满员，正在开奖',
     participate: '立即参与',
     participating: '提交中...',
     eligibility: {
@@ -44,6 +47,7 @@ export default {
     errors: {
       LOTTERY_NOT_STARTED: '活动尚未开始', LOTTERY_ENDED: '活动已经结束', LOTTERY_UNAVAILABLE: '活动当前不可参与',
       LOTTERY_INELIGIBLE: '当前账户不符合参与资格', LOTTERY_LIMIT_REACHED: '参与次数已用完',
+      LOTTERY_CAPACITY_REACHED: '活动已满员，正在开奖',
       LOTTERY_IDEMPOTENCY_KEY_INVALID: '参与请求标识无效，请刷新后重试',
     },
     admin: {
@@ -51,11 +55,13 @@ export default {
       allModes: '全部模式', allStatuses: '全部状态', emptyTitle: '暂无抽奖活动', emptyDescription: '创建第一个原生抽奖活动',
       campaign: '活动', window: '活动周期', progress: '参与与奖品', status: '状态', actions: '操作',
       edit: '编辑活动', delete: '删除活动', entries: '参与记录', draw: '立即开奖', drawing: '开奖中...',
+      fullDrawBadge: '人满开奖',
       pause: '暂停', activate: '启用', complete: '结束活动', draft: '转为草稿',
       hasEntries: '已有参与记录，活动配置与奖品不可再修改',
       editor: {
         createTitle: '新建抽奖活动', editTitle: '编辑抽奖活动', name: '活动名称', description: '活动说明', mode: '开奖模式',
         status: '初始状态', startsAt: '开始时间', endsAt: '结束时间', drawAt: '开奖时间', perUserLimit: '每人次数',
+        fullDrawEnabled: '人满开奖', fullDrawParticipantLimit: '满员人数', fullDrawLimitInvalid: '满员人数必须是 1 至 1000000 的整数',
         minimumBalance: '最低余额', requiredGroups: '参与资格订阅', noGroupRequired: '不限制订阅', prizes: '奖品配置', addPrize: '添加奖品',
         prizeName: '奖品名称', prizeType: '奖品类型', balance: '余额', subscriptionCode: '订阅兑换码', balanceAmount: '余额金额',
         subscriptionGroup: '订阅分组', validityDays: '有效天数', probabilityBps: '概率（基点）', inventory: '库存', enabled: '启用',

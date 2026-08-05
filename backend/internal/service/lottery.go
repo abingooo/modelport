@@ -41,6 +41,7 @@ var (
 	ErrLotteryUnavailable       = infraerrors.Conflict("LOTTERY_UNAVAILABLE", "lottery campaign is unavailable")
 	ErrLotteryIneligible        = infraerrors.Forbidden("LOTTERY_INELIGIBLE", "user is not eligible for this lottery campaign")
 	ErrLotteryLimitReached      = infraerrors.Conflict("LOTTERY_LIMIT_REACHED", "lottery participation limit reached")
+	ErrLotteryCapacityReached   = infraerrors.Conflict("LOTTERY_CAPACITY_REACHED", "lottery campaign participant capacity reached")
 	ErrLotteryAlreadyDrawn      = infraerrors.Conflict("LOTTERY_ALREADY_DRAWN", "scheduled lottery has already been drawn")
 	ErrLotteryHasEntries        = infraerrors.Conflict("LOTTERY_HAS_ENTRIES", "lottery campaign with entries cannot change prizes or be deleted")
 	ErrLotteryInvalidTransition = infraerrors.Conflict("LOTTERY_INVALID_TRANSITION", "lottery campaign status transition is not allowed")
@@ -56,6 +57,8 @@ type LotteryCampaign struct {
 	StartsAt                     time.Time      `json:"starts_at"`
 	EndsAt                       time.Time      `json:"ends_at"`
 	DrawAt                       *time.Time     `json:"draw_at,omitempty"`
+	FullDrawParticipantLimit     *int           `json:"full_draw_participant_limit"`
+	FullDrawReachedAt            *time.Time     `json:"full_draw_reached_at,omitempty"`
 	PerUserLimit                 int            `json:"per_user_limit"`
 	MinimumBalance               float64        `json:"minimum_balance"`
 	RequiredSubscriptionGroupIDs []int64        `json:"required_subscription_group_ids"`
@@ -63,6 +66,7 @@ type LotteryCampaign struct {
 	EligibilityReason            string         `json:"eligibility_reason,omitempty"`
 	UserEntryCount               int            `json:"user_entry_count"`
 	EntryCount                   int            `json:"entry_count"`
+	ParticipantCount             int            `json:"participant_count"`
 	CreatedBy                    *int64         `json:"created_by,omitempty"`
 	UpdatedBy                    *int64         `json:"updated_by,omitempty"`
 	CreatedAt                    time.Time      `json:"created_at"`
@@ -129,6 +133,7 @@ type LotteryCampaignInput struct {
 	StartsAt                     time.Time           `json:"starts_at"`
 	EndsAt                       time.Time           `json:"ends_at"`
 	DrawAt                       *time.Time          `json:"draw_at"`
+	FullDrawParticipantLimit     *int                `json:"full_draw_participant_limit"`
 	PerUserLimit                 int                 `json:"per_user_limit"`
 	MinimumBalance               float64             `json:"minimum_balance"`
 	RequiredSubscriptionGroupIDs []int64             `json:"required_subscription_group_ids"`
@@ -167,6 +172,12 @@ type LotteryDrawResult struct {
 	BalanceRewardUserIDs []int64 `json:"-"`
 }
 
+type LotteryParticipationResult struct {
+	Entry             *LotteryEntry
+	Replayed          bool
+	FullDrawTriggered bool
+}
+
 type LotteryRandomSource interface {
 	Intn(max int) (int, error)
 	RedeemCode() (string, error)
@@ -181,7 +192,7 @@ type LotteryRepository interface {
 	Update(ctx context.Context, campaignID, actorUserID int64, input LotteryCampaignInput) (*LotteryCampaign, error)
 	SetStatus(ctx context.Context, campaignID, actorUserID int64, status string, now time.Time) (*LotteryCampaign, error)
 	Delete(ctx context.Context, campaignID int64) error
-	Participate(ctx context.Context, userID, campaignID int64, idempotencyKey string, now time.Time, random LotteryRandomSource) (*LotteryEntry, bool, error)
+	Participate(ctx context.Context, userID, campaignID int64, idempotencyKey string, now time.Time, random LotteryRandomSource) (*LotteryParticipationResult, error)
 	ListUserEntries(ctx context.Context, userID int64, params LotteryListParams) ([]LotteryEntry, int64, error)
 	ListAdminEntries(ctx context.Context, campaignID int64, params LotteryListParams) ([]LotteryEntry, int64, error)
 	ListDueScheduledCampaignIDs(ctx context.Context, now time.Time, limit int) ([]int64, error)
@@ -211,16 +222,18 @@ type LotteryService struct {
 	billingCache         *BillingCacheService
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 
-	startOnce sync.Once
-	stopOnce  sync.Once
-	stopCh    chan struct{}
-	doneCh    chan struct{}
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	stopCh     chan struct{}
+	doneCh     chan struct{}
+	drawWakeCh chan struct{}
 }
 
 func NewLotteryService(repo LotteryRepository, billingCache *BillingCacheService, authCacheInvalidator APIKeyAuthCacheInvalidator) *LotteryService {
 	return &LotteryService{
 		repo: repo, random: cryptoLotteryRandom{}, billingCache: billingCache,
 		authCacheInvalidator: authCacheInvalidator, stopCh: make(chan struct{}), doneCh: make(chan struct{}),
+		drawWakeCh: make(chan struct{}, 1),
 	}
 }
 
@@ -286,13 +299,17 @@ func (s *LotteryService) Participate(ctx context.Context, userID, campaignID int
 	if userID <= 0 || campaignID <= 0 || idempotencyKey == "" || len(idempotencyKey) > 128 {
 		return nil, infraerrors.BadRequest("LOTTERY_IDEMPOTENCY_KEY_INVALID", "a valid idempotency key is required")
 	}
-	entry, replayed, err := s.repo.Participate(ctx, userID, campaignID, idempotencyKey, time.Now().UTC(), s.random)
+	result, err := s.repo.Participate(ctx, userID, campaignID, idempotencyKey, time.Now().UTC(), s.random)
 	if err != nil {
 		return nil, err
 	}
-	entry.Replayed = replayed
-	if !replayed && entry.Status == LotteryEntryWon && entry.PrizeType == LotteryPrizeBalance {
+	entry := result.Entry
+	entry.Replayed = result.Replayed
+	if !result.Replayed && entry.Status == LotteryEntryWon && entry.PrizeType == LotteryPrizeBalance {
 		s.invalidateBalance(ctx, userID)
+	}
+	if result.FullDrawTriggered {
+		s.wakeDrawScheduler()
 	}
 	return entry, nil
 }
@@ -350,9 +367,18 @@ func (s *LotteryService) runScheduler() {
 		select {
 		case <-ticker.C:
 			s.drawDueCampaigns()
+		case <-s.drawWakeCh:
+			s.drawDueCampaigns()
 		case <-s.stopCh:
 			return
 		}
+	}
+}
+
+func (s *LotteryService) wakeDrawScheduler() {
+	select {
+	case s.drawWakeCh <- struct{}{}:
+	default:
 	}
 }
 
@@ -406,11 +432,15 @@ func normalizeLotteryCampaignInput(input *LotteryCampaignInput) error {
 	input.EndsAt = input.EndsAt.UTC()
 	if input.Mode == LotteryModeInstant {
 		input.DrawAt = nil
+		input.FullDrawParticipantLimit = nil
 	} else if input.DrawAt == nil || input.DrawAt.IsZero() || input.DrawAt.Before(input.EndsAt) {
 		return ErrLotteryInvalid
 	} else {
 		drawAt := input.DrawAt.UTC()
 		input.DrawAt = &drawAt
+	}
+	if input.FullDrawParticipantLimit != nil && (*input.FullDrawParticipantLimit < 1 || *input.FullDrawParticipantLimit > 1000000) {
+		return ErrLotteryInvalid
 	}
 	if input.PerUserLimit < 1 || input.PerUserLimit > 1000 || math.IsNaN(input.MinimumBalance) || math.IsInf(input.MinimumBalance, 0) || input.MinimumBalance < 0 {
 		return ErrLotteryInvalid

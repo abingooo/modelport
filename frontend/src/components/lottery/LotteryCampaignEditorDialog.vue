@@ -38,6 +38,14 @@
           <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('lottery.admin.editor.drawAt') }}</span>
           <input v-model="form.draw_at" type="datetime-local" class="input" required />
         </label>
+        <label v-if="form.mode === 'scheduled'" class="flex min-h-16 items-center gap-3 rounded-md border border-gray-200 px-3 py-2 dark:border-dark-700">
+          <input v-model="form.full_draw_enabled" data-testid="full-draw-toggle" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('lottery.admin.editor.fullDrawEnabled') }}</span>
+        </label>
+        <label v-if="form.mode === 'scheduled' && form.full_draw_enabled">
+          <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('lottery.admin.editor.fullDrawParticipantLimit') }}</span>
+          <input v-model.number="form.full_draw_participant_limit" data-testid="full-draw-limit" type="number" class="input" min="1" max="1000000" required />
+        </label>
         <label>
           <span class="mb-1.5 block text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('lottery.admin.editor.perUserLimit') }}</span>
           <input v-model.number="form.per_user_limit" type="number" class="input" min="1" max="1000" required />
@@ -165,6 +173,8 @@ interface EditorForm {
   starts_at: string
   ends_at: string
   draw_at: string
+  full_draw_enabled: boolean
+  full_draw_participant_limit: number
   per_user_limit: number
   minimum_balance: number
   required_subscription_group_ids: number[]
@@ -184,7 +194,11 @@ function emptyPrize(): EditorPrize {
   return { local_id: localID(), name: '', prize_type: 'balance', balance_amount: 1, subscription_group_id: null, subscription_validity_days: 0, probability_bps: 1000, inventory: 1, is_enabled: true }
 }
 function emptyForm(): EditorForm {
-  return { name: '', description: '', mode: 'instant', status: 'draft', starts_at: futureDate(10), ends_at: futureDate(1450), draw_at: futureDate(1450), per_user_limit: 1, minimum_balance: 0, required_subscription_group_ids: [], prizes: [emptyPrize()] }
+  return {
+    name: '', description: '', mode: 'instant', status: 'draft', starts_at: futureDate(10), ends_at: futureDate(1450),
+    draw_at: futureDate(1450), full_draw_enabled: false, full_draw_participant_limit: 100,
+    per_user_limit: 1, minimum_balance: 0, required_subscription_group_ids: [], prizes: [emptyPrize()],
+  }
 }
 
 const form = reactive<EditorForm>(emptyForm())
@@ -200,6 +214,8 @@ function resetForm() {
     starts_at: localDate(campaign.starts_at),
     ends_at: localDate(campaign.ends_at),
     draw_at: campaign.draw_at ? localDate(campaign.draw_at) : localDate(campaign.ends_at),
+    full_draw_enabled: campaign.full_draw_participant_limit != null,
+    full_draw_participant_limit: campaign.full_draw_participant_limit ?? 100,
     per_user_limit: campaign.per_user_limit,
     minimum_balance: campaign.minimum_balance,
     required_subscription_group_ids: [...campaign.required_subscription_group_ids],
@@ -237,6 +253,11 @@ function submit() {
   }
   if (endsAt <= startsAt) { validationError.value = t('lottery.admin.editor.invalidWindow'); return }
   if (drawAt && (Number.isNaN(drawAt.getTime()) || drawAt < endsAt)) { validationError.value = t('lottery.admin.editor.drawBeforeEnd'); return }
+  const fullDrawParticipantLimit = Number(form.full_draw_participant_limit)
+  if (form.mode === 'scheduled' && form.full_draw_enabled
+    && (!Number.isInteger(fullDrawParticipantLimit) || fullDrawParticipantLimit < 1 || fullDrawParticipantLimit > 1000000)) {
+    validationError.value = t('lottery.admin.editor.fullDrawLimitInvalid'); return
+  }
   if (probabilityTotal.value > 10000) { validationError.value = t('lottery.admin.editor.probabilityExceeded'); return }
   const invalidPrize = form.prizes.some((prize) => !prize.name || prize.probability_bps < 1 || prize.inventory < 1
     || (prize.prize_type === 'balance' ? prize.balance_amount <= 0 : !prize.subscription_group_id || prize.subscription_validity_days < 1))
@@ -250,6 +271,7 @@ function submit() {
     starts_at: startsAt.toISOString(),
     ends_at: endsAt.toISOString(),
     draw_at: drawAt?.toISOString() ?? null,
+    full_draw_participant_limit: form.mode === 'scheduled' && form.full_draw_enabled ? fullDrawParticipantLimit : null,
     per_user_limit: Number(form.per_user_limit),
     minimum_balance: Number(form.minimum_balance),
     required_subscription_group_ids: [...form.required_subscription_group_ids],
@@ -268,5 +290,8 @@ function submit() {
 }
 
 watch(() => props.show, (show) => { if (show) resetForm() })
-watch(() => form.mode, (mode) => { if (mode === 'scheduled' && !form.draw_at) form.draw_at = form.ends_at })
+watch(() => form.mode, (mode) => {
+  if (mode === 'scheduled' && !form.draw_at) form.draw_at = form.ends_at
+  if (mode === 'instant') form.full_draw_enabled = false
+})
 </script>

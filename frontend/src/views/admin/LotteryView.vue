@@ -46,7 +46,10 @@
               <tr v-for="campaign in campaigns" :key="campaign.id">
                 <td class="min-w-64 align-top">
                   <p class="font-medium text-gray-950 dark:text-white">{{ campaign.name }}</p>
-                  <div class="mt-2 flex flex-wrap gap-1.5"><span :class="['badge', campaign.mode === 'instant' ? 'border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-900 dark:bg-teal-950/40 dark:text-teal-300' : 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300']">{{ t(`lottery.mode.${campaign.mode}`) }}</span></div>
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    <span :class="['badge', campaign.mode === 'instant' ? 'border-teal-200 bg-teal-50 text-teal-700 dark:border-teal-900 dark:bg-teal-950/40 dark:text-teal-300' : 'border-sky-200 bg-sky-50 text-sky-700 dark:border-sky-900 dark:bg-sky-950/40 dark:text-sky-300']">{{ t(`lottery.mode.${campaign.mode}`) }}</span>
+                    <span v-if="campaign.full_draw_participant_limit" class="badge border-primary-200 bg-primary-50 text-primary-700 dark:border-primary-900 dark:bg-primary-950/40 dark:text-primary-300">{{ t('lottery.admin.fullDrawBadge') }}</span>
+                  </div>
                   <p v-if="campaign.entry_count > 0" class="mt-2 text-xs text-amber-700 dark:text-amber-300">{{ t('lottery.admin.hasEntries') }}</p>
                 </td>
                 <td class="min-w-56 align-top text-xs text-gray-600 dark:text-gray-300">
@@ -54,7 +57,8 @@
                   <p v-if="campaign.draw_at" class="mt-1 text-sky-700 dark:text-sky-300">{{ t('lottery.drawAt') }}: {{ formatDateTimeToMinute(campaign.draw_at) }}</p>
                 </td>
                 <td class="min-w-44 align-top text-sm text-gray-600 dark:text-gray-300">
-                  <p>{{ t('lottery.entryCount', { count: campaign.entry_count }) }}</p>
+                  <p v-if="campaign.full_draw_participant_limit">{{ t('lottery.participantProgress', { count: campaign.participant_count, limit: campaign.full_draw_participant_limit }) }}</p>
+                  <p :class="campaign.full_draw_participant_limit ? 'mt-1 text-xs text-gray-400' : ''">{{ t('lottery.entryCount', { count: campaign.entry_count }) }}</p>
                   <p class="mt-1">{{ t('lottery.prizes') }}: {{ campaign.prizes.length }}</p>
                   <p class="mt-1 text-xs text-gray-400">{{ totalProbability(campaign) }}/10000 bps</p>
                 </td>
@@ -64,8 +68,8 @@
                     <button type="button" class="icon-btn" :title="t('lottery.admin.entries')" @click="openEntries(campaign)"><Icon name="users" size="sm" /></button>
                     <button type="button" class="icon-btn" :title="t('lottery.admin.edit')" :disabled="campaign.entry_count > 0" @click="openEdit(campaign)"><Icon name="edit" size="sm" /></button>
                     <button v-if="campaign.mode === 'scheduled' && campaign.status === 'active' && drawReady(campaign)" type="button" class="btn btn-secondary btn-sm" :disabled="drawingID !== null" @click="pendingDraw = campaign"><Icon name="sparkles" size="sm" />{{ t('lottery.admin.draw') }}</button>
-                    <button v-if="campaign.status === 'active'" type="button" class="btn btn-secondary btn-sm" :disabled="statusUpdatingID !== null" @click="updateStatus(campaign, 'paused')">{{ t('lottery.admin.pause') }}</button>
-                    <button v-else-if="campaign.status !== 'completed'" type="button" class="btn btn-secondary btn-sm" :disabled="statusUpdatingID !== null" @click="updateStatus(campaign, 'active')">{{ t('lottery.admin.activate') }}</button>
+                    <button v-if="campaign.status === 'active' && !campaign.full_draw_reached_at" type="button" class="btn btn-secondary btn-sm" :disabled="statusUpdatingID !== null" @click="updateStatus(campaign, 'paused')">{{ t('lottery.admin.pause') }}</button>
+                    <button v-else-if="campaign.status !== 'active' && campaign.status !== 'completed'" type="button" class="btn btn-secondary btn-sm" :disabled="statusUpdatingID !== null" @click="updateStatus(campaign, 'active')">{{ t('lottery.admin.activate') }}</button>
                     <button v-if="campaign.mode === 'instant' && campaign.status !== 'completed'" type="button" class="icon-btn" :title="t('lottery.admin.complete')" :disabled="statusUpdatingID !== null" @click="updateStatus(campaign, 'completed')"><Icon name="checkCircle" size="sm" /></button>
                     <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('lottery.admin.delete')" :disabled="campaign.entry_count > 0" @click="pendingDelete = campaign"><Icon name="trash" size="sm" /></button>
                   </div>
@@ -196,7 +200,9 @@ async function loadEntries() {
 }
 function changeEntryPage(page: number) { entryPagination.page = page; void loadEntries() }
 function totalProbability(campaign: LotteryCampaign) { return campaign.prizes.reduce((sum, prize) => sum + (prize.is_enabled ? prize.probability_bps : 0), 0) }
-function drawReady(campaign: LotteryCampaign) { return Boolean(campaign.draw_at && Date.now() >= new Date(campaign.draw_at).getTime()) }
+function drawReady(campaign: LotteryCampaign) {
+  return Boolean(campaign.full_draw_reached_at || (campaign.draw_at && Date.now() >= new Date(campaign.draw_at).getTime()))
+}
 function stateClass(state: LotteryCampaign['state']) {
   if (state === 'active') return 'badge-success'
   if (state === 'not_started' || state === 'awaiting_draw') return 'badge-info'

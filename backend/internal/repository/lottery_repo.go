@@ -29,17 +29,19 @@ type lotterySQL interface {
 
 const lotteryCampaignColumns = `
 id, name, description, mode, status, starts_at, ends_at, draw_at,
-per_user_limit, minimum_balance, required_subscription_group_ids,
+full_draw_participant_limit, full_draw_reached_at, per_user_limit,
+minimum_balance, required_subscription_group_ids,
 created_by, updated_by, created_at, updated_at`
 
 func scanLotteryCampaign(scan func(...any) error) (*service.LotteryCampaign, error) {
 	campaign := &service.LotteryCampaign{}
 	var requiredGroupIDs pq.Int64Array
-	var drawAt sql.NullTime
+	var drawAt, fullDrawReachedAt sql.NullTime
+	var fullDrawParticipantLimit sql.NullInt64
 	var createdBy, updatedBy sql.NullInt64
 	if err := scan(
 		&campaign.ID, &campaign.Name, &campaign.Description, &campaign.Mode, &campaign.Status,
-		&campaign.StartsAt, &campaign.EndsAt, &drawAt, &campaign.PerUserLimit,
+		&campaign.StartsAt, &campaign.EndsAt, &drawAt, &fullDrawParticipantLimit, &fullDrawReachedAt, &campaign.PerUserLimit,
 		&campaign.MinimumBalance, &requiredGroupIDs, &createdBy, &updatedBy,
 		&campaign.CreatedAt, &campaign.UpdatedAt,
 	); err != nil {
@@ -48,6 +50,14 @@ func scanLotteryCampaign(scan func(...any) error) (*service.LotteryCampaign, err
 	if drawAt.Valid {
 		value := drawAt.Time
 		campaign.DrawAt = &value
+	}
+	if fullDrawParticipantLimit.Valid {
+		value := int(fullDrawParticipantLimit.Int64)
+		campaign.FullDrawParticipantLimit = &value
+	}
+	if fullDrawReachedAt.Valid {
+		value := fullDrawReachedAt.Time
+		campaign.FullDrawReachedAt = &value
 	}
 	if createdBy.Valid {
 		value := createdBy.Int64
@@ -161,7 +171,8 @@ func (r *lotteryRepository) decorateCampaign(ctx context.Context, queryer lotter
 	}
 	campaign.Prizes = prizes
 	campaign.State = lotteryCampaignState(campaign, now)
-	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*) FROM lottery_entries WHERE campaign_id = $1`, campaign.ID).Scan(&campaign.EntryCount); err != nil {
+	if err := queryer.QueryRowContext(ctx, `SELECT COUNT(*), COUNT(DISTINCT user_id)
+FROM lottery_entries WHERE campaign_id = $1`, campaign.ID).Scan(&campaign.EntryCount, &campaign.ParticipantCount); err != nil {
 		return fmt.Errorf("count lottery entries: %w", err)
 	}
 	if admin {
@@ -187,6 +198,9 @@ func lotteryCampaignState(campaign *service.LotteryCampaign, now time.Time) stri
 	}
 	if campaign.Status == service.LotteryCampaignDraft {
 		return "draft"
+	}
+	if campaign.FullDrawReachedAt != nil {
+		return "awaiting_draw"
 	}
 	if now.Before(campaign.StartsAt) {
 		return "not_started"
@@ -294,11 +308,11 @@ func (r *lotteryRepository) Create(ctx context.Context, actorUserID int64, input
 
 func insertLotteryCampaign(ctx context.Context, tx *sql.Tx, actorUserID int64, input service.LotteryCampaignInput) (*service.LotteryCampaign, error) {
 	row := tx.QueryRowContext(ctx, `INSERT INTO lottery_campaigns (
-name, description, mode, status, starts_at, ends_at, draw_at, per_user_limit,
-minimum_balance, required_subscription_group_ids, created_by, updated_by
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11) RETURNING `+lotteryCampaignColumns,
+name, description, mode, status, starts_at, ends_at, draw_at, full_draw_participant_limit,
+per_user_limit, minimum_balance, required_subscription_group_ids, created_by, updated_by
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12) RETURNING `+lotteryCampaignColumns,
 		input.Name, input.Description, input.Mode, input.Status, input.StartsAt, input.EndsAt,
-		input.DrawAt, input.PerUserLimit, input.MinimumBalance,
+		input.DrawAt, input.FullDrawParticipantLimit, input.PerUserLimit, input.MinimumBalance,
 		pq.Array(nonNilLotteryGroupIDs(input.RequiredSubscriptionGroupIDs)), actorUserID)
 	campaign, err := scanLotteryCampaign(row.Scan)
 	if err != nil {
@@ -377,10 +391,12 @@ func (r *lotteryRepository) Update(ctx context.Context, campaignID, actorUserID 
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE lottery_campaigns SET
 name=$2, description=$3, mode=$4, status=$5, starts_at=$6, ends_at=$7, draw_at=$8,
-per_user_limit=$9, minimum_balance=$10, required_subscription_group_ids=$11,
-updated_by=$12, updated_at=NOW() WHERE id=$1`, campaignID, input.Name, input.Description,
+full_draw_participant_limit=$9, full_draw_reached_at=NULL, per_user_limit=$10,
+minimum_balance=$11, required_subscription_group_ids=$12,
+updated_by=$13, updated_at=NOW() WHERE id=$1`, campaignID, input.Name, input.Description,
 		input.Mode, input.Status, input.StartsAt, input.EndsAt, input.DrawAt,
-		input.PerUserLimit, input.MinimumBalance, pq.Array(nonNilLotteryGroupIDs(input.RequiredSubscriptionGroupIDs)), actorUserID)
+		input.FullDrawParticipantLimit, input.PerUserLimit, input.MinimumBalance,
+		pq.Array(nonNilLotteryGroupIDs(input.RequiredSubscriptionGroupIDs)), actorUserID)
 	if err != nil {
 		return nil, fmt.Errorf("update lottery campaign: %w", err)
 	}
@@ -417,13 +433,18 @@ func (r *lotteryRepository) SetStatus(ctx context.Context, campaignID, actorUser
 	var currentStatus string
 	var mode string
 	var endsAt time.Time
-	if err := tx.QueryRowContext(ctx, `SELECT status, mode, ends_at FROM lottery_campaigns WHERE id=$1 FOR UPDATE`, campaignID).Scan(&currentStatus, &mode, &endsAt); err != nil {
+	var fullDrawReachedAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT status, mode, ends_at, full_draw_reached_at
+FROM lottery_campaigns WHERE id=$1 FOR UPDATE`, campaignID).Scan(&currentStatus, &mode, &endsAt, &fullDrawReachedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, service.ErrLotteryCampaignNotFound
 		}
 		return nil, fmt.Errorf("lock lottery campaign status: %w", err)
 	}
 	if currentStatus == service.LotteryCampaignCompleted && status != service.LotteryCampaignCompleted {
+		return nil, service.ErrLotteryInvalidTransition
+	}
+	if fullDrawReachedAt.Valid && status != currentStatus {
 		return nil, service.ErrLotteryInvalidTransition
 	}
 	if status == service.LotteryCampaignCompleted && mode == service.LotteryModeScheduled {
@@ -519,58 +540,73 @@ WHERE e.campaign_id=$1 AND e.user_id=$2 AND e.idempotency_key=$3`, campaignID, u
 	return entry, err
 }
 
-func (r *lotteryRepository) Participate(ctx context.Context, userID, campaignID int64, key string, now time.Time, random service.LotteryRandomSource) (*service.LotteryEntry, bool, error) {
+func (r *lotteryRepository) Participate(ctx context.Context, userID, campaignID int64, key string, now time.Time, random service.LotteryRandomSource) (*service.LotteryParticipationResult, error) {
 	if existing, err := getLotteryEntryByKey(ctx, r.db, campaignID, userID, key); err == nil {
-		return existing, true, nil
+		return &service.LotteryParticipationResult{Entry: existing, Replayed: true}, nil
 	} else if !errors.Is(err, service.ErrLotteryEntryNotFound) {
-		return nil, false, err
+		return nil, err
 	}
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
-		return nil, false, fmt.Errorf("begin lottery participation: %w", err)
+		return nil, fmt.Errorf("begin lottery participation: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	campaign, err := scanLotteryCampaign(tx.QueryRowContext(ctx, `SELECT `+lotteryCampaignColumns+` FROM lottery_campaigns WHERE id=$1 FOR UPDATE`, campaignID).Scan)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, false, service.ErrLotteryCampaignNotFound
+		return nil, service.ErrLotteryCampaignNotFound
 	}
 	if err != nil {
-		return nil, false, fmt.Errorf("lock lottery campaign: %w", err)
+		return nil, fmt.Errorf("lock lottery campaign: %w", err)
 	}
 	if existing, err := getLotteryEntryByKey(ctx, tx, campaignID, userID, key); err == nil {
-		return existing, true, nil
+		return &service.LotteryParticipationResult{Entry: existing, Replayed: true}, nil
 	} else if !errors.Is(err, service.ErrLotteryEntryNotFound) {
-		return nil, false, err
+		return nil, err
+	}
+	if campaign.FullDrawReachedAt != nil {
+		return nil, service.ErrLotteryCapacityReached
 	}
 	if campaign.Status != service.LotteryCampaignActive {
-		return nil, false, service.ErrLotteryUnavailable
+		return nil, service.ErrLotteryUnavailable
 	}
 	if now.Before(campaign.StartsAt) {
-		return nil, false, service.ErrLotteryNotStarted
+		return nil, service.ErrLotteryNotStarted
 	}
 	if !now.Before(campaign.EndsAt) {
-		return nil, false, service.ErrLotteryEnded
+		return nil, service.ErrLotteryEnded
 	}
 	eligible, _, count, err := lotteryUserEligibility(ctx, tx, campaign, userID, now)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if !eligible {
 		if count >= campaign.PerUserLimit {
-			return nil, false, service.ErrLotteryLimitReached
+			return nil, service.ErrLotteryLimitReached
 		}
-		return nil, false, service.ErrLotteryIneligible
+		return nil, service.ErrLotteryIneligible
+	}
+	participantCount := 0
+	isNewParticipant := false
+	if campaign.FullDrawParticipantLimit != nil {
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(DISTINCT user_id),
+NOT EXISTS (SELECT 1 FROM lottery_entries WHERE campaign_id=$1 AND user_id=$2)
+FROM lottery_entries WHERE campaign_id=$1`, campaignID, userID).Scan(&participantCount, &isNewParticipant); err != nil {
+			return nil, fmt.Errorf("count lottery campaign participants: %w", err)
+		}
+		if participantCount >= *campaign.FullDrawParticipantLimit {
+			return nil, service.ErrLotteryCapacityReached
+		}
 	}
 	status := service.LotteryEntryPending
 	var prize *service.LotteryPrize
 	if campaign.Mode == service.LotteryModeInstant {
 		prizes, loadErr := loadLotteryPrizes(ctx, tx, campaignID, true)
 		if loadErr != nil {
-			return nil, false, loadErr
+			return nil, loadErr
 		}
 		roll, randomErr := random.Intn(10000)
 		if randomErr != nil {
-			return nil, false, fmt.Errorf("generate lottery draw: %w", randomErr)
+			return nil, fmt.Errorf("generate lottery draw: %w", randomErr)
 		}
 		prize = service.SelectLotteryPrize(prizes, roll)
 		if prize == nil {
@@ -581,12 +617,25 @@ func (r *lotteryRepository) Participate(ctx context.Context, userID, campaignID 
 	}
 	entry, err := fulfillLotteryEntry(ctx, tx, campaign, userID, key, status, prize, now, random)
 	if err != nil {
-		return nil, false, err
+		return nil, err
+	}
+	fullDrawTriggered := campaign.FullDrawParticipantLimit != nil && isNewParticipant && participantCount+1 >= *campaign.FullDrawParticipantLimit
+	if fullDrawTriggered {
+		result, updateErr := tx.ExecContext(ctx, `UPDATE lottery_campaigns
+SET full_draw_reached_at=$2, updated_at=NOW()
+WHERE id=$1 AND full_draw_reached_at IS NULL`, campaignID, now)
+		if updateErr != nil {
+			return nil, fmt.Errorf("mark lottery campaign participant capacity: %w", updateErr)
+		}
+		rows, rowsErr := result.RowsAffected()
+		if rowsErr != nil || rows != 1 {
+			return nil, fmt.Errorf("mark lottery campaign participant capacity: update lost")
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, false, fmt.Errorf("commit lottery participation: %w", err)
+		return nil, fmt.Errorf("commit lottery participation: %w", err)
 	}
-	return entry, false, nil
+	return &service.LotteryParticipationResult{Entry: entry, FullDrawTriggered: fullDrawTriggered}, nil
 }
 
 func fulfillLotteryEntry(ctx context.Context, tx *sql.Tx, campaign *service.LotteryCampaign, userID int64, key, status string, prize *service.LotteryPrize, now time.Time, random service.LotteryRandomSource) (*service.LotteryEntry, error) {
@@ -760,9 +809,10 @@ ORDER BY e.created_at DESC,e.id DESC LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $
 
 func (r *lotteryRepository) ListDueScheduledCampaignIDs(ctx context.Context, now time.Time, limit int) ([]int64, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT c.id FROM lottery_campaigns c
-WHERE c.mode='scheduled' AND c.status='active' AND c.draw_at <= $1
+WHERE c.mode='scheduled' AND c.status='active'
+AND (c.draw_at <= $1 OR c.full_draw_reached_at IS NOT NULL)
 AND NOT EXISTS (SELECT 1 FROM lottery_draw_runs d WHERE d.campaign_id=c.id)
-ORDER BY c.draw_at,c.id LIMIT $2`, now, limit)
+ORDER BY COALESCE(c.full_draw_reached_at,c.draw_at),c.id LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list due lottery campaigns: %w", err)
 	}
@@ -804,7 +854,9 @@ func (r *lotteryRepository) DrawScheduled(ctx context.Context, campaignID int64,
 	if campaign.Mode != service.LotteryModeScheduled || campaign.Status != service.LotteryCampaignActive {
 		return nil, service.ErrLotteryUnavailable
 	}
-	if campaign.DrawAt == nil || now.Before(*campaign.DrawAt) {
+	fullDrawReady := campaign.FullDrawReachedAt != nil && !now.Before(*campaign.FullDrawReachedAt)
+	timeDrawReady := campaign.DrawAt != nil && !now.Before(*campaign.DrawAt)
+	if !fullDrawReady && !timeDrawReady {
 		return nil, service.ErrLotteryNotStarted
 	}
 	prizes, err := loadLotteryPrizes(ctx, tx, campaignID, true)
@@ -862,7 +914,15 @@ campaign_id,participant_count,winner_count,started_at,completed_at,triggered_by
 	if _, err := tx.ExecContext(ctx, `UPDATE lottery_campaigns SET status='completed',updated_at=NOW(),updated_by=COALESCE($2,updated_by) WHERE id=$1`, campaignID, triggeredBy); err != nil {
 		return nil, fmt.Errorf("complete scheduled lottery campaign: %w", err)
 	}
-	metadata, _ := json.Marshal(map[string]int{"participants": result.ParticipantCount, "winners": result.WinnerCount})
+	trigger := "scheduled_time"
+	if campaign.FullDrawReachedAt != nil {
+		trigger = "capacity"
+	} else if triggeredBy != nil {
+		trigger = "manual"
+	}
+	metadata, _ := json.Marshal(map[string]any{
+		"participants": result.ParticipantCount, "winners": result.WinnerCount, "trigger": trigger,
+	})
 	if _, err := tx.ExecContext(ctx, `INSERT INTO lottery_events (campaign_id,event_type,metadata,created_at)
 VALUES ($1,'scheduled_draw_completed',$2,$3)`, campaignID, metadata, now); err != nil {
 		return nil, fmt.Errorf("audit scheduled lottery draw: %w", err)

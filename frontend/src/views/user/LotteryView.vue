@@ -35,7 +35,11 @@
                   <span :class="['badge', stateClass(campaign.state)]">{{ t(`lottery.state.${campaign.state}`) }}</span>
                 </div>
               </div>
-              <span class="text-xs text-gray-400 dark:text-gray-500">{{ t('lottery.entryCount', { count: campaign.entry_count }) }}</span>
+              <div class="shrink-0 text-right text-xs text-gray-400 dark:text-gray-500">
+                <span v-if="campaign.full_draw_participant_limit">{{ t('lottery.participantProgress', { count: campaign.participant_count, limit: campaign.full_draw_participant_limit }) }}</span>
+                <span v-else>{{ t('lottery.entryCount', { count: campaign.entry_count }) }}</span>
+                <span v-if="campaign.full_draw_participant_limit && campaign.entry_count !== campaign.participant_count" class="mt-1 block">{{ t('lottery.entryCount', { count: campaign.entry_count }) }}</span>
+              </div>
             </div>
 
             <p v-if="campaign.description" class="mt-4 whitespace-pre-line text-sm leading-6 text-gray-600 dark:text-gray-300">{{ campaign.description }}</p>
@@ -45,6 +49,16 @@
               <div class="flex items-center gap-2"><Icon name="clock" size="sm" /><span>{{ t('lottery.endsAt') }}: {{ formatDateTimeToMinute(campaign.ends_at) }}</span></div>
               <div v-if="campaign.draw_at" class="flex items-center gap-2 sm:col-span-2"><Icon name="sparkles" size="sm" /><span>{{ t('lottery.drawAt') }}: {{ formatDateTimeToMinute(campaign.draw_at) }}</span></div>
             </dl>
+
+            <div v-if="campaign.full_draw_participant_limit" class="mt-4">
+              <div class="flex items-center justify-between gap-3 text-xs">
+                <span class="font-medium text-gray-600 dark:text-gray-300">{{ t('lottery.fullDrawRule', { limit: campaign.full_draw_participant_limit }) }}</span>
+                <span v-if="campaign.full_draw_reached_at && campaign.status !== 'completed'" class="text-primary-600 dark:text-primary-300">{{ t('lottery.fullDrawDrawing') }}</span>
+              </div>
+              <div class="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100 dark:bg-dark-700">
+                <div data-testid="full-draw-progress" class="h-full rounded-full bg-primary-500 transition-[width] duration-300" :style="{ width: `${fullDrawProgress(campaign)}%` }" />
+              </div>
+            </div>
 
             <div class="mt-5">
               <p class="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400">{{ t('lottery.prizes') }}</p>
@@ -209,6 +223,10 @@ function refreshActiveTab() {
 function changeCampaignPage(page: number) { campaignPagination.value.page = page; void loadCampaigns() }
 function changeHistoryPage(page: number) { historyPagination.value.page = page; void loadHistory() }
 function remainingAttempts(campaign: LotteryCampaign) { return Math.max(0, campaign.per_user_limit - campaign.user_entry_count) }
+function fullDrawProgress(campaign: LotteryCampaign) {
+  if (!campaign.full_draw_participant_limit) return 0
+  return Math.min(100, Math.max(0, campaign.participant_count / campaign.full_draw_participant_limit * 100))
+}
 function eligibilityText(campaign: LotteryCampaign) { return t(`lottery.eligibility.${campaign.eligibility_reason || campaign.state}`) }
 function formatProbability(bps: number) { return (bps / 100).toFixed(bps % 100 === 0 ? 0 : 2) }
 function prizeSummary(prize: LotteryPrize) {

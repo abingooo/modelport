@@ -59,13 +59,13 @@ VALUES ($1,'test','user','active',0) RETURNING id`, fmt.Sprintf("lottery-%d@exam
 		waitGroup.Add(1)
 		go func(index int) {
 			defer waitGroup.Done()
-			entry, _, participateErr := repo.Participate(ctx, userID, campaign.ID,
+			result, participateErr := repo.Participate(ctx, userID, campaign.ID,
 				fmt.Sprintf("request-%d", index), time.Now().UTC(), fixedLotteryRandom{roll: 0})
 			if participateErr != nil {
 				errorsCh <- participateErr
 				return
 			}
-			entries <- entry
+			entries <- result.Entry
 		}(index)
 	}
 	waitGroup.Wait()
@@ -87,13 +87,13 @@ VALUES ($1,'test','user','active',0) RETURNING id`, fmt.Sprintf("lottery-%d@exam
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT balance FROM users WHERE id=$1`, userID).Scan(&balance))
 	require.Equal(t, 10.0, balance)
 
-	first, replayed, err := repo.Participate(ctx, userID, campaign.ID, "request-0", time.Now().UTC(), fixedLotteryRandom{roll: 0})
+	firstResult, err := repo.Participate(ctx, userID, campaign.ID, "request-0", time.Now().UTC(), fixedLotteryRandom{roll: 0})
 	require.NoError(t, err)
-	require.True(t, replayed)
-	second, replayed, err := repo.Participate(ctx, userID, campaign.ID, "request-0", time.Now().UTC(), fixedLotteryRandom{roll: 9999})
+	require.True(t, firstResult.Replayed)
+	secondResult, err := repo.Participate(ctx, userID, campaign.ID, "request-0", time.Now().UTC(), fixedLotteryRandom{roll: 9999})
 	require.NoError(t, err)
-	require.True(t, replayed)
-	require.Equal(t, first.ID, second.ID)
+	require.True(t, secondResult.Replayed)
+	require.Equal(t, firstResult.Entry.ID, secondResult.Entry.ID)
 
 	var entryCount, awardedCount, balanceEvents int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM lottery_entries WHERE campaign_id=$1`, campaign.ID).Scan(&entryCount))
@@ -142,10 +142,10 @@ VALUES ($1,'active','subscription') RETURNING id`, fmt.Sprintf("lottery-subscrip
 		_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
 	})
 
-	entry, replayed, err := repo.Participate(ctx, userID, campaign.ID, "scheduled-entry", time.Now().UTC(), fixedLotteryRandom{})
+	participation, err := repo.Participate(ctx, userID, campaign.ID, "scheduled-entry", time.Now().UTC(), fixedLotteryRandom{})
 	require.NoError(t, err)
-	require.False(t, replayed)
-	require.Equal(t, service.LotteryEntryPending, entry.Status)
+	require.False(t, participation.Replayed)
+	require.Equal(t, service.LotteryEntryPending, participation.Entry.Status)
 
 	result, err := repo.DrawScheduled(ctx, campaign.ID, &userID, drawAt.Add(time.Second), fixedLotteryRandom{roll: 0})
 	require.NoError(t, err)
@@ -183,6 +183,111 @@ WHERE user_id=$1 AND group_id=$2`, userID, groupID).Scan(&subscriptionCount))
 	var codeCount int
 	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM redeem_codes WHERE id=$1`, rewardCodeID).Scan(&codeCount))
 	require.Equal(t, 1, codeCount)
+}
+
+func TestLotteryRepositoryFullDrawCountsUniqueUsersAndClosesAtCapacity(t *testing.T) {
+	ctx := context.Background()
+	suffix := time.Now().UnixNano()
+	userIDs := make([]int64, 4)
+	for index := range userIDs {
+		require.NoError(t, integrationDB.QueryRowContext(ctx, `INSERT INTO users (email,password_hash,role,status,balance)
+VALUES ($1,'test','user','active',0) RETURNING id`, fmt.Sprintf("lottery-full-%d-%d@example.com", suffix, index)).Scan(&userIDs[index]))
+	}
+
+	repo := NewLotteryRepository(integrationDB)
+	now := time.Now().UTC()
+	endsAt := now.Add(time.Hour)
+	drawAt := endsAt.Add(time.Hour)
+	participantLimit := 3
+	campaign, err := repo.Create(ctx, userIDs[0], service.LotteryCampaignInput{
+		Name: "Full draw capacity test", Mode: service.LotteryModeScheduled,
+		Status: service.LotteryCampaignActive, StartsAt: now.Add(-time.Minute), EndsAt: endsAt,
+		DrawAt: &drawAt, FullDrawParticipantLimit: &participantLimit, PerUserLimit: 2,
+		Prizes: []service.LotteryPrizeInput{{
+			Name: "Capacity reward", PrizeType: service.LotteryPrizeBalance,
+			BalanceAmount: 1, ProbabilityBPS: 10000, Inventory: 3, IsEnabled: true,
+		}},
+	})
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM lottery_events WHERE campaign_id=$1`, campaign.ID)
+		_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM lottery_entries WHERE campaign_id=$1`, campaign.ID)
+		_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM lottery_draw_runs WHERE campaign_id=$1`, campaign.ID)
+		_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM lottery_campaigns WHERE id=$1`, campaign.ID)
+		for _, userID := range userIDs {
+			_, _ = integrationDB.ExecContext(context.Background(), `DELETE FROM users WHERE id=$1`, userID)
+		}
+	})
+
+	first, err := repo.Participate(ctx, userIDs[0], campaign.ID, "user-0-entry-1", now, fixedLotteryRandom{})
+	require.NoError(t, err)
+	require.False(t, first.FullDrawTriggered)
+	second, err := repo.Participate(ctx, userIDs[0], campaign.ID, "user-0-entry-2", now, fixedLotteryRandom{})
+	require.NoError(t, err)
+	require.False(t, second.FullDrawTriggered, "a repeat participant must not consume another participant slot")
+
+	type participationOutcome struct {
+		userID int64
+		key    string
+		result *service.LotteryParticipationResult
+		err    error
+	}
+	outcomes := make(chan participationOutcome, 3)
+	var waitGroup sync.WaitGroup
+	for index := 1; index < len(userIDs); index++ {
+		waitGroup.Add(1)
+		go func(userID int64, key string) {
+			defer waitGroup.Done()
+			result, participateErr := repo.Participate(ctx, userID, campaign.ID, key, time.Now().UTC(), fixedLotteryRandom{})
+			outcomes <- participationOutcome{userID: userID, key: key, result: result, err: participateErr}
+		}(userIDs[index], fmt.Sprintf("user-%d-entry", index))
+	}
+	waitGroup.Wait()
+	close(outcomes)
+
+	successes := make([]participationOutcome, 0, 2)
+	capacityErrors := 0
+	triggered := 0
+	for outcome := range outcomes {
+		if outcome.err != nil {
+			require.ErrorIs(t, outcome.err, service.ErrLotteryCapacityReached)
+			capacityErrors++
+			continue
+		}
+		successes = append(successes, outcome)
+		if outcome.result.FullDrawTriggered {
+			triggered++
+		}
+	}
+	require.Len(t, successes, 2)
+	require.Equal(t, 1, capacityErrors)
+	require.Equal(t, 1, triggered)
+
+	fullCampaign, err := repo.GetForAdmin(ctx, campaign.ID, time.Now().UTC())
+	require.NoError(t, err)
+	require.Equal(t, 3, fullCampaign.ParticipantCount)
+	require.Equal(t, 4, fullCampaign.EntryCount)
+	require.NotNil(t, fullCampaign.FullDrawReachedAt)
+	require.Equal(t, "awaiting_draw", fullCampaign.State)
+
+	replayed, err := repo.Participate(ctx, successes[0].userID, campaign.ID, successes[0].key, time.Now().UTC(), fixedLotteryRandom{})
+	require.NoError(t, err)
+	require.True(t, replayed.Replayed, "idempotent retries must still work after capacity is reached")
+
+	dueIDs, err := repo.ListDueScheduledCampaignIDs(ctx, time.Now().UTC(), 20)
+	require.NoError(t, err)
+	require.Contains(t, dueIDs, campaign.ID, "a full campaign must be due before its scheduled draw time")
+
+	drawResult, err := repo.DrawScheduled(ctx, campaign.ID, nil, time.Now().UTC(), fixedLotteryRandom{roll: 0})
+	require.NoError(t, err)
+	require.Equal(t, 4, drawResult.ParticipantCount)
+	require.Equal(t, 3, drawResult.WinnerCount)
+
+	var trigger string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `SELECT metadata->>'trigger' FROM lottery_events
+WHERE campaign_id=$1 AND event_type='scheduled_draw_completed'`, campaign.ID).Scan(&trigger))
+	require.Equal(t, "capacity", trigger)
 }
 
 func TestLotteryRepositoryRejectsInvalidEligibilitySubscriptionGroup(t *testing.T) {

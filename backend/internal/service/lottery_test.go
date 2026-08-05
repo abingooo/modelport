@@ -79,6 +79,28 @@ func TestNormalizeLotteryCampaignInputRequiresScheduledDrawAfterEntryWindow(t *t
 	require.NoError(t, normalizeLotteryCampaignInput(&input))
 }
 
+func TestNormalizeLotteryCampaignInputValidatesFullDrawParticipantLimit(t *testing.T) {
+	input := validLotteryInput()
+	input.Mode = LotteryModeScheduled
+	drawAt := input.EndsAt
+	input.DrawAt = &drawAt
+	limit := 250
+	input.FullDrawParticipantLimit = &limit
+	require.NoError(t, normalizeLotteryCampaignInput(&input))
+	require.Equal(t, 250, *input.FullDrawParticipantLimit)
+
+	limit = 0
+	require.ErrorIs(t, normalizeLotteryCampaignInput(&input), ErrLotteryInvalid)
+	limit = 1000001
+	require.ErrorIs(t, normalizeLotteryCampaignInput(&input), ErrLotteryInvalid)
+
+	input = validLotteryInput()
+	limit = 10
+	input.FullDrawParticipantLimit = &limit
+	require.NoError(t, normalizeLotteryCampaignInput(&input))
+	require.Nil(t, input.FullDrawParticipantLimit)
+}
+
 func TestNormalizeLotteryCampaignInputValidatesPrizePayload(t *testing.T) {
 	groupID := int64(7)
 	tests := []struct {

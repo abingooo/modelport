@@ -49,7 +49,8 @@ describe('Admin LotteryView', () => {
     const baseCampaign = {
       status: 'active', state: 'active', starts_at: '2026-01-01T00:00:00Z',
       ends_at: '2026-01-02T00:00:00Z', per_user_limit: 1, minimum_balance: 0,
-      required_subscription_group_ids: [], entry_count: 0, prizes: [],
+      required_subscription_group_ids: [], full_draw_participant_limit: null,
+      participant_count: 0, entry_count: 0, prizes: [],
     }
     lotteryAdmin.list.mockResolvedValue({
       items: [
@@ -63,5 +64,24 @@ describe('Admin LotteryView', () => {
     await flushPromises()
 
     expect(wrapper.findAll('button[title="lottery.admin.complete"]')).toHaveLength(1)
+  })
+
+  it('allows recovery draw but not pausing after capacity is reached', async () => {
+    lotteryAdmin.list.mockResolvedValue({
+      items: [{
+        id: 3, name: 'Capacity draw', mode: 'scheduled', status: 'active', state: 'awaiting_draw',
+        starts_at: '2098-01-01T00:00:00Z', ends_at: '2099-01-01T00:00:00Z', draw_at: '2099-01-02T00:00:00Z',
+        full_draw_participant_limit: 10, full_draw_reached_at: '2026-08-06T00:00:00Z', participant_count: 10,
+        per_user_limit: 1, minimum_balance: 0, required_subscription_group_ids: [], entry_count: 10, prizes: [],
+      }],
+      total: 1, page: 1, page_size: 20, pages: 1,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findAll('button').some((button) => button.text().includes('lottery.admin.draw'))).toBe(true)
+    expect(wrapper.findAll('button').some((button) => button.text().includes('lottery.admin.pause'))).toBe(false)
+    expect(wrapper.findAll('button').some((button) => button.text().includes('lottery.admin.activate'))).toBe(false)
   })
 })

@@ -36,7 +36,22 @@ describe('LotteryCampaignEditorDialog', () => {
     await wrapper.get('form').trigger('submit')
     await flushPromises()
     const payload = wrapper.emitted('save')?.[0]?.[0] as any
-    expect(payload).toMatchObject({ name: 'Port launch draw', mode: 'instant', draw_at: null })
+    expect(payload).toMatchObject({ name: 'Port launch draw', mode: 'instant', draw_at: null, full_draw_participant_limit: null })
     expect(payload.prizes[0]).toMatchObject({ prize_type: 'balance', probability_bps: 2500, subscription_group_id: null })
+  })
+
+  it('emits a participant limit only for scheduled full draws', async () => {
+    const wrapper = mountEditor()
+    const textInputs = wrapper.findAll('input').filter((input) => input.attributes('type') === undefined)
+    await textInputs[0].setValue('Capacity draw')
+    await textInputs[1].setValue('Balance reward')
+    await wrapper.find('select').setValue('scheduled')
+    await wrapper.get('[data-testid="full-draw-toggle"]').setValue(true)
+    await wrapper.get('[data-testid="full-draw-limit"]').setValue('25')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    const payload = wrapper.emitted('save')?.[0]?.[0] as any
+    expect(payload).toMatchObject({ mode: 'scheduled', full_draw_participant_limit: 25 })
   })
 })
