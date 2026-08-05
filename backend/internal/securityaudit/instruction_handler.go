@@ -33,7 +33,7 @@ func (h *InstructionAdminHandler) UpdateEnabled(c *gin.Context) {
 		return
 	}
 	overview, before, err := h.service.UpdateEnabled(c.Request.Context(), request)
-	fields := map[string]any{"before": before, "after": request.Enabled, "confirm_no_rules": request.ConfirmNoRules}
+	fields := map[string]any{"before": before, "after": request.Enabled}
 	if overview != nil {
 		fields["config_version"] = overview.ConfigVersion
 	}
@@ -131,8 +131,8 @@ func (h *InstructionAdminHandler) saveRuleSet(c *gin.Context, id int64) {
 	response.Success(c, item)
 }
 
-func (h *InstructionAdminHandler) ListBindings(c *gin.Context) {
-	items, err := h.service.ListBindings(c.Request.Context())
+func (h *InstructionAdminHandler) ListGroupBindings(c *gin.Context) {
+	items, err := h.service.ListGroupBindings(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -140,39 +140,39 @@ func (h *InstructionAdminHandler) ListBindings(c *gin.Context) {
 	response.Success(c, items)
 }
 
-func (h *InstructionAdminHandler) SaveBinding(c *gin.Context) {
-	var request CreateInstructionBindingRequest
+func (h *InstructionAdminHandler) SaveGroupBindings(c *gin.Context) {
+	var request SaveInstructionGroupBindingsRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
-		h.setAdminAudit(c, "failed", "instruction_audit_invalid_binding_request", nil)
-		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_binding_request", "绑定请求无效"))
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_group_binding_request", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_group_binding_request", "分组绑定请求无效"))
 		return
 	}
-	item, err := h.service.SaveBinding(c.Request.Context(), request, adminID(c))
+	items, err := h.service.SaveGroupBindings(c.Request.Context(), request, adminID(c))
 	if err != nil {
-		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"user_id": request.UserID, "model": request.Model, "rule_set_id": request.RuleSetID})
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"group_count": len(request.GroupIDs), "rule_set_id": request.RuleSetID})
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.setAdminAudit(c, "success", "", map[string]any{"binding_id": item.ID, "user_id": item.UserID, "model": item.Model, "rule_set_id": item.RuleSetID})
-	response.Success(c, item)
+	h.setAdminAudit(c, "success", "", map[string]any{"binding_count": len(items), "group_ids": request.GroupIDs, "rule_set_id": request.RuleSetID})
+	response.Success(c, items)
 }
 
-func (h *InstructionAdminHandler) DeleteBinding(c *gin.Context) {
-	id, ok := instructionIDParam(c, "binding")
+func (h *InstructionAdminHandler) DeleteGroupBinding(c *gin.Context) {
+	id, ok := instructionIDParam(c, "group_binding")
 	if !ok {
 		return
 	}
-	if err := h.service.DeleteBinding(c.Request.Context(), id); err != nil {
-		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"binding_id": id})
+	if err := h.service.DeleteGroupBinding(c.Request.Context(), id); err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"group_binding_id": id})
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.setAdminAudit(c, "success", "", map[string]any{"binding_id": id})
+	h.setAdminAudit(c, "success", "", map[string]any{"group_binding_id": id})
 	response.Success(c, gin.H{"deleted": true})
 }
 
-func (h *InstructionAdminHandler) SearchUsers(c *gin.Context) {
-	items, err := h.service.SearchUsers(c.Request.Context(), c.Query("q"))
+func (h *InstructionAdminHandler) ListGroupOptions(c *gin.Context) {
+	items, err := h.service.ListGroupOptions(c.Request.Context())
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

@@ -22,7 +22,7 @@
           </p>
         </div>
         <div class="flex items-center gap-2">
-          <router-link to="/admin/settings" class="btn btn-secondary">
+          <router-link :to="{ path: '/admin/settings', query: { tab: 'features' } }" class="btn btn-secondary">
             <Icon name="cog" size="sm" />
             {{ t('admin.instructionAudit.systemSettings') }}
           </router-link>
@@ -124,8 +124,8 @@
             <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
               <thead class="bg-gray-50 dark:bg-dark-800/70">
                 <tr>
-                  <th class="table-th">{{ t('admin.instructionAudit.user') }}</th>
-                  <th class="table-th">{{ t('admin.instructionAudit.model') }}</th>
+                  <th class="table-th">{{ t('admin.instructionAudit.group') }}</th>
+                  <th class="table-th">{{ t('admin.instructionAudit.platform') }}</th>
                   <th class="table-th">{{ t('admin.instructionAudit.ruleSet') }}</th>
                   <th class="table-th">{{ t('common.status') }}</th>
                   <th class="table-th text-right">{{ t('common.actions') }}</th>
@@ -134,12 +134,20 @@
               <tbody class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-800">
                 <tr v-for="binding in bindings" :key="binding.id">
                   <td class="table-td">
-                    <p class="font-medium text-gray-900 dark:text-white">{{ binding.user_email || binding.username || `#${binding.user_id}` }}</p>
-                    <p class="text-xs text-gray-400">#{{ binding.user_id }}</p>
+                    <p class="font-medium text-gray-900 dark:text-white">{{ binding.group_name }}</p>
+                    <p class="text-xs text-gray-400">#{{ binding.group_id }}</p>
                   </td>
-                  <td class="table-td font-mono text-xs text-gray-700 dark:text-gray-200">{{ binding.model }}</td>
+                  <td class="table-td">
+                    <span class="font-mono text-xs text-gray-700 dark:text-gray-200">{{ binding.platform }}</span>
+                    <span v-if="binding.group_status !== 'active'" class="ml-2" :class="statusPill('disabled')">{{ t('common.disabled') }}</span>
+                  </td>
                   <td class="table-td">{{ binding.rule_set_name }}</td>
-                  <td class="table-td"><span :class="statusPill(binding.enabled ? 'active' : 'disabled')">{{ binding.enabled ? t('common.enabled') : t('common.disabled') }}</span></td>
+                  <td class="table-td">
+                    <div class="flex items-center gap-3">
+                      <Toggle :model-value="binding.enabled" :disabled="saving" @update:model-value="setBindingEnabled(binding, $event)" />
+                      <span v-if="binding.enabled && !binding.effective" :class="statusPill('invalid')">{{ t('admin.instructionAudit.ineffectiveRule') }}</span>
+                    </div>
+                  </td>
                   <td class="table-td text-right">
                     <button type="button" class="btn btn-ghost btn-sm text-red-600 dark:text-red-400" :title="t('common.delete')" :aria-label="t('common.delete')" @click="requestDeleteBinding(binding)">
                       <Icon name="trash" size="sm" />
@@ -231,6 +239,7 @@
               <tr>
                 <th class="table-th">{{ t('admin.instructionAudit.time') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.user') }}</th>
+                <th class="table-th">{{ t('admin.instructionAudit.group') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.model') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.fieldOne') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.fieldTwo') }}</th>
@@ -247,6 +256,10 @@
                 <td class="table-td">
                   <p class="text-sm text-gray-900 dark:text-white">{{ event.user_email || '-' }}</p>
                   <p class="text-xs text-gray-400">#{{ event.user_id || '-' }} / key #{{ event.api_key_id || '-' }}</p>
+                </td>
+                <td class="table-td">
+                  <p class="text-sm text-gray-900 dark:text-white">{{ event.group_name || '-' }}</p>
+                  <p class="text-xs text-gray-400">#{{ event.group_id || '-' }}</p>
                 </td>
                 <td class="table-td font-mono text-xs">{{ event.model }}</td>
                 <td class="table-td"><FieldDigest :field="event.instructions" @candidate="createCandidate(event.id, 'instructions')" /></td>
@@ -369,19 +382,27 @@
     <BaseDialog :show="bindingDialog.show" :title="t('admin.instructionAudit.addBinding')" width="normal" @close="bindingDialog.show = false">
       <div class="space-y-4">
         <div>
-          <label class="input-label">{{ t('admin.instructionAudit.user') }}</label>
-          <div class="flex gap-2">
-            <input v-model.trim="bindingDialog.search" class="input" :placeholder="t('admin.instructionAudit.searchUsers')" @keyup.enter="searchUsers" />
-            <button type="button" class="btn btn-secondary" :title="t('common.search')" :aria-label="t('common.search')" @click="searchUsers"><Icon name="search" size="sm" /></button>
+          <div class="flex items-center justify-between gap-3">
+            <label class="input-label mb-0">{{ t('admin.instructionAudit.groups') }}</label>
+            <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.selectedGroups', { count: bindingDialog.groupIds.length }) }}</span>
           </div>
-          <select v-model.number="bindingDialog.userId" class="input mt-2">
-            <option :value="0">{{ t('admin.instructionAudit.selectUser') }}</option>
-            <option v-for="user in userOptions" :key="user.id" :value="user.id">{{ user.email || user.username || `#${user.id}` }} (#{{ user.id }})</option>
-          </select>
-        </div>
-        <div>
-          <label class="input-label">{{ t('admin.instructionAudit.model') }}</label>
-          <input v-model.trim="bindingDialog.model" class="input font-mono" maxlength="255" />
+          <input v-model.trim="bindingDialog.search" type="search" class="input mt-2" :placeholder="t('admin.instructionAudit.searchGroups')" />
+          <div class="mt-2 flex items-center justify-end gap-3 text-xs">
+            <button type="button" class="font-medium text-primary-600 hover:underline dark:text-primary-400" @click="selectVisibleGroups">{{ t('admin.instructionAudit.selectVisible') }}</button>
+            <button type="button" class="font-medium text-gray-500 hover:underline dark:text-gray-400" @click="bindingDialog.groupIds = []">{{ t('admin.instructionAudit.clearSelection') }}</button>
+          </div>
+          <div class="mt-2 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-dark-600">
+            <label v-for="group in filteredGroupOptions" :key="group.id" class="flex cursor-pointer items-center gap-3 border-b border-gray-100 px-3 py-2.5 last:border-b-0 hover:bg-gray-50 dark:border-dark-700 dark:hover:bg-dark-700">
+              <input v-model="bindingDialog.groupIds" type="checkbox" :value="group.id" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ group.name }}</span>
+                <span class="block text-xs text-gray-400">#{{ group.id }}</span>
+              </span>
+              <span class="font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ group.platform }}</span>
+              <span v-if="group.status !== 'active'" :class="statusPill('disabled')">{{ t('common.disabled') }}</span>
+            </label>
+            <p v-if="!filteredGroupOptions.length" class="px-3 py-8 text-center text-sm text-gray-400">{{ t('admin.instructionAudit.noMatchingGroups') }}</p>
+          </div>
         </div>
         <div>
           <label class="input-label">{{ t('admin.instructionAudit.ruleSet') }}</label>
@@ -397,7 +418,7 @@
       </div>
       <template #footer>
         <button type="button" class="btn btn-secondary" @click="bindingDialog.show = false">{{ t('common.cancel') }}</button>
-        <button type="button" class="btn btn-primary" :disabled="saving" @click="saveBinding">{{ t('common.save') }}</button>
+        <button type="button" class="btn btn-primary" :disabled="saving || !bindingDialog.groupIds.length || !bindingDialog.ruleSetId" @click="saveBinding">{{ t('common.save') }}</button>
       </template>
     </BaseDialog>
 
@@ -427,15 +448,15 @@ import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from './api'
 import { resolveInstructionHashDigest } from './hash'
 import type {
-  InstructionBinding,
   InstructionEventPage,
   InstructionFieldResult,
+  InstructionGroupBinding,
+  InstructionGroupOption,
   InstructionHashEntry,
   InstructionHashStatus,
   InstructionObservedSource,
   InstructionOverview,
   InstructionRuleSet,
-  InstructionUserOption,
   SaveInstructionHashRequest,
 } from './types'
 
@@ -449,10 +470,10 @@ const saving = ref(false)
 const overview = ref<InstructionOverview | null>(null)
 const hashes = ref<InstructionHashEntry[]>([])
 const ruleSets = ref<InstructionRuleSet[]>([])
-const bindings = ref<InstructionBinding[]>([])
-const userOptions = ref<InstructionUserOption[]>([])
+const bindings = ref<InstructionGroupBinding[]>([])
+const groupOptions = ref<InstructionGroupOption[]>([])
 const hashStatusFilter = ref('')
-const bindingToDelete = ref<InstructionBinding | null>(null)
+const bindingToDelete = ref<InstructionGroupBinding | null>(null)
 const eventPage = reactive<InstructionEventPage>({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
 const eventFilters = reactive({ userId: '', model: '' })
 
@@ -466,10 +487,10 @@ const tabs = computed(() => [
 const overviewStats = computed(() => [
   { label: t('admin.instructionAudit.activeHashes'), value: overview.value?.active_hash_count ?? 0 },
   { label: t('admin.instructionAudit.ruleSets'), value: overview.value?.rule_set_count ?? 0 },
-  { label: t('admin.instructionAudit.activeBindings'), value: overview.value?.active_binding_count ?? 0 },
+  { label: t('admin.instructionAudit.auditedGroups'), value: overview.value?.audited_group_count ?? 0 },
+  { label: t('admin.instructionAudit.effectiveGroups'), value: overview.value?.effective_group_count ?? 0 },
   { label: t('admin.instructionAudit.persistFailures'), value: overview.value?.persist_failure_count ?? 0 },
   { label: t('admin.instructionAudit.pendingEmails'), value: overview.value?.pending_email_count ?? 0 },
-  { label: t('admin.instructionAudit.configVersion'), value: overview.value?.config_version ?? '-' },
 ])
 
 const visibleHashes = computed(() => {
@@ -488,7 +509,17 @@ const hashDialog = reactive({
 })
 
 const ruleDialog = reactive({ show: false, id: null as number | null, name: '', description: '', enabled: true, hashIds: [] as number[] })
-const bindingDialog = reactive({ show: false, search: '', userId: 0, model: '', ruleSetId: 0, enabled: true })
+const bindingDialog = reactive({ show: false, search: '', groupIds: [] as number[], ruleSetId: 0, enabled: true })
+
+const filteredGroupOptions = computed(() => {
+  const query = bindingDialog.search.trim().toLocaleLowerCase()
+  if (!query) return groupOptions.value
+  return groupOptions.value.filter((group) =>
+    group.name.toLocaleLowerCase().includes(query)
+    || group.platform.toLocaleLowerCase().includes(query)
+    || String(group.id) === query,
+  )
+})
 
 const hashInputModes = computed(() => [
   { value: 'digest' as const, label: t('admin.instructionAudit.enterDigest') },
@@ -521,16 +552,18 @@ function emptyHashForm(): SaveInstructionHashRequest {
 async function refreshAll() {
   loading.value = true
   try {
-    const [nextOverview, nextHashes, nextRules, nextBindings] = await Promise.all([
+    const [nextOverview, nextHashes, nextRules, nextBindings, nextGroups] = await Promise.all([
       instructionAuditAPI.getOverview(),
       instructionAuditAPI.listHashes(),
       instructionAuditAPI.listRuleSets(),
-      instructionAuditAPI.listBindings(),
+      instructionAuditAPI.listGroupBindings(),
+      instructionAuditAPI.listGroups(),
     ])
     overview.value = nextOverview
     hashes.value = nextHashes
     ruleSets.value = nextRules
     bindings.value = nextBindings
+    groupOptions.value = nextGroups
     await loadEvents(eventPage.page)
   } catch (error) {
     appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
@@ -646,25 +679,23 @@ async function saveRuleSet() {
 }
 
 async function openBindingDialog() {
-  Object.assign(bindingDialog, { show: true, search: '', userId: 0, model: '', ruleSetId: ruleSets.value[0]?.id ?? 0, enabled: true })
-  await searchUsers()
+  Object.assign(bindingDialog, { show: true, search: '', groupIds: [], ruleSetId: ruleSets.value.find((rule) => rule.enabled)?.id ?? ruleSets.value[0]?.id ?? 0, enabled: true })
 }
 
-async function searchUsers() {
-  try {
-    userOptions.value = await instructionAuditAPI.searchUsers(bindingDialog.search)
-  } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+function selectVisibleGroups() {
+  const selected = new Set(bindingDialog.groupIds)
+  for (const group of filteredGroupOptions.value) {
+    selected.add(group.id)
   }
+  bindingDialog.groupIds = [...selected]
 }
 
 async function saveBinding() {
-  if (!bindingDialog.userId || !bindingDialog.model || !bindingDialog.ruleSetId) return
+  if (!bindingDialog.groupIds.length || !bindingDialog.ruleSetId) return
   saving.value = true
   try {
-    await instructionAuditAPI.saveBinding({
-      user_id: bindingDialog.userId,
-      model: bindingDialog.model,
+    await instructionAuditAPI.saveGroupBindings({
+      group_ids: bindingDialog.groupIds,
       rule_set_id: bindingDialog.ruleSetId,
       enabled: bindingDialog.enabled,
     })
@@ -678,14 +709,31 @@ async function saveBinding() {
   }
 }
 
-function requestDeleteBinding(binding: InstructionBinding) {
+async function setBindingEnabled(binding: InstructionGroupBinding, enabled: boolean) {
+  saving.value = true
+  try {
+    await instructionAuditAPI.saveGroupBindings({
+      group_ids: [binding.group_id],
+      rule_set_id: binding.rule_set_id,
+      enabled,
+    })
+    appStore.showSuccess(t('common.saved'))
+    await refreshAll()
+  } catch (error) {
+    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+  } finally {
+    saving.value = false
+  }
+}
+
+function requestDeleteBinding(binding: InstructionGroupBinding) {
   bindingToDelete.value = binding
 }
 
 async function deleteBinding() {
   if (!bindingToDelete.value) return
   try {
-    await instructionAuditAPI.deleteBinding(bindingToDelete.value.id)
+    await instructionAuditAPI.deleteGroupBinding(bindingToDelete.value.id)
     bindingToDelete.value = null
     appStore.showSuccess(t('common.deleted'))
     await refreshAll()

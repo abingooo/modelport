@@ -46,45 +46,38 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `
-			SELECT b.user_id, b.model, rs.id, h.digest, h.valid_from, h.valid_until
-			FROM instruction_audit_bindings b
-			JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id AND rs.enabled = TRUE
-			LEFT JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id
+			SELECT b.group_id, rs.id, rs.enabled, h.digest, h.valid_from, h.valid_until
+			FROM instruction_audit_group_bindings b
+			JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id
+			LEFT JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id AND rs.enabled = TRUE
 			LEFT JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 				AND h.status = 'active'
 			WHERE b.enabled = TRUE
-			ORDER BY b.user_id, b.model, rs.id, h.id`)
+			ORDER BY b.group_id, rs.id, h.id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
-	accumulators := make(map[int64]map[string]*instructionPolicyAccumulator)
-	auditedUsers := make(map[int64]struct{})
+	accumulators := make(map[int64]*instructionPolicyAccumulator)
+	auditedGroups := make(map[int64]struct{})
 	for rows.Next() {
-		var userID, ruleSetID int64
-		var model string
+		var groupID, ruleSetID int64
+		var ruleSetEnabled bool
 		var digest sql.NullString
 		var validFrom, validUntil sql.NullTime
-		if err := rows.Scan(&userID, &model, &ruleSetID, &digest, &validFrom, &validUntil); err != nil {
+		if err := rows.Scan(&groupID, &ruleSetID, &ruleSetEnabled, &digest, &validFrom, &validUntil); err != nil {
 			return nil, err
 		}
-		model = normalizeInstructionAuditModel(model)
-		if model == "" {
-			return nil, errors.New("invalid empty instruction audit model in database")
-		}
-		auditedUsers[userID] = struct{}{}
-		byModel := accumulators[userID]
-		if byModel == nil {
-			byModel = make(map[string]*instructionPolicyAccumulator)
-			accumulators[userID] = byModel
-		}
-		acc := byModel[model]
+		auditedGroups[groupID] = struct{}{}
+		acc := accumulators[groupID]
 		if acc == nil {
 			acc = &instructionPolicyAccumulator{ruleSets: make(map[int64]struct{}), hashes: make(map[[32]byte]instructionPolicyHash)}
-			byModel[model] = acc
+			accumulators[groupID] = acc
 		}
-		acc.ruleSets[ruleSetID] = struct{}{}
+		if ruleSetEnabled {
+			acc.ruleSets[ruleSetID] = struct{}{}
+		}
 		if digest.Valid {
 			decoded, decodeErr := hex.DecodeString(strings.TrimSpace(digest.String))
 			if decodeErr != nil || len(decoded) != sha256.Size {
@@ -109,32 +102,29 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 		return nil, err
 	}
 
-	policies := make(map[int64]map[string]instructionPolicy, len(accumulators))
-	for userID, byModel := range accumulators {
-		policies[userID] = make(map[string]instructionPolicy, len(byModel))
-		for model, acc := range byModel {
-			policy := instructionPolicy{
-				RuleSetIDs: make([]int64, 0, len(acc.ruleSets)),
-				Hashes:     make([]instructionPolicyHash, 0, len(acc.hashes)),
-			}
-			for id := range acc.ruleSets {
-				policy.RuleSetIDs = append(policy.RuleSetIDs, id)
-			}
-			for _, hash := range acc.hashes {
-				policy.Hashes = append(policy.Hashes, hash)
-			}
-			sort.Slice(policy.RuleSetIDs, func(i, j int) bool { return policy.RuleSetIDs[i] < policy.RuleSetIDs[j] })
-			sort.Slice(policy.Hashes, func(i, j int) bool {
-				return bytes.Compare(policy.Hashes[i].Digest[:], policy.Hashes[j].Digest[:]) < 0
-			})
-			policies[userID][model] = policy
+	policies := make(map[int64]instructionPolicy, len(accumulators))
+	for groupID, acc := range accumulators {
+		policy := instructionPolicy{
+			RuleSetIDs: make([]int64, 0, len(acc.ruleSets)),
+			Hashes:     make([]instructionPolicyHash, 0, len(acc.hashes)),
 		}
+		for id := range acc.ruleSets {
+			policy.RuleSetIDs = append(policy.RuleSetIDs, id)
+		}
+		for _, hash := range acc.hashes {
+			policy.Hashes = append(policy.Hashes, hash)
+		}
+		sort.Slice(policy.RuleSetIDs, func(i, j int) bool { return policy.RuleSetIDs[i] < policy.RuleSetIDs[j] })
+		sort.Slice(policy.Hashes, func(i, j int) bool {
+			return bytes.Compare(policy.Hashes[i].Digest[:], policy.Hashes[j].Digest[:]) < 0
+		})
+		policies[groupID] = policy
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &instructionSnapshot{
-		Enabled: enabled, ConfigVersion: version, AuditedUsers: auditedUsers,
+		Enabled: enabled, ConfigVersion: version, AuditedGroups: auditedGroups,
 		Policies: policies, LoadedAt: time.Now().UTC(),
 	}, nil
 }
@@ -153,7 +143,7 @@ type instructionEnabledUpdateResult struct {
 	Before  bool
 }
 
-func (r *InstructionRepository) SetEnabled(ctx context.Context, enabled, confirmNoRules bool) (result instructionEnabledUpdateResult, err error) {
+func (r *InstructionRepository) SetEnabled(ctx context.Context, enabled bool) (result instructionEnabledUpdateResult, err error) {
 	if r == nil || r.db == nil {
 		return result, errors.New("instruction audit repository unavailable")
 	}
@@ -172,23 +162,23 @@ func (r *InstructionRepository) SetEnabled(ctx context.Context, enabled, confirm
 	}
 	current := currentRaw == "true"
 	result.Before = current
-	if enabled && !current && !confirmNoRules {
-		var effectiveBindings int64
+	if enabled && !current {
+		var effectiveGroups int64
 		err = tx.QueryRowContext(ctx, `
-			SELECT COUNT(DISTINCT b.id)
-			FROM instruction_audit_bindings b
+			SELECT COUNT(DISTINCT b.group_id)
+			FROM instruction_audit_group_bindings b
 			JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id AND rs.enabled = TRUE
 			JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id
 			JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 				AND h.status = 'active'
 				AND (h.valid_from IS NULL OR h.valid_from <= NOW())
 				AND (h.valid_until IS NULL OR h.valid_until > NOW())
-				WHERE b.enabled = TRUE`).Scan(&effectiveBindings)
+			WHERE b.enabled = TRUE`).Scan(&effectiveGroups)
 		if err != nil {
 			return result, err
 		}
-		if effectiveBindings == 0 {
-			return result, ErrInstructionAuditConfirmationRequired
+		if effectiveGroups == 0 {
+			return result, ErrInstructionAuditNoEffectiveGroupRules
 		}
 	}
 	if current == enabled {
@@ -275,7 +265,7 @@ func (r *InstructionRepository) ListHashes(ctx context.Context, status string) (
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionHashEntry, 0)
 	for rows.Next() {
 		item, scanErr := scanInstructionHash(rows)
@@ -387,7 +377,7 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 	if err != nil {
 		return nil, err
 	}
-	defer hashRows.Close()
+	defer func() { _ = hashRows.Close() }()
 	for hashRows.Next() {
 		var ruleSetID int64
 		var hash InstructionHashEntry
@@ -467,23 +457,33 @@ func (r *InstructionRepository) SaveRuleSet(ctx context.Context, id int64, req S
 	return nil, sql.ErrNoRows
 }
 
-func (r *InstructionRepository) ListBindings(ctx context.Context) ([]InstructionBinding, error) {
+func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]InstructionGroupBinding, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT b.id, b.user_id, COALESCE(u.email, ''), COALESCE(u.username, ''), b.model,
-			b.rule_set_id, rs.name, b.enabled, b.created_at, b.updated_at
-		FROM instruction_audit_bindings b
+		SELECT b.id, b.group_id, g.name, g.platform, g.status,
+			b.rule_set_id, rs.name, b.enabled,
+			(rs.enabled AND EXISTS (
+				SELECT 1
+				FROM instruction_audit_rule_set_hashes rsh
+				JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
+				WHERE rsh.rule_set_id = rs.id
+					AND h.status = 'active'
+					AND (h.valid_from IS NULL OR h.valid_from <= NOW())
+					AND (h.valid_until IS NULL OR h.valid_until > NOW())
+			)) AS effective,
+			b.created_at, b.updated_at
+		FROM instruction_audit_group_bindings b
 		JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id
-		LEFT JOIN users u ON u.id = b.user_id
-		ORDER BY b.enabled DESC, b.user_id, b.model, rs.name`)
+		JOIN groups g ON g.id = b.group_id
+		ORDER BY b.enabled DESC, g.name, b.group_id, rs.name`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]InstructionBinding, 0)
+	defer func() { _ = rows.Close() }()
+	items := make([]InstructionGroupBinding, 0)
 	for rows.Next() {
-		var item InstructionBinding
-		if err := rows.Scan(&item.ID, &item.UserID, &item.UserEmail, &item.Username, &item.Model,
-			&item.RuleSetID, &item.RuleSetName, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		var item InstructionGroupBinding
+		if err := rows.Scan(&item.ID, &item.GroupID, &item.GroupName, &item.Platform, &item.GroupStatus,
+			&item.RuleSetID, &item.RuleSetName, &item.Enabled, &item.Effective, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -491,26 +491,20 @@ func (r *InstructionRepository) ListBindings(ctx context.Context) ([]Instruction
 	return items, rows.Err()
 }
 
-func (r *InstructionRepository) SearchUsers(ctx context.Context, query string, limit int) ([]InstructionUserOption, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 30
-	}
-	pattern := "%" + strings.TrimSpace(query) + "%"
+func (r *InstructionRepository) ListGroupOptions(ctx context.Context) ([]InstructionGroupOption, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, COALESCE(email, ''), COALESCE(username, '')
-		FROM users
+		SELECT id, name, platform, status
+		FROM groups
 		WHERE deleted_at IS NULL
-			AND ($1 = '%%' OR email ILIKE $1 OR username ILIKE $1 OR CAST(id AS TEXT) = $2)
-		ORDER BY CASE WHEN CAST(id AS TEXT) = $2 THEN 0 ELSE 1 END, id DESC
-		LIMIT $3`, pattern, strings.TrimSpace(query), limit)
+		ORDER BY CASE WHEN status = 'active' THEN 0 ELSE 1 END, name, id`)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := make([]InstructionUserOption, 0)
+	defer func() { _ = rows.Close() }()
+	items := make([]InstructionGroupOption, 0)
 	for rows.Next() {
-		var item InstructionUserOption
-		if err := rows.Scan(&item.ID, &item.Email, &item.Username); err != nil {
+		var item InstructionGroupOption
+		if err := rows.Scan(&item.ID, &item.Name, &item.Platform, &item.Status); err != nil {
 			return nil, err
 		}
 		items = append(items, item)
@@ -518,22 +512,26 @@ func (r *InstructionRepository) SearchUsers(ctx context.Context, query string, l
 	return items, rows.Err()
 }
 
-func (r *InstructionRepository) SaveBinding(ctx context.Context, req CreateInstructionBindingRequest, actorID int64) (*InstructionBinding, error) {
-	req.Model = normalizeInstructionAuditModel(req.Model)
+func (r *InstructionRepository) SaveGroupBindings(ctx context.Context, req SaveInstructionGroupBindingsRequest, actorID int64) ([]InstructionGroupBinding, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var id int64
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO instruction_audit_bindings (user_id, model, rule_set_id, enabled, created_by)
-		VALUES ($1, $2, $3, $4, NULLIF($5, 0))
-		ON CONFLICT (user_id, model, rule_set_id)
-		DO UPDATE SET enabled = EXCLUDED.enabled, updated_at = NOW()
-		RETURNING id`, req.UserID, req.Model, req.RuleSetID, req.Enabled, actorID).Scan(&id)
-	if err != nil {
-		return nil, err
+	ids := make([]int64, 0, len(req.GroupIDs))
+	for _, groupID := range uniquePositiveInt64s(req.GroupIDs) {
+		var id int64
+		err = tx.QueryRowContext(ctx, `
+			INSERT INTO instruction_audit_group_bindings
+				(group_id, rule_set_id, enabled, created_by, updated_by)
+			VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($4, 0))
+			ON CONFLICT (group_id, rule_set_id)
+			DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+			RETURNING id`, groupID, req.RuleSetID, req.Enabled, actorID).Scan(&id)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
 	}
 	if _, err = bumpInstructionConfigTx(ctx, tx); err != nil {
 		return nil, err
@@ -541,33 +539,30 @@ func (r *InstructionRepository) SaveBinding(ctx context.Context, req CreateInstr
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	return r.GetBinding(ctx, id)
-}
-
-func (r *InstructionRepository) GetBinding(ctx context.Context, id int64) (*InstructionBinding, error) {
-	var item InstructionBinding
-	err := r.db.QueryRowContext(ctx, `
-		SELECT b.id, b.user_id, COALESCE(u.email, ''), COALESCE(u.username, ''), b.model,
-			b.rule_set_id, rs.name, b.enabled, b.created_at, b.updated_at
-		FROM instruction_audit_bindings b
-		JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id
-		LEFT JOIN users u ON u.id = b.user_id
-		WHERE b.id = $1`, id).Scan(
-		&item.ID, &item.UserID, &item.UserEmail, &item.Username, &item.Model,
-		&item.RuleSetID, &item.RuleSetName, &item.Enabled, &item.CreatedAt, &item.UpdatedAt)
+	all, err := r.ListGroupBindings(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &item, nil
+	wanted := make(map[int64]struct{}, len(ids))
+	for _, id := range ids {
+		wanted[id] = struct{}{}
+	}
+	items := make([]InstructionGroupBinding, 0, len(ids))
+	for _, item := range all {
+		if _, ok := wanted[item.ID]; ok {
+			items = append(items, item)
+		}
+	}
+	return items, nil
 }
 
-func (r *InstructionRepository) DeleteBinding(ctx context.Context, id int64) error {
+func (r *InstructionRepository) DeleteGroupBinding(ctx context.Context, id int64) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	result, err := tx.ExecContext(ctx, `DELETE FROM instruction_audit_bindings WHERE id = $1`, id)
+	result, err := tx.ExecContext(ctx, `DELETE FROM instruction_audit_group_bindings WHERE id = $1`, id)
 	if err != nil {
 		return err
 	}
@@ -590,7 +585,8 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 		return nil, err
 	}
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id, e.model, e.endpoint, e.stage,
+		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id,
+			e.group_id, e.group_name_snapshot, e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
 			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
@@ -602,7 +598,7 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionEvent, 0, pageSize)
 	for rows.Next() {
 		item, scanErr := scanInstructionEvent(rows)
@@ -622,10 +618,11 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 
 func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) {
 	var item InstructionEvent
-	var userID, apiKeyID sql.NullInt64
+	var userID, apiKeyID, groupID sql.NullInt64
 	var ruleSetJSON []byte
 	err := scanner.Scan(
 		&item.ID, &item.RequestID, &userID, &item.UserEmailSnapshot, &apiKeyID,
+		&groupID, &item.GroupNameSnapshot,
 		&item.Model, &item.Endpoint, &item.Stage,
 		&item.Instructions.Present, &item.Instructions.SHA256, &item.Instructions.Result,
 		&item.Input1.Present, &item.Input1.SHA256, &item.Input1.Result,
@@ -638,6 +635,9 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 	if apiKeyID.Valid {
 		item.APIKeyID = &apiKeyID.Int64
 	}
+	if groupID.Valid {
+		item.GroupID = &groupID.Int64
+	}
 	if len(ruleSetJSON) > 0 {
 		_ = json.Unmarshal(ruleSetJSON, &item.RuleSetIDs)
 	}
@@ -649,7 +649,8 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 
 func (r *InstructionRepository) GetEvent(ctx context.Context, id int64) (*InstructionEvent, error) {
 	item, err := scanInstructionEvent(r.db.QueryRowContext(ctx, `
-		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id, e.model, e.endpoint, e.stage,
+		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id,
+			e.group_id, e.group_name_snapshot, e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
 			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
@@ -672,7 +673,14 @@ func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, 
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	ruleSets, _ := json.Marshal(decision.RuleSetIDs)
+	ruleSetIDs := decision.RuleSetIDs
+	if ruleSetIDs == nil {
+		ruleSetIDs = []int64{}
+	}
+	ruleSets, err := json.Marshal(ruleSetIDs)
+	if err != nil {
+		return fmt.Errorf("marshal instruction audit rule set ids: %w", err)
+	}
 	latencyMS := int(decision.Latency.Milliseconds())
 	if latencyMS < 0 {
 		latencyMS = 0
@@ -680,13 +688,15 @@ func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, 
 	var eventID int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_events
-			(request_id, user_id, user_email_snapshot, api_key_id, model, endpoint, stage,
+			(request_id, user_id, user_email_snapshot, api_key_id, group_id, group_name_snapshot,
+			 model, endpoint, stage,
 			 instructions_present, instructions_sha256, instructions_result,
 			 input1_present, input1_sha256, input1_result, reason, rule_set_ids, config_version, latency_ms)
-		VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), $5, $6, $7,
-			$8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), NULLIF($5, 0), $6, $7, $8, $9,
+			$10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
 		RETURNING id`,
-		req.RequestID, req.UserID, req.UserEmail, req.APIKeyID, req.Model, req.Endpoint, req.Stage,
+		req.RequestID, req.UserID, req.UserEmail, req.APIKeyID, instructionGroupID(req.GroupID), req.GroupName,
+		req.Model, req.Endpoint, req.Stage,
 		decision.Instructions.Present, decision.Instructions.SHA256, decision.Instructions.Result,
 		decision.Input1.Present, decision.Input1.SHA256, decision.Input1.Result,
 		decision.Reason, ruleSets, decision.ConfigVersion, latencyMS).Scan(&eventID)
@@ -694,7 +704,7 @@ func (r *InstructionRepository) RecordBlocked(ctx context.Context, req Request, 
 		return err
 	}
 	bucket := time.Now().UTC().Truncate(15 * time.Minute).Format(time.RFC3339)
-	dedupRaw := fmt.Sprintf("%d\x00%s\x00%s\x00%s", req.UserID, req.Model, decision.Reason, bucket)
+	dedupRaw := fmt.Sprintf("%d\x00%d\x00%s\x00%s", req.UserID, instructionGroupID(req.GroupID), decision.Reason, bucket)
 	dedupSum := sha256.Sum256([]byte(dedupRaw))
 	_, err = tx.ExecContext(ctx, `
 			INSERT INTO instruction_audit_notification_outbox (event_id, dedup_key)
@@ -760,7 +770,7 @@ func (r *InstructionRepository) ListAdminRecipients(ctx context.Context) ([]inst
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]instructionAdminRecipient, 0)
 	for rows.Next() {
 		var item instructionAdminRecipient
@@ -812,14 +822,17 @@ func (r *InstructionRepository) MarkOutboxFailed(ctx context.Context, item instr
 	return err
 }
 
-func (r *InstructionRepository) OverviewCounts(ctx context.Context) (hashes, activeHashes, ruleSets, bindings, pendingEmails int64, err error) {
+func (r *InstructionRepository) OverviewCounts(ctx context.Context) (hashes, activeHashes, ruleSets, auditedGroups, effectiveGroups, pendingEmails int64, err error) {
 	err = r.db.QueryRowContext(ctx, `
 		SELECT
 			(SELECT COUNT(*) FROM instruction_audit_hashes),
 			(SELECT COUNT(*) FROM instruction_audit_hashes WHERE status = 'active' AND (valid_from IS NULL OR valid_from <= NOW()) AND (valid_until IS NULL OR valid_until > NOW())),
 			(SELECT COUNT(*) FROM instruction_audit_rule_sets),
-			(SELECT COUNT(DISTINCT b.id)
-			 FROM instruction_audit_bindings b
+			(SELECT COUNT(DISTINCT b.group_id)
+			 FROM instruction_audit_group_bindings b
+			 WHERE b.enabled = TRUE),
+			(SELECT COUNT(DISTINCT b.group_id)
+			 FROM instruction_audit_group_bindings b
 			 JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id AND rs.enabled = TRUE
 			 JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id
 			 JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
@@ -828,8 +841,15 @@ func (r *InstructionRepository) OverviewCounts(ctx context.Context) (hashes, act
 				AND (h.valid_until IS NULL OR h.valid_until > NOW())
 			 WHERE b.enabled = TRUE),
 			(SELECT COUNT(*) FROM instruction_audit_notification_outbox WHERE status IN ('pending', 'processing', 'retry'))`).Scan(
-		&hashes, &activeHashes, &ruleSets, &bindings, &pendingEmails)
+		&hashes, &activeHashes, &ruleSets, &auditedGroups, &effectiveGroups, &pendingEmails)
 	return
+}
+
+func instructionGroupID(groupID *int64) int64 {
+	if groupID == nil {
+		return 0
+	}
+	return *groupID
 }
 
 func uniquePositiveInt64s(values []int64) []int64 {

@@ -163,10 +163,13 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 	if !snapshot.Enabled {
 		return &InstructionDecision{Allow: true, ConfigVersion: snapshot.ConfigVersion}
 	}
-	if _, audited := snapshot.AuditedUsers[request.UserID]; !audited {
+	policy, applicable := instructionPolicyFor(snapshot, instructionGroupID(request.GroupID))
+	if !applicable {
 		return &InstructionDecision{Allow: true, ConfigVersion: snapshot.ConfigVersion}
 	}
-	preAuditModel := normalizeInstructionAuditModel(request.Model)
+	if s.instructionSnapshotStale(snapshot, startedAt) {
+		return s.blockInstructionConfigUnavailable(ctx, request, snapshot, startedAt)
+	}
 
 	body := request.InstructionBody
 	if len(body) == 0 {
@@ -174,30 +177,6 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 	}
 	root, err := decodeStrictJSONObject(body)
 	if err != nil {
-		model, policy, applicable := "", instructionPolicy{}, false
-		candidates := []string{preAuditModel}
-		if !errors.Is(err, errInstructionAuditBodyTooLarge) {
-			candidates = append(candidates, lenientLastInstructionModel(body))
-		}
-		for _, candidate := range candidates {
-			candidate = normalizeInstructionAuditModel(candidate)
-			if candidate == "" || candidate == model {
-				continue
-			}
-			if candidatePolicy, ok := instructionPolicyFor(snapshot, request.UserID, candidate); ok {
-				model = candidate
-				policy = candidatePolicy
-				applicable = true
-				break
-			}
-		}
-		if !applicable {
-			return &InstructionDecision{Allow: true, ConfigVersion: snapshot.ConfigVersion}
-		}
-		request.Model = model
-		if s.instructionSnapshotStale(snapshot, startedAt) {
-			return s.blockInstructionConfigUnavailable(ctx, request, snapshot, startedAt)
-		}
 		decision := &InstructionDecision{
 			Applicable:    true,
 			Allow:         false,
@@ -212,19 +191,10 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 		return decision
 	}
 
-	model := preAuditModel
-	if !request.InstructionModelOverride || model == "" {
+	if !request.InstructionModelOverride || strings.TrimSpace(request.Model) == "" {
 		if strictModel, ok := strictInstructionModel(root); ok {
-			model = strictModel
+			request.Model = strictModel
 		}
-	}
-	policy, applicable := instructionPolicyFor(snapshot, request.UserID, model)
-	if !applicable {
-		return &InstructionDecision{Allow: true, ConfigVersion: snapshot.ConfigVersion}
-	}
-	request.Model = model
-	if s.instructionSnapshotStale(snapshot, startedAt) {
-		return s.blockInstructionConfigUnavailable(ctx, request, snapshot, startedAt)
 	}
 	inspection := inspectInstructionRoot(root, policy.Hashes, time.Now().UTC())
 	decision := &InstructionDecision{
@@ -287,20 +257,18 @@ func (s *InstructionService) requireConfigVersion(version int64) {
 	}
 }
 
-func instructionPolicyFor(snapshot *instructionSnapshot, userID int64, model string) (instructionPolicy, bool) {
+func instructionPolicyFor(snapshot *instructionSnapshot, groupID int64) (instructionPolicy, bool) {
 	if snapshot == nil {
 		return instructionPolicy{}, false
 	}
-	models := snapshot.Policies[userID]
-	if models == nil {
+	if _, audited := snapshot.AuditedGroups[groupID]; !audited {
 		return instructionPolicy{}, false
 	}
-	policy, ok := models[normalizeInstructionAuditModel(model)]
-	return policy, ok
-}
-
-func normalizeInstructionAuditModel(model string) string {
-	return strings.TrimSpace(model)
+	policy, ok := snapshot.Policies[groupID]
+	if !ok {
+		return instructionPolicy{}, true
+	}
+	return policy, true
 }
 
 func (s *InstructionService) recordBlocked(ctx context.Context, request Request, decision *InstructionDecision) {
@@ -327,6 +295,7 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 			"request_id", event.Request.RequestID,
 			"user_id", event.Request.UserID,
 			"api_key_id", event.Request.APIKeyID,
+			"group_id", instructionGroupID(event.Request.GroupID),
 			"model", event.Request.Model,
 			"reason", event.Decision.Reason,
 			"error", err,
@@ -338,7 +307,7 @@ func (s *InstructionService) Overview(ctx context.Context) (*InstructionOverview
 	if s == nil || s.repository == nil {
 		return nil, errors.New("instruction audit service unavailable")
 	}
-	hashes, activeHashes, ruleSets, bindings, pendingEmails, err := s.repository.OverviewCounts(ctx)
+	hashes, activeHashes, ruleSets, auditedGroups, effectiveGroups, pendingEmails, err := s.repository.OverviewCounts(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -346,7 +315,8 @@ func (s *InstructionService) Overview(ctx context.Context) (*InstructionOverview
 		HashCount:           hashes,
 		ActiveHashCount:     activeHashes,
 		RuleSetCount:        ruleSets,
-		ActiveBindingCount:  bindings,
+		AuditedGroupCount:   auditedGroups,
+		EffectiveGroupCount: effectiveGroups,
 		PendingEmailCount:   pendingEmails,
 		QueuedEventCount:    0,
 		DroppedEventCount:   0,
@@ -375,9 +345,9 @@ func (s *InstructionService) ConfigVersion() int64 {
 }
 
 func (s *InstructionService) UpdateEnabled(ctx context.Context, request UpdateInstructionEnabledRequest) (*InstructionOverview, bool, error) {
-	update, err := s.repository.SetEnabled(ctx, request.Enabled, request.ConfirmNoRules)
-	if errors.Is(err, ErrInstructionAuditConfirmationRequired) {
-		return nil, update.Before, infraerrors.Conflict("instruction_audit_confirmation_required", "启用前没有有效规则，需要确认风险")
+	update, err := s.repository.SetEnabled(ctx, request.Enabled)
+	if errors.Is(err, ErrInstructionAuditNoEffectiveGroupRules) {
+		return nil, update.Before, infraerrors.Conflict("instruction_audit_no_effective_group_rules", "启用前必须至少配置一个包含有效哈希的分组规则")
 	}
 	if err != nil {
 		return nil, update.Before, err
@@ -481,29 +451,29 @@ func (s *InstructionService) SaveRuleSet(ctx context.Context, id int64, request 
 	return item, nil
 }
 
-func (s *InstructionService) ListBindings(ctx context.Context) ([]InstructionBinding, error) {
-	return s.repository.ListBindings(ctx)
+func (s *InstructionService) ListGroupBindings(ctx context.Context) ([]InstructionGroupBinding, error) {
+	return s.repository.ListGroupBindings(ctx)
 }
 
-func (s *InstructionService) SaveBinding(ctx context.Context, request CreateInstructionBindingRequest, actorID int64) (*InstructionBinding, error) {
-	request.Model = normalizeInstructionAuditModel(request.Model)
-	if request.UserID <= 0 || request.RuleSetID <= 0 || request.Model == "" || len(request.Model) > 255 {
-		return nil, infraerrors.BadRequest("instruction_audit_invalid_binding", "用户、模型和规则集必须有效")
+func (s *InstructionService) SaveGroupBindings(ctx context.Context, request SaveInstructionGroupBindingsRequest, actorID int64) ([]InstructionGroupBinding, error) {
+	request.GroupIDs = uniquePositiveInt64s(request.GroupIDs)
+	if len(request.GroupIDs) == 0 || len(request.GroupIDs) > 500 || request.RuleSetID <= 0 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_group_binding", "分组和规则集必须有效，单次最多选择 500 个分组")
 	}
-	item, err := s.repository.SaveBinding(ctx, request, actorID)
+	items, err := s.repository.SaveGroupBindings(ctx, request, actorID)
 	if err != nil {
 		return nil, err
 	}
 	s.refreshAfterMutation(ctx, 0)
-	return item, nil
+	return items, nil
 }
 
-func (s *InstructionService) DeleteBinding(ctx context.Context, id int64) error {
+func (s *InstructionService) DeleteGroupBinding(ctx context.Context, id int64) error {
 	if id <= 0 {
-		return infraerrors.BadRequest("instruction_audit_invalid_binding_id", "绑定 ID 无效")
+		return infraerrors.BadRequest("instruction_audit_invalid_group_binding_id", "分组绑定 ID 无效")
 	}
-	if err := s.repository.DeleteBinding(ctx, id); errors.Is(err, sql.ErrNoRows) {
-		return infraerrors.NotFound("instruction_audit_binding_not_found", "绑定不存在")
+	if err := s.repository.DeleteGroupBinding(ctx, id); errors.Is(err, sql.ErrNoRows) {
+		return infraerrors.NotFound("instruction_audit_group_binding_not_found", "分组绑定不存在")
 	} else if err != nil {
 		return err
 	}
@@ -511,8 +481,8 @@ func (s *InstructionService) DeleteBinding(ctx context.Context, id int64) error 
 	return nil
 }
 
-func (s *InstructionService) SearchUsers(ctx context.Context, query string) ([]InstructionUserOption, error) {
-	return s.repository.SearchUsers(ctx, query, 30)
+func (s *InstructionService) ListGroupOptions(ctx context.Context) ([]InstructionGroupOption, error) {
+	return s.repository.ListGroupOptions(ctx)
 }
 
 func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int, userID int64, model string) (*InstructionEventPage, error) {
@@ -807,12 +777,17 @@ func buildInstructionAuditEmail(event *InstructionEvent) string {
 	if event.APIKeyID != nil {
 		apiKeyID = strconv.FormatInt(*event.APIKeyID, 10)
 	}
+	groupID := "-"
+	if event.GroupID != nil {
+		groupID = strconv.FormatInt(*event.GroupID, 10)
+	}
 	return fmt.Sprintf(`<h2>ModelPort 安全策略拦截通知</h2>
 <table cellpadding="6" cellspacing="0" border="1" style="border-collapse:collapse">
 <tr><td>请求 ID</td><td>%s</td></tr>
 <tr><td>时间</td><td>%s</td></tr>
 <tr><td>用户</td><td>%s / %s</td></tr>
 <tr><td>API Key ID</td><td>%s</td></tr>
+<tr><td>下游分组</td><td>%s / %s</td></tr>
 <tr><td>模型</td><td>%s</td></tr>
 <tr><td>字段一</td><td>present=%t, sha256=%s, result=%s</td></tr>
 <tr><td>字段二</td><td>present=%t, sha256=%s, result=%s</td></tr>
@@ -820,7 +795,8 @@ func buildInstructionAuditEmail(event *InstructionEvent) string {
 <tr><td>配置版本</td><td>%d</td></tr>
 </table>`,
 		escape(event.RequestID), escape(event.CreatedAt.UTC().Format(time.RFC3339)), escape(userID), escape(event.UserEmailSnapshot),
-		escape(apiKeyID), escape(event.Model), event.Instructions.Present, escape(event.Instructions.SHA256), escape(event.Instructions.Result),
+		escape(apiKeyID), escape(groupID), escape(event.GroupNameSnapshot), escape(event.Model),
+		event.Instructions.Present, escape(event.Instructions.SHA256), escape(event.Instructions.Result),
 		event.Input1.Present, escape(event.Input1.SHA256), escape(event.Input1.Result), escape(event.Reason), event.ConfigVersion)
 }
 

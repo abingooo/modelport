@@ -1374,41 +1374,6 @@
 
         <!-- Tab: Security — Registration, Turnstile, LinuxDo -->
         <div v-show="activeTab === 'security'" class="space-y-6">
-          <div class="card">
-            <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
-              <div class="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                    {{ t('admin.settings.instructionAudit.title') }}
-                  </h2>
-                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                    {{ t('admin.settings.instructionAudit.description') }}
-                  </p>
-                </div>
-                <router-link to="/admin/instruction-audit" class="text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">
-                  {{ t('admin.settings.instructionAudit.configure') }}
-                </router-link>
-              </div>
-            </div>
-            <div class="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <p class="font-medium text-gray-900 dark:text-white">{{ t('admin.settings.instructionAudit.enabled') }}</p>
-                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  {{ t('admin.settings.instructionAudit.summary', {
-                    hashes: instructionAuditOverview?.active_hash_count ?? 0,
-                    bindings: instructionAuditOverview?.active_binding_count ?? 0,
-                  }) }}
-                </p>
-              </div>
-              <div :class="{ 'pointer-events-none opacity-50': instructionAuditSaving || instructionAuditLoading }">
-                <Toggle
-                  :model-value="instructionAuditOverview?.enabled ?? false"
-                  @update:model-value="requestInstructionAuditEnabled"
-                />
-              </div>
-            </div>
-          </div>
-
           <!-- Registration Settings -->
           <div class="card">
             <div
@@ -6624,6 +6589,35 @@
               <Toggle v-model="form.risk_control_enabled" />
             </div>
 
+            <div class="border-t border-gray-100 pt-5 dark:border-dark-700">
+              <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <p class="font-medium text-gray-900 dark:text-white">{{ t('admin.settings.instructionAudit.enabled') }}</p>
+                    <router-link to="/admin/instruction-audit" class="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400">
+                      {{ t('admin.settings.instructionAudit.configure') }}
+                    </router-link>
+                  </div>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.instructionAudit.description') }}
+                  </p>
+                  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                    {{ t('admin.settings.instructionAudit.summary', {
+                      hashes: instructionAuditOverview?.active_hash_count ?? 0,
+                      groups: instructionAuditOverview?.audited_group_count ?? 0,
+                      effective: instructionAuditOverview?.effective_group_count ?? 0,
+                    }) }}
+                  </p>
+                </div>
+                <div :class="{ 'pointer-events-none opacity-50': instructionAuditSaving || instructionAuditLoading }">
+                  <Toggle
+                    :model-value="instructionAuditOverview?.enabled ?? false"
+                    @update:model-value="requestInstructionAuditEnabled"
+                  />
+                </div>
+              </div>
+            </div>
+
             <div class="flex items-center justify-between">
               <div>
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -8215,13 +8209,6 @@
       />
       <!-- 关闭 step-up 开关等敏感保存操作触发的 TOTP 二次验证 -->
       <TotpStepUpDialog :controller="settingsStepUp" />
-      <ConfirmDialog
-        :show="showInstructionAuditRiskDialog"
-        :title="t('admin.settings.instructionAudit.confirmTitle')"
-        :message="t('admin.settings.instructionAudit.confirmMessage')"
-        @confirm="confirmInstructionAuditEnable"
-        @cancel="showInstructionAuditRiskDialog = false"
-      />
     </div>
   </AppLayout>
 </template>
@@ -8283,7 +8270,7 @@ import {
 } from "@/composables/useStepUp";
 import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
 import { affiliatesAPI, type AffiliateAdminEntry, type SimpleUser as AffiliateSimpleUser } from "@/api/admin/affiliates";
-import { extractApiErrorCode, extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
+import { extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
 import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { CONCRETE_PLATFORM_ORDER } from "@/utils/providerPresets";
@@ -8312,7 +8299,6 @@ const isZhLocale = computed(() => locale.value.startsWith("zh"));
 const instructionAuditOverview = ref<InstructionOverview | null>(null);
 const instructionAuditLoading = ref(false);
 const instructionAuditSaving = ref(false);
-const showInstructionAuditRiskDialog = ref(false);
 
 function localText(zh: string, en: string): string {
   return isZhLocale.value ? zh : en;
@@ -8340,7 +8326,23 @@ type SettingsTab =
   | "payment"
   | "email"
   | "backup";
-const activeTab = ref<SettingsTab>("general");
+const settingsTabKeys: SettingsTab[] = [
+  "general",
+  "agreement",
+  "features",
+  "security",
+  "users",
+  "gateway",
+  "payment",
+  "email",
+  "backup",
+];
+const requestedSettingsTab = new URLSearchParams(window.location.search).get("tab");
+const activeTab = ref<SettingsTab>(
+  settingsTabKeys.includes(requestedSettingsTab as SettingsTab)
+    ? (requestedSettingsTab as SettingsTab)
+    : "general",
+);
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "agreement" as SettingsTab, icon: "document" as const },
@@ -10349,28 +10351,11 @@ async function loadInstructionAuditOverview() {
 }
 
 async function requestInstructionAuditEnabled(enabled: boolean) {
-  if (enabled && (instructionAuditOverview.value?.active_binding_count ?? 0) === 0) {
-    showInstructionAuditRiskDialog.value = true;
-    return;
-  }
-  await updateInstructionAuditEnabled(enabled, false);
-}
-
-async function confirmInstructionAuditEnable() {
-  showInstructionAuditRiskDialog.value = false;
-  await updateInstructionAuditEnabled(true, true);
-}
-
-async function updateInstructionAuditEnabled(enabled: boolean, confirmNoRules: boolean) {
   instructionAuditSaving.value = true;
   try {
-    instructionAuditOverview.value = await instructionAuditAPI.updateEnabled(enabled, confirmNoRules);
+    instructionAuditOverview.value = await instructionAuditAPI.updateEnabled(enabled);
     appStore.showSuccess(t("common.saved"));
   } catch (err: unknown) {
-    if (enabled && !confirmNoRules && extractApiErrorCode(err) === "instruction_audit_confirmation_required") {
-      showInstructionAuditRiskDialog.value = true;
-      return;
-    }
     appStore.showError(extractI18nErrorMessage(err, t, "admin.instructionAudit.errors", t("common.error")));
   } finally {
     instructionAuditSaving.value = false;

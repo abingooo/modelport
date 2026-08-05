@@ -4,12 +4,10 @@ export default {
       description: '管理注册、邮箱验证、默认值和 SMTP 设置',
       instructionAudit: {
         title: '指令审核',
-        description: '对已绑定的下游用户和原始模型执行 Responses 哈希准入。',
+        description: '对已绑定下游分组中的所有 Responses 请求执行哈希准入。',
         configure: '管理规则',
         enabled: '启用指令审核',
-        summary: '有效哈希 {hashes} 条，有效绑定 {bindings} 条',
-        confirmTitle: '确认启用指令审核',
-        confirmMessage: '当前没有有效规则。启用后，配置不完整的受保护请求可能被拒绝。',
+        summary: '有效哈希 {hashes} 条，审核分组 {groups} 个，其中规则有效 {effective} 个',
       },
       tabs: {
         general: '通用设置',
@@ -51,7 +49,7 @@ export default {
         },
         riskControl: {
           title: '风控中心',
-          description: '启用内容审计菜单和全端点请求审核入口。默认关闭。',
+          description: '集中管理内容审核、提示词审计和指令审核。默认关闭。',
           configureLink: '前往 风控中心 配置内容审计',
           enabled: '启用风控中心',
           enabledHint: '关闭后管理员侧边栏入口隐藏，网关内容审计不会执行。',

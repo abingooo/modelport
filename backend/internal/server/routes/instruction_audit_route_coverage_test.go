@@ -107,3 +107,19 @@ func TestInstructionAuditAdminRoutesRejectUnauthenticatedAndNonAdminRequests(t *
 		})
 	}
 }
+
+func TestInstructionAuditAdminRoutesExposeOnlyGroupScopedBindings(t *testing.T) {
+	source, err := os.ReadFile("admin.go")
+	require.NoError(t, err)
+	routes := string(source)
+	for _, route := range []string{
+		`instructionAudit.GET("/group-bindings"`,
+		`instructionAudit.POST("/group-bindings"`,
+		`instructionAudit.DELETE("/group-bindings/:id"`,
+		`instructionAudit.GET("/groups"`,
+	} {
+		require.Contains(t, routes, route)
+	}
+	require.NotContains(t, routes, `instructionAudit.GET("/users"`)
+	require.NotContains(t, routes, `instructionAudit.POST("/bindings"`)
+}

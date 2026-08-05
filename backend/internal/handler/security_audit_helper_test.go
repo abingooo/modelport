@@ -89,6 +89,28 @@ func TestRunInstructionAuditUsesCompositePublicModel(t *testing.T) {
 	require.True(t, instruction.request.InstructionModelOverride)
 }
 
+func TestRunInstructionAuditUsesAuthenticatedDownstreamGroup(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &capturingInstructionEngine{}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	downstreamGroupID := int64(41)
+	apiKey := &service.APIKey{
+		ID: 17, GroupID: &downstreamGroupID,
+		Group: &service.Group{ID: downstreamGroupID, Name: "Downstream OpenAI", Platform: service.PlatformOpenAI},
+	}
+
+	decision := runInstructionAudit(c, nil, coordinator, apiKey, middleware2.AuthSubject{UserID: 7},
+		"openai_responses", "mapped-model", []byte(`{"instructions":"exact"}`), false, "http")
+
+	require.Nil(t, decision)
+	require.NotNil(t, instruction.request.GroupID)
+	require.Equal(t, downstreamGroupID, *instruction.request.GroupID)
+	require.Equal(t, "Downstream OpenAI", instruction.request.GroupName)
+}
+
 type turnCountingEngine struct {
 	mode     securityaudit.Mode
 	enqueues atomic.Int64
