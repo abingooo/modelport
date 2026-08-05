@@ -75,6 +75,8 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	migration200, err := os.ReadFile(filepath.Join("..", "..", "migrations", "200_instruction_audit_review_notifications.sql"))
 	require.NoError(t, err)
+	migration201, err := os.ReadFile(filepath.Join("..", "..", "migrations", "201_instruction_audit_client_scope.sql"))
+	require.NoError(t, err)
 	for iteration := range 2 {
 		_, err = db.ExecContext(ctx, string(migration198))
 		require.NoError(t, err)
@@ -85,6 +87,8 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 		_, err = db.ExecContext(ctx, string(migration199))
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, string(migration200))
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, string(migration201))
 		require.NoError(t, err)
 	}
 	return db
@@ -244,6 +248,63 @@ func TestInstructionAuditPostgresBoundGroupFailsClosedWhenRuleBecomesIneffective
 		ORDER BY id DESC
 		LIMIT 1`).Scan(&persistedRuleSetIDs))
 	require.Equal(t, "[]", persistedRuleSetIDs)
+}
+
+func TestInstructionAuditPostgresClientScopeAndEventMetadata(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repo := NewInstructionRepository(db)
+	ctx := context.Background()
+	actorID := insertInstructionAuditUser(t, db, "client-scope-admin@example.test", "admin")
+	groupID := insertInstructionAuditGroup(t, db, "Client Scoped Group")
+	_ = createInstructionAuditPolicy(t, repo, actorID, groupID, "trusted")
+
+	bindings, err := repo.ListGroupBindings(ctx)
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	require.Equal(t, []string{InstructionClientAll}, bindings[0].ClientTypes)
+
+	bindings, err = repo.SaveGroupBindings(ctx, SaveInstructionGroupBindingsRequest{
+		GroupIDs: []int64{groupID}, RuleSetID: bindings[0].RuleSetID,
+		ClientTypes: []string{InstructionClientCodexCLI, InstructionClientCodexVSCode}, Enabled: true,
+	}, actorID)
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	require.Equal(t, []string{InstructionClientCodexVSCode, InstructionClientCodexCLI}, bindings[0].ClientTypes)
+
+	bindings, err = repo.SaveGroupBindings(ctx, SaveInstructionGroupBindingsRequest{
+		GroupIDs: []int64{groupID}, RuleSetID: bindings[0].RuleSetID, Enabled: true,
+	}, actorID)
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	require.Equal(t, []string{InstructionClientCodexVSCode, InstructionClientCodexCLI}, bindings[0].ClientTypes,
+		"legacy updates that omit client_types must preserve the configured scope")
+
+	snapshot, err := repo.LoadSnapshot(ctx)
+	require.NoError(t, err)
+	instructionService := NewInstructionService(repo, nil, nil)
+	instructionService.snapshot.Store(snapshot)
+
+	bypassed := instructionService.EvaluateInstruction(ctx, Request{
+		Protocol: instructionAuditProtocol, GroupID: &groupID, UserAgent: "opencode/1.0",
+		InstructionBody: []byte(`{`),
+	})
+	require.False(t, bypassed.Applicable)
+	require.True(t, bypassed.Allow)
+
+	blocked := instructionService.EvaluateInstruction(ctx, Request{
+		RequestID: "client-scope-blocked", Protocol: instructionAuditProtocol,
+		GroupID: &groupID, GroupName: "Client Scoped Group", UserAgent: "codex_cli_rs/0.145.0 (Windows)",
+		InstructionBody: []byte(`{"instructions":"untrusted"}`),
+	})
+	require.True(t, blocked.Applicable)
+	require.False(t, blocked.Allow)
+
+	var clientType, userAgent string
+	require.NoError(t, db.QueryRow(`
+		SELECT client_type, client_user_agent
+		FROM instruction_audit_events WHERE request_id = 'client-scope-blocked'`).Scan(&clientType, &userAgent))
+	require.Equal(t, InstructionClientCodexCLI, clientType)
+	require.Equal(t, "codex_cli_rs/0.145.0 (Windows)", userAgent)
 }
 
 func TestInstructionAuditPostgresPersistsEncryptedEvidenceAndReviewTrail(t *testing.T) {

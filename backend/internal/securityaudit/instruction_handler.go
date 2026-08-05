@@ -167,11 +167,11 @@ func (h *InstructionAdminHandler) SaveGroupBindings(c *gin.Context) {
 	}
 	items, err := h.service.SaveGroupBindings(c.Request.Context(), request, adminID(c))
 	if err != nil {
-		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"group_count": len(request.GroupIDs), "rule_set_id": request.RuleSetID})
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"group_count": len(request.GroupIDs), "rule_set_id": request.RuleSetID, "client_types": request.ClientTypes})
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.setAdminAudit(c, "success", "", map[string]any{"binding_count": len(items), "group_ids": request.GroupIDs, "rule_set_id": request.RuleSetID})
+	h.setAdminAudit(c, "success", "", map[string]any{"binding_count": len(items), "group_ids": request.GroupIDs, "rule_set_id": request.RuleSetID, "client_types": request.ClientTypes})
 	response.Success(c, items)
 }
 
@@ -320,6 +320,7 @@ func instructionEventFilterFromQuery(c *gin.Context) (InstructionEventFilter, er
 		Input1Results:      splitInstructionQuery(c.Query("input1_results")),
 		UserNotifications:  splitInstructionQuery(c.Query("user_notifications")),
 		OpsNotifications:   splitInstructionQuery(c.Query("ops_notifications")),
+		ClientTypes:        splitInstructionQuery(c.Query("client_types")),
 	}
 	var err error
 	if filter.UserID, err = optionalInstructionUserID(c.Query("user_id")); err != nil {

@@ -111,6 +111,29 @@ func TestRunInstructionAuditUsesAuthenticatedDownstreamGroup(t *testing.T) {
 	require.Equal(t, "Downstream OpenAI", instruction.request.GroupName)
 }
 
+func TestRunInstructionAuditCarriesClientIdentitySignalsAcrossTransports(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, stage := range []string{"http", "first_turn", "subsequent_turn"} {
+		t.Run(stage, func(t *testing.T) {
+			instruction := &capturingInstructionEngine{}
+			coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			ctx := securityaudit.WithTrustedInternalInstructionClient(context.Background())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(ctx)
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.145.0")
+
+			decision := runInstructionAudit(c, nil, coordinator, nil, middleware2.AuthSubject{UserID: 7},
+				"openai_responses", "gpt-test", []byte(`{"instructions":"exact"}`), false, stage)
+
+			require.Nil(t, decision)
+			require.Equal(t, "codex_cli_rs/0.145.0", instruction.request.UserAgent)
+			require.True(t, instruction.request.TrustedInternalClient)
+			require.Equal(t, stage, instruction.request.Stage)
+		})
+	}
+}
+
 type turnCountingEngine struct {
 	mode     securityaudit.Mode
 	enqueues atomic.Int64

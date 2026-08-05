@@ -1,5 +1,14 @@
 export type InstructionHashStatus = 'candidate' | 'active' | 'disabled' | 'expired'
 export type InstructionObservedSource = '' | 'instructions' | 'input1'
+export type InstructionDetectedClientType =
+  | 'codex_vscode'
+  | 'codex_cli'
+  | 'codex_desktop'
+  | 'opencode'
+  | 'modelport_internal'
+  | 'other'
+  | 'unknown'
+export type InstructionClientType = 'all' | InstructionDetectedClientType
 
 export interface InstructionOverview {
   enabled: boolean
@@ -54,6 +63,7 @@ export interface InstructionGroupBinding {
   group_status: string
   rule_set_id: number
   rule_set_name: string
+  client_types: InstructionClientType[]
   enabled: boolean
   effective: boolean
   created_at: string
@@ -74,6 +84,8 @@ export interface InstructionEvent {
   api_key_id?: number | null
   group_id?: number | null
   group_name: string
+  client_type: InstructionDetectedClientType
+  client_user_agent: string
   model: string
   endpoint: string
   stage: string
@@ -127,6 +139,7 @@ export interface InstructionEventFilters {
   input1_results?: string
   user_notifications?: string
   ops_notifications?: string
+  client_types?: string
 }
 
 export interface InstructionEventPage {
@@ -166,5 +179,6 @@ export interface SaveInstructionRuleSetRequest {
 export interface SaveInstructionGroupBindingsRequest {
   group_ids: number[]
   rule_set_id: number
+  client_types?: InstructionClientType[]
   enabled: boolean
 }

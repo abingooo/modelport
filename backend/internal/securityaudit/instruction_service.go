@@ -179,6 +179,8 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 		return &InstructionDecision{Allow: true}
 	}
 	startedAt := time.Now()
+	request.InstructionClientType = ClassifyInstructionClient(request.UserAgent, request.TrustedInternalClient)
+	request.UserAgent = instructionUserAgentSnapshot(request.UserAgent)
 	snapshot := s.snapshot.Load()
 	if snapshot == nil {
 		return s.blockInstructionConfigUnavailable(ctx, request, snapshot, startedAt)
@@ -186,7 +188,7 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 	if !snapshot.Enabled {
 		return &InstructionDecision{Allow: true, ConfigVersion: snapshot.ConfigVersion}
 	}
-	policy, applicable := instructionPolicyFor(snapshot, instructionGroupID(request.GroupID))
+	policy, applicable := instructionPolicyFor(snapshot, instructionGroupID(request.GroupID), request.InstructionClientType)
 	if !applicable {
 		return &InstructionDecision{Allow: true, ConfigVersion: snapshot.ConfigVersion}
 	}
@@ -280,18 +282,36 @@ func (s *InstructionService) requireConfigVersion(version int64) {
 	}
 }
 
-func instructionPolicyFor(snapshot *instructionSnapshot, groupID int64) (instructionPolicy, bool) {
+func instructionPolicyFor(snapshot *instructionSnapshot, groupID int64, clientType string) (instructionPolicy, bool) {
 	if snapshot == nil {
 		return instructionPolicy{}, false
 	}
-	if _, audited := snapshot.AuditedGroups[groupID]; !audited {
+	_, wildcardAudited := snapshot.AuditedGroups[groupID]
+	scope := instructionPolicyScope{GroupID: groupID, ClientType: clientType}
+	_, clientAudited := snapshot.AuditedClientScopes[scope]
+	if !wildcardAudited && !clientAudited {
 		return instructionPolicy{}, false
 	}
-	policy, ok := snapshot.Policies[groupID]
-	if !ok {
-		return instructionPolicy{}, true
+	accumulator := newInstructionPolicyAccumulator()
+	if wildcardAudited {
+		mergeInstructionPolicy(accumulator, snapshot.Policies[groupID])
 	}
-	return policy, true
+	if clientAudited {
+		mergeInstructionPolicy(accumulator, snapshot.ClientPolicies[scope])
+	}
+	return buildInstructionPolicy(accumulator), true
+}
+
+func mergeInstructionPolicy(accumulator *instructionPolicyAccumulator, policy instructionPolicy) {
+	if accumulator == nil {
+		return
+	}
+	for _, ruleSetID := range policy.RuleSetIDs {
+		accumulator.ruleSets[ruleSetID] = struct{}{}
+	}
+	for _, hash := range policy.Hashes {
+		accumulator.hashes[hash.Digest] = hash
+	}
 }
 
 func (s *InstructionService) recordBlocked(ctx context.Context, request Request, decision *InstructionDecision) {
@@ -341,6 +361,7 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 			"api_key_id":   strconv.FormatInt(event.Request.APIKeyID, 10),
 			"group_id":     strconv.FormatInt(groupID, 10),
 			"group_name":   event.Request.GroupName,
+			"client_type":  event.Request.InstructionClientType,
 			"model":        event.Request.Model,
 			"admin_qq":     "2145236436",
 		}
@@ -568,6 +589,13 @@ func (s *InstructionService) SaveGroupBindings(ctx context.Context, request Save
 	if len(request.GroupIDs) == 0 || len(request.GroupIDs) > 500 || request.RuleSetID <= 0 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_group_binding", "分组和规则集必须有效，单次最多选择 500 个分组")
 	}
+	if request.ClientTypes != nil {
+		clientTypes, err := normalizeInstructionClientTypes(request.ClientTypes)
+		if err != nil {
+			return nil, infraerrors.BadRequest("instruction_audit_invalid_client_scope", "客户端范围无效")
+		}
+		request.ClientTypes = clientTypes
+	}
 	items, err := s.repository.SaveGroupBindings(ctx, request, actorID)
 	if err != nil {
 		return nil, err
@@ -614,6 +642,7 @@ func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int,
 	filter.Input1Results = normalizeInstructionFilterValues(filter.Input1Results, validInstructionFieldResults)
 	filter.UserNotifications = normalizeInstructionFilterValues(filter.UserNotifications, validSecurityNotificationStatuses)
 	filter.OpsNotifications = normalizeInstructionFilterValues(filter.OpsNotifications, validSecurityNotificationStatuses)
+	filter.ClientTypes = normalizeInstructionFilterValues(filter.ClientTypes, validInstructionDetectedClientTypeSet)
 	if filter.GroupIDs == nil {
 		filter.GroupIDs = []int64{}
 	}
@@ -631,6 +660,9 @@ func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int,
 	}
 	if filter.OpsNotifications == nil {
 		filter.OpsNotifications = []string{}
+	}
+	if filter.ClientTypes == nil {
+		filter.ClientTypes = []string{}
 	}
 	return s.repository.ListEvents(ctx, page, pageSize, filter)
 }

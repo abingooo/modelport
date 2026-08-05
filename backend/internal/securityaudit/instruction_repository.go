@@ -47,7 +47,7 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 		return nil, err
 	}
 	rows, err := tx.QueryContext(ctx, `
-			SELECT b.group_id, rs.id, rs.enabled, h.digest, h.valid_from, h.valid_until
+			SELECT b.group_id, b.client_types, rs.id, rs.enabled, h.digest, h.valid_from, h.valid_until
 			FROM instruction_audit_group_bindings b
 			JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id
 			LEFT JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id AND rs.enabled = TRUE
@@ -61,24 +61,44 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 	defer func() { _ = rows.Close() }()
 
 	accumulators := make(map[int64]*instructionPolicyAccumulator)
+	clientAccumulators := make(map[instructionPolicyScope]*instructionPolicyAccumulator)
 	auditedGroups := make(map[int64]struct{})
+	auditedClientScopes := make(map[instructionPolicyScope]struct{})
 	for rows.Next() {
 		var groupID, ruleSetID int64
+		var clientTypes pq.StringArray
 		var ruleSetEnabled bool
 		var digest sql.NullString
 		var validFrom, validUntil sql.NullTime
-		if err := rows.Scan(&groupID, &ruleSetID, &ruleSetEnabled, &digest, &validFrom, &validUntil); err != nil {
+		if err := rows.Scan(&groupID, &clientTypes, &ruleSetID, &ruleSetEnabled, &digest, &validFrom, &validUntil); err != nil {
 			return nil, err
 		}
-		auditedGroups[groupID] = struct{}{}
-		acc := accumulators[groupID]
-		if acc == nil {
-			acc = &instructionPolicyAccumulator{ruleSets: make(map[int64]struct{}), hashes: make(map[[32]byte]instructionPolicyHash)}
-			accumulators[groupID] = acc
+		normalizedClientTypes, normalizeErr := normalizeInstructionClientTypes([]string(clientTypes))
+		if normalizeErr != nil || len(normalizedClientTypes) == 0 {
+			return nil, fmt.Errorf("invalid instruction audit client scope in database")
 		}
-		if ruleSetEnabled {
-			acc.ruleSets[ruleSetID] = struct{}{}
+		targets := make([]*instructionPolicyAccumulator, 0, len(normalizedClientTypes))
+		for _, clientType := range normalizedClientTypes {
+			if clientType == InstructionClientAll {
+				auditedGroups[groupID] = struct{}{}
+				acc := accumulators[groupID]
+				if acc == nil {
+					acc = newInstructionPolicyAccumulator()
+					accumulators[groupID] = acc
+				}
+				targets = append(targets, acc)
+				continue
+			}
+			scope := instructionPolicyScope{GroupID: groupID, ClientType: clientType}
+			auditedClientScopes[scope] = struct{}{}
+			acc := clientAccumulators[scope]
+			if acc == nil {
+				acc = newInstructionPolicyAccumulator()
+				clientAccumulators[scope] = acc
+			}
+			targets = append(targets, acc)
 		}
+		var policyHash *instructionPolicyHash
 		if digest.Valid {
 			decoded, decodeErr := hex.DecodeString(strings.TrimSpace(digest.String))
 			if decodeErr != nil || len(decoded) != sha256.Size {
@@ -86,14 +106,22 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 			}
 			var value [32]byte
 			copy(value[:], decoded)
-			policyHash := instructionPolicyHash{Digest: value}
+			valueHash := instructionPolicyHash{Digest: value}
 			if validFrom.Valid {
-				policyHash.ValidFrom = validFrom.Time.UTC()
+				valueHash.ValidFrom = validFrom.Time.UTC()
 			}
 			if validUntil.Valid {
-				policyHash.ValidUntil = validUntil.Time.UTC()
+				valueHash.ValidUntil = validUntil.Time.UTC()
 			}
-			acc.hashes[value] = policyHash
+			policyHash = &valueHash
+		}
+		for _, acc := range targets {
+			if ruleSetEnabled {
+				acc.ruleSets[ruleSetID] = struct{}{}
+			}
+			if policyHash != nil {
+				acc.hashes[policyHash.Digest] = *policyHash
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -105,29 +133,47 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 
 	policies := make(map[int64]instructionPolicy, len(accumulators))
 	for groupID, acc := range accumulators {
-		policy := instructionPolicy{
-			RuleSetIDs: make([]int64, 0, len(acc.ruleSets)),
-			Hashes:     make([]instructionPolicyHash, 0, len(acc.hashes)),
-		}
-		for id := range acc.ruleSets {
-			policy.RuleSetIDs = append(policy.RuleSetIDs, id)
-		}
-		for _, hash := range acc.hashes {
-			policy.Hashes = append(policy.Hashes, hash)
-		}
-		sort.Slice(policy.RuleSetIDs, func(i, j int) bool { return policy.RuleSetIDs[i] < policy.RuleSetIDs[j] })
-		sort.Slice(policy.Hashes, func(i, j int) bool {
-			return bytes.Compare(policy.Hashes[i].Digest[:], policy.Hashes[j].Digest[:]) < 0
-		})
-		policies[groupID] = policy
+		policies[groupID] = buildInstructionPolicy(acc)
+	}
+	clientPolicies := make(map[instructionPolicyScope]instructionPolicy, len(clientAccumulators))
+	for scope, acc := range clientAccumulators {
+		clientPolicies[scope] = buildInstructionPolicy(acc)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &instructionSnapshot{
 		Enabled: enabled, ConfigVersion: version, AuditedGroups: auditedGroups,
-		Policies: policies, LoadedAt: time.Now().UTC(),
+		Policies: policies, AuditedClientScopes: auditedClientScopes,
+		ClientPolicies: clientPolicies, LoadedAt: time.Now().UTC(),
 	}, nil
+}
+
+func newInstructionPolicyAccumulator() *instructionPolicyAccumulator {
+	return &instructionPolicyAccumulator{
+		ruleSets: make(map[int64]struct{}),
+		hashes:   make(map[[32]byte]instructionPolicyHash),
+	}
+}
+
+func buildInstructionPolicy(acc *instructionPolicyAccumulator) instructionPolicy {
+	policy := instructionPolicy{}
+	if acc == nil {
+		return policy
+	}
+	policy.RuleSetIDs = make([]int64, 0, len(acc.ruleSets))
+	policy.Hashes = make([]instructionPolicyHash, 0, len(acc.hashes))
+	for id := range acc.ruleSets {
+		policy.RuleSetIDs = append(policy.RuleSetIDs, id)
+	}
+	for _, hash := range acc.hashes {
+		policy.Hashes = append(policy.Hashes, hash)
+	}
+	sort.Slice(policy.RuleSetIDs, func(i, j int) bool { return policy.RuleSetIDs[i] < policy.RuleSetIDs[j] })
+	sort.Slice(policy.Hashes, func(i, j int) bool {
+		return bytes.Compare(policy.Hashes[i].Digest[:], policy.Hashes[j].Digest[:]) < 0
+	})
+	return policy
 }
 
 func (r *InstructionRepository) GetConfigVersion(ctx context.Context) (int64, error) {
@@ -461,7 +507,7 @@ func (r *InstructionRepository) SaveRuleSet(ctx context.Context, id int64, req S
 func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]InstructionGroupBinding, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT b.id, b.group_id, g.name, g.platform, g.status,
-			b.rule_set_id, rs.name, b.enabled,
+			b.rule_set_id, rs.name, b.client_types, b.enabled,
 			(rs.enabled AND EXISTS (
 				SELECT 1
 				FROM instruction_audit_rule_set_hashes rsh
@@ -483,10 +529,12 @@ func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]Instru
 	items := make([]InstructionGroupBinding, 0)
 	for rows.Next() {
 		var item InstructionGroupBinding
+		var clientTypes pq.StringArray
 		if err := rows.Scan(&item.ID, &item.GroupID, &item.GroupName, &item.Platform, &item.GroupStatus,
-			&item.RuleSetID, &item.RuleSetName, &item.Enabled, &item.Effective, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.RuleSetID, &item.RuleSetName, &clientTypes, &item.Enabled, &item.Effective, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
+		item.ClientTypes = append([]string(nil), clientTypes...)
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -514,21 +562,33 @@ func (r *InstructionRepository) ListGroupOptions(ctx context.Context) ([]Instruc
 }
 
 func (r *InstructionRepository) SaveGroupBindings(ctx context.Context, req SaveInstructionGroupBindingsRequest, actorID int64) ([]InstructionGroupBinding, error) {
+	if req.ClientTypes != nil {
+		clientTypes, err := normalizeInstructionClientTypes(req.ClientTypes)
+		if err != nil {
+			return nil, err
+		}
+		req.ClientTypes = clientTypes
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var clientTypes any
+	if req.ClientTypes != nil {
+		clientTypes = pq.Array(req.ClientTypes)
+	}
 	ids := make([]int64, 0, len(req.GroupIDs))
 	for _, groupID := range uniquePositiveInt64s(req.GroupIDs) {
 		var id int64
 		err = tx.QueryRowContext(ctx, `
 			INSERT INTO instruction_audit_group_bindings
-				(group_id, rule_set_id, enabled, created_by, updated_by)
-			VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($4, 0))
+				(group_id, rule_set_id, client_types, enabled, created_by, updated_by)
+			VALUES ($1, $2, COALESCE($3::TEXT[], ARRAY['all']::TEXT[]), $4, NULLIF($5, 0), NULLIF($5, 0))
 			ON CONFLICT (group_id, rule_set_id)
-			DO UPDATE SET enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW()
-			RETURNING id`, groupID, req.RuleSetID, req.Enabled, actorID).Scan(&id)
+			DO UPDATE SET client_types = COALESCE($3::TEXT[], instruction_audit_group_bindings.client_types),
+				enabled = EXCLUDED.enabled, updated_by = EXCLUDED.updated_by, updated_at = NOW()
+			RETURNING id`, groupID, req.RuleSetID, clientTypes, req.Enabled, actorID).Scan(&id)
 		if err != nil {
 			return nil, err
 		}
@@ -579,6 +639,7 @@ func (r *InstructionRepository) DeleteGroupBinding(ctx context.Context, id int64
 const instructionEventFilterSQL = `
 	WHERE ($1 = '' OR
 		e.user_email_snapshot ILIKE $2 OR e.request_id ILIKE $2 OR e.model ILIKE $2 OR
+		e.client_type ILIKE $2 OR e.client_user_agent ILIKE $2 OR
 		COALESCE(e.user_id::TEXT, '') = $1 OR COALESCE(e.api_key_id::TEXT, '') = $1)
 	  AND ($3::TIMESTAMPTZ IS NULL OR e.created_at >= $3)
 	  AND ($4::TIMESTAMPTZ IS NULL OR e.created_at < $4)
@@ -589,7 +650,8 @@ const instructionEventFilterSQL = `
 	  AND (cardinality($9::TEXT[]) = 0 OR COALESCE(un.status, 'no_recipient') = ANY($9::TEXT[]))
 	  AND (cardinality($10::TEXT[]) = 0 OR COALESCE(op.status, 'no_recipient') = ANY($10::TEXT[]))
 	  AND ($11 = 0 OR e.user_id = $11)
-	  AND ($12 = '%%' OR e.model ILIKE $12)`
+	  AND ($12 = '%%' OR e.model ILIKE $12)
+	  AND (cardinality($13::TEXT[]) = 0 OR e.client_type = ANY($13::TEXT[]))`
 
 func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize int, filter InstructionEventFilter) (*InstructionEventPage, error) {
 	offset := (page - 1) * pageSize
@@ -599,7 +661,7 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 		query, pattern, filter.From, filter.To, pq.Array(filter.GroupIDs), pq.Array(filter.Reasons),
 		pq.Array(filter.InstructionResults), pq.Array(filter.Input1Results),
 		pq.Array(filter.UserNotifications), pq.Array(filter.OpsNotifications), filter.UserID,
-		"%" + strings.TrimSpace(filter.Model) + "%",
+		"%" + strings.TrimSpace(filter.Model) + "%", pq.Array(filter.ClientTypes),
 	}
 	var total int64
 	if err := r.db.QueryRowContext(ctx, `
@@ -614,7 +676,8 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 	args = append(args, pageSize, offset)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id,
-			e.group_id, e.group_name_snapshot, e.model, e.endpoint, e.stage,
+			e.group_id, e.group_name_snapshot, e.client_type, e.client_user_agent,
+			e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
 			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
@@ -626,7 +689,7 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 		LEFT JOIN security_notification_outbox op
 			ON op.source_type = 'instruction_audit' AND op.source_id = e.id AND op.audience = 'ops'
 		`+instructionEventFilterSQL+`
-		ORDER BY e.created_at DESC, e.id DESC LIMIT $13 OFFSET $14`, args...)
+		ORDER BY e.created_at DESC, e.id DESC LIMIT $14 OFFSET $15`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -655,7 +718,7 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 	var ruleSetJSON []byte
 	err := scanner.Scan(
 		&item.ID, &item.RequestID, &userID, &item.UserEmailSnapshot, &apiKeyID,
-		&groupID, &item.GroupNameSnapshot,
+		&groupID, &item.GroupNameSnapshot, &item.ClientType, &item.ClientUserAgent,
 		&item.Model, &item.Endpoint, &item.Stage,
 		&item.Instructions.Present, &item.Instructions.SHA256, &item.Instructions.Result,
 		&item.Input1.Present, &item.Input1.SHA256, &item.Input1.Result,
@@ -687,7 +750,8 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 func (r *InstructionRepository) GetEvent(ctx context.Context, id int64) (*InstructionEvent, error) {
 	item, err := scanInstructionEvent(r.db.QueryRowContext(ctx, `
 		SELECT e.id, e.request_id, e.user_id, e.user_email_snapshot, e.api_key_id,
-			e.group_id, e.group_name_snapshot, e.model, e.endpoint, e.stage,
+			e.group_id, e.group_name_snapshot, e.client_type, e.client_user_agent,
+			e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
 			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
@@ -733,19 +797,24 @@ func (r *InstructionRepository) RecordBlocked(
 	if latencyMS < 0 {
 		latencyMS = 0
 	}
+	clientType := strings.ToLower(strings.TrimSpace(req.InstructionClientType))
+	if !validInstructionDetectedClientType(clientType) {
+		clientType = ClassifyInstructionClient(req.UserAgent, req.TrustedInternalClient)
+	}
+	clientUserAgent := instructionUserAgentSnapshot(req.UserAgent)
 	var eventID int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_events
 			(request_id, user_id, user_email_snapshot, api_key_id, group_id, group_name_snapshot,
-			 model, endpoint, stage,
+			 client_type, client_user_agent, model, endpoint, stage,
 			 instructions_present, instructions_sha256, instructions_result,
 			 input1_present, input1_sha256, input1_result, reason, rule_set_ids, config_version, latency_ms,
 			 evidence_status, evidence_expires_at)
-		VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), NULLIF($5, 0), $6, $7, $8, $9,
-			$10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), NULLIF($5, 0), $6, $7, LEFT($8, 512), $9, $10, $11,
+			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		RETURNING id`,
 		req.RequestID, req.UserID, req.UserEmail, req.APIKeyID, instructionGroupID(req.GroupID), req.GroupName,
-		req.Model, req.Endpoint, req.Stage,
+		clientType, clientUserAgent, req.Model, req.Endpoint, req.Stage,
 		decision.Instructions.Present, decision.Instructions.SHA256, decision.Instructions.Result,
 		decision.Input1.Present, decision.Input1.SHA256, decision.Input1.Result,
 		decision.Reason, ruleSets, decision.ConfigVersion, latencyMS,

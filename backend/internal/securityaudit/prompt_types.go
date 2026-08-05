@@ -84,6 +84,9 @@ type Request struct {
 	InstructionModelOverride  bool
 	InstructionAuditExcluded  bool
 	InstructionAuditCompleted bool
+	UserAgent                 string
+	InstructionClientType     string
+	TrustedInternalClient     bool
 	Stage                     string
 }
 

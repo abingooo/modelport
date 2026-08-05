@@ -11,10 +11,17 @@
     </div>
 
     <div v-else-if="review && event" class="space-y-5">
-      <div class="flex flex-col gap-3 rounded-md border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800 sm:flex-row sm:items-center sm:justify-between">
+      <div class="grid gap-3 rounded-md border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
         <div class="min-w-0">
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.requestId') }}</p>
           <p class="mt-1 break-all font-mono text-sm text-gray-900 dark:text-white">{{ review.request_id || '-' }}</p>
+        </div>
+        <div class="min-w-0">
+          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.client') }}</p>
+          <p class="mt-1 text-sm font-medium text-gray-900 dark:text-white">{{ clientTypeLabel(event.client_type) }}</p>
+          <p v-if="event.client_user_agent" class="mt-0.5 truncate font-mono text-[11px] text-gray-500 dark:text-gray-400" :title="event.client_user_agent">
+            {{ event.client_user_agent }}
+          </p>
         </div>
         <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="!review.request_id" @click="copyValue('request_id', review.request_id)">
           <Icon name="copy" size="sm" />
@@ -202,6 +209,8 @@ async function copyReviewBundle() {
     api_key_id: props.event.api_key_id,
     group_id: props.event.group_id,
     group_name: props.event.group_name,
+    client_type: props.event.client_type,
+    client_user_agent: props.event.client_user_agent,
     model: props.event.model,
     reason: props.event.reason,
     evidence_status: review.value.status,
@@ -212,6 +221,10 @@ async function copyReviewBundle() {
 
 function sourceLabel(source: 'instructions' | 'input1'): string {
   return source === 'instructions' ? t('admin.instructionAudit.fieldOne') : t('admin.instructionAudit.fieldTwo')
+}
+
+function clientTypeLabel(clientType: string): string {
+  return t(`admin.instructionAudit.clients.${clientType}`, clientType)
 }
 
 function evidenceStatusLabel(status: InstructionEvidenceStatus): string {

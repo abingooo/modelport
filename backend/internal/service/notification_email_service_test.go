@@ -146,7 +146,7 @@ func TestNotificationEmailAdditionalEventsAreListedAndPreviewable(t *testing.T) 
 		{NotificationEmailEventCyberPolicyNotice, "request_id"},
 		{NotificationEmailEventCyberPolicyOpsNotice, "user_email"},
 		{NotificationEmailEventInstructionAuditUserNotice, "admin_qq"},
-		{NotificationEmailEventInstructionAuditOpsNotice, "api_key_id"},
+		{NotificationEmailEventInstructionAuditOpsNotice, "client_type"},
 		{NotificationEmailEventOpsAlert, "rule_name"},
 		{NotificationEmailEventOpsScheduledReport, "report_html"},
 	}

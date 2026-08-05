@@ -25,12 +25,14 @@ describe('instruction audit evidence review', () => {
     expect(dialog).toContain('field.sha256')
     expect(dialog).toContain('field.digest_consistent')
     expect(dialog).toContain('reviewConfirmed')
+    expect(dialog).toContain('client_type: props.event.client_type')
+    expect(dialog).toContain('client_user_agent: props.event.client_user_agent')
   })
 
   it('supports searchable, multi-value, URL-persisted audit filters', () => {
     const view = read('../InstructionAuditView.vue')
     for (const filter of [
-      'groupIds', 'reasons', 'instructionsResults', 'input1Results',
+      'groupIds', 'clientTypes', 'reasons', 'instructionsResults', 'input1Results',
       'userNotifications', 'opsNotifications',
     ]) {
       expect(view).toContain(filter)

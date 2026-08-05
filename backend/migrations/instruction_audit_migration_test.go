@@ -69,3 +69,17 @@ func TestInstructionAuditReviewMigrationEncryptsEvidenceAndSplitsNotifications(t
 	require.NotContains(t, sql, "request_body")
 	require.NotContains(t, sql, "bearer_token")
 }
+
+func TestInstructionAuditClientScopeMigrationPreservesExistingCoverage(t *testing.T) {
+	body, err := FS.ReadFile("201_instruction_audit_client_scope.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists client_types")
+	require.Contains(t, sql, "default array['all']::text[]")
+	require.Contains(t, sql, "'codex_vscode', 'codex_cli', 'codex_desktop'")
+	require.Contains(t, sql, "'opencode', 'modelport_internal', 'other', 'unknown'")
+	require.Contains(t, sql, "add column if not exists client_type")
+	require.Contains(t, sql, "add column if not exists client_user_agent")
+	require.NotContains(t, sql, "drop table")
+	require.NotContains(t, sql, "truncate")
+}

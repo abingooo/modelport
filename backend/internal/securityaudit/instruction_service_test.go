@@ -122,6 +122,104 @@ func TestInstructionServiceEvaluationScopeAndFallback(t *testing.T) {
 	}
 }
 
+func TestInstructionServiceClientScopeRequiresGroupAndDetectedClient(t *testing.T) {
+	const groupID int64 = 42
+	scope := instructionPolicyScope{GroupID: groupID, ClientType: InstructionClientCodexCLI}
+	snapshot := &instructionSnapshot{
+		Enabled: true, ConfigVersion: 8, LoadedAt: time.Now().UTC(),
+		AuditedGroups: map[int64]struct{}{}, Policies: map[int64]instructionPolicy{},
+		AuditedClientScopes: map[instructionPolicyScope]struct{}{scope: {}},
+		ClientPolicies: map[instructionPolicyScope]instructionPolicy{
+			scope: {RuleSetIDs: []int64{21}, Hashes: []instructionPolicyHash{allowedDigest("trusted")}},
+		},
+	}
+	service := &InstructionService{}
+	service.snapshot.Store(snapshot)
+
+	matching := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), UserAgent: "codex_cli_rs/0.145.0",
+		InstructionBody: []byte(`{"instructions":"trusted"}`),
+	})
+	require.True(t, matching.Applicable)
+	require.True(t, matching.Allow)
+	require.Equal(t, []int64{21}, matching.RuleSetIDs)
+
+	nonMatching := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), UserAgent: "opencode/1.0",
+		InstructionBody: []byte(`{`),
+	})
+	require.False(t, nonMatching.Applicable)
+	require.True(t, nonMatching.Allow)
+
+	wrongGroup := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(99), UserAgent: "codex_cli_rs/0.145.0",
+		InstructionBody: []byte(`{`),
+	})
+	require.False(t, wrongGroup.Applicable)
+	require.True(t, wrongGroup.Allow)
+}
+
+func TestInstructionServiceSupportsEveryDetectedClientScope(t *testing.T) {
+	const groupID int64 = 42
+	tests := []struct {
+		name            string
+		clientType      string
+		userAgent       string
+		trustedInternal bool
+	}{
+		{name: "codex vscode", clientType: InstructionClientCodexVSCode, userAgent: "codex_vscode/1.0"},
+		{name: "codex cli", clientType: InstructionClientCodexCLI, userAgent: "codex_cli_rs/1.0"},
+		{name: "codex desktop", clientType: InstructionClientCodexDesktop, userAgent: "Codex Desktop/1.0"},
+		{name: "opencode", clientType: InstructionClientOpenCode, userAgent: "opencode/1.0"},
+		{name: "modelport internal", clientType: InstructionClientModelPortInternal, userAgent: "forged/1.0", trustedInternal: true},
+		{name: "other", clientType: InstructionClientOther, userAgent: "curl/8.0"},
+		{name: "unknown", clientType: InstructionClientUnknown},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			scope := instructionPolicyScope{GroupID: groupID, ClientType: test.clientType}
+			snapshot := &instructionSnapshot{
+				Enabled: true, ConfigVersion: 8, LoadedAt: time.Now().UTC(),
+				AuditedGroups: map[int64]struct{}{}, Policies: map[int64]instructionPolicy{},
+				AuditedClientScopes: map[instructionPolicyScope]struct{}{scope: {}},
+				ClientPolicies: map[instructionPolicyScope]instructionPolicy{
+					scope: {RuleSetIDs: []int64{21}, Hashes: []instructionPolicyHash{allowedDigest("trusted")}},
+				},
+			}
+			service := &InstructionService{}
+			service.snapshot.Store(snapshot)
+			decision := service.EvaluateInstruction(context.Background(), Request{
+				Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID),
+				UserAgent: test.userAgent, TrustedInternalClient: test.trustedInternal,
+				InstructionBody: []byte(`{"instructions":"trusted"}`),
+			})
+			require.True(t, decision.Applicable)
+			require.True(t, decision.Allow)
+			require.Equal(t, []int64{21}, decision.RuleSetIDs)
+		})
+	}
+}
+
+func TestInstructionServiceUnionsWildcardAndClientSpecificPolicies(t *testing.T) {
+	const groupID int64 = 7
+	snapshot := instructionTestSnapshot(true, groupID, "shared")
+	scope := instructionPolicyScope{GroupID: groupID, ClientType: InstructionClientOpenCode}
+	snapshot.AuditedClientScopes = map[instructionPolicyScope]struct{}{scope: {}}
+	snapshot.ClientPolicies = map[instructionPolicyScope]instructionPolicy{
+		scope: {RuleSetIDs: []int64{12}, Hashes: []instructionPolicyHash{allowedDigest("opencode-only")}},
+	}
+	service := &InstructionService{}
+	service.snapshot.Store(snapshot)
+
+	decision := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID), UserAgent: "opencode/1.0",
+		InstructionBody: []byte(`{"instructions":"opencode-only"}`),
+	})
+	require.True(t, decision.Applicable)
+	require.True(t, decision.Allow)
+	require.Equal(t, []int64{11, 12}, decision.RuleSetIDs)
+}
+
 func TestInstructionServiceFailsClosedBeforeFirstValidSnapshot(t *testing.T) {
 	service := &InstructionService{}
 	decision := service.EvaluateInstruction(context.Background(), Request{

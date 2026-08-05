@@ -140,7 +140,7 @@
               <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.bindings') }}</h2>
               <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.bindingCount', { count: bindings.length }) }}</p>
             </div>
-            <button type="button" class="btn btn-primary" :disabled="!ruleSets.length" @click="openBindingDialog">
+            <button type="button" class="btn btn-primary" :disabled="!ruleSets.length" @click="openBindingDialog()">
               <Icon name="plus" size="sm" />
               {{ t('admin.instructionAudit.addBinding') }}
             </button>
@@ -152,6 +152,7 @@
                   <th class="table-th">{{ t('admin.instructionAudit.group') }}</th>
                   <th class="table-th">{{ t('admin.instructionAudit.platform') }}</th>
                   <th class="table-th">{{ t('admin.instructionAudit.ruleSet') }}</th>
+                  <th class="table-th">{{ t('admin.instructionAudit.clientScope') }}</th>
                   <th class="table-th">{{ t('common.status') }}</th>
                   <th class="table-th text-right">{{ t('common.actions') }}</th>
                 </tr>
@@ -168,12 +169,22 @@
                   </td>
                   <td class="table-td">{{ binding.rule_set_name }}</td>
                   <td class="table-td">
+                    <div class="flex max-w-sm flex-wrap gap-1.5">
+                      <span v-for="clientType in binding.client_types" :key="clientType" :class="clientTypePill(clientType)">
+                        {{ clientTypeLabel(clientType) }}
+                      </span>
+                    </div>
+                  </td>
+                  <td class="table-td">
                     <div class="flex items-center gap-3">
                       <Toggle :model-value="binding.enabled" :disabled="saving" @update:model-value="setBindingEnabled(binding, $event)" />
                       <span v-if="binding.enabled && !binding.effective" :class="statusPill('invalid')">{{ t('admin.instructionAudit.ineffectiveRule') }}</span>
                     </div>
                   </td>
                   <td class="table-td text-right">
+                    <button type="button" class="btn btn-ghost btn-sm" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openBindingDialog(binding)">
+                      <Icon name="edit" size="sm" />
+                    </button>
                     <button type="button" class="btn btn-ghost btn-sm text-red-600 dark:text-red-400" :title="t('common.delete')" :aria-label="t('common.delete')" @click="requestDeleteBinding(binding)">
                       <Icon name="trash" size="sm" />
                     </button>
@@ -295,7 +306,7 @@
             </label>
           </div>
 
-          <div v-if="advancedFiltersOpen" class="grid gap-3 lg:grid-cols-2 xl:grid-cols-4">
+          <div v-if="advancedFiltersOpen" class="grid gap-3 lg:grid-cols-2 xl:grid-cols-5">
             <fieldset class="filter-fieldset">
               <legend class="filter-legend">{{ t('admin.instructionAudit.group') }}</legend>
               <div class="filter-options">
@@ -303,6 +314,15 @@
                   <input v-model="eventFilters.groupIds" type="checkbox" :value="group.id" />
                   <span class="truncate">{{ group.name }}</span>
                   <span class="ml-auto text-[10px] text-gray-400">#{{ group.id }}</span>
+                </label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.client') }}</legend>
+              <div class="filter-options">
+                <label v-for="client in clientOptions" :key="client.value" class="filter-option">
+                  <input v-model="eventFilters.clientTypes" type="checkbox" :value="client.value" />
+                  <span>{{ client.label }}</span>
                 </label>
               </div>
             </fieldset>
@@ -360,6 +380,7 @@
                 <th class="table-th">{{ t('admin.instructionAudit.time') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.user') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.group') }}</th>
+                <th class="table-th">{{ t('admin.instructionAudit.client') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.model') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.fieldOne') }}</th>
                 <th class="table-th">{{ t('admin.instructionAudit.fieldTwo') }}</th>
@@ -385,6 +406,14 @@
                 <td class="table-td">
                   <button type="button" class="text-left text-sm text-gray-900 hover:text-primary-600 dark:text-white dark:hover:text-primary-300" @click="addArrayFilter('groupIds', event.group_id)">{{ event.group_name || '-' }}</button>
                   <p class="text-xs text-gray-400">#{{ event.group_id || '-' }}</p>
+                </td>
+                <td class="table-td">
+                  <button type="button" :class="clientTypePill(event.client_type)" @click="addArrayFilter('clientTypes', event.client_type)">
+                    {{ clientTypeLabel(event.client_type) }}
+                  </button>
+                  <p v-if="event.client_user_agent" class="mt-1 max-w-52 truncate font-mono text-[11px] text-gray-400" :title="event.client_user_agent">
+                    {{ event.client_user_agent }}
+                  </p>
                 </td>
                 <td class="table-td"><button type="button" class="font-mono text-xs hover:text-primary-600" @click="setQueryFilter(event.model)">{{ event.model }}</button></td>
                 <td class="table-td"><FieldDigest :field="event.instructions" @filter="addArrayFilter('instructionsResults', $event)" /></td>
@@ -516,34 +545,68 @@
       </template>
     </BaseDialog>
 
-    <BaseDialog :show="bindingDialog.show" :title="t('admin.instructionAudit.addBinding')" width="normal" @close="bindingDialog.show = false">
+    <BaseDialog :show="bindingDialog.show" :title="bindingDialog.editingId ? t('admin.instructionAudit.editBinding') : t('admin.instructionAudit.addBinding')" width="wide" @close="bindingDialog.show = false">
       <div class="space-y-4">
         <div>
           <div class="flex items-center justify-between gap-3">
             <label class="input-label mb-0">{{ t('admin.instructionAudit.groups') }}</label>
             <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.selectedGroups', { count: bindingDialog.groupIds.length }) }}</span>
           </div>
-          <input v-model.trim="bindingDialog.search" type="search" class="input mt-2" :placeholder="t('admin.instructionAudit.searchGroups')" />
-          <div class="mt-2 flex items-center justify-end gap-3 text-xs">
-            <button type="button" class="font-medium text-primary-600 hover:underline dark:text-primary-400" @click="selectVisibleGroups">{{ t('admin.instructionAudit.selectVisible') }}</button>
-            <button type="button" class="font-medium text-gray-500 hover:underline dark:text-gray-400" @click="bindingDialog.groupIds = []">{{ t('admin.instructionAudit.clearSelection') }}</button>
+          <div v-if="editingBinding" class="mt-2 flex items-center gap-3 rounded-md border border-gray-200 px-3 py-3 dark:border-dark-600">
+            <span class="min-w-0 flex-1">
+              <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ editingBinding.group_name }}</span>
+              <span class="block text-xs text-gray-400">#{{ editingBinding.group_id }}</span>
+            </span>
+            <span class="font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ editingBinding.platform }}</span>
           </div>
-          <div class="mt-2 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-dark-600">
-            <label v-for="group in filteredGroupOptions" :key="group.id" class="flex cursor-pointer items-center gap-3 border-b border-gray-100 px-3 py-2.5 last:border-b-0 hover:bg-gray-50 dark:border-dark-700 dark:hover:bg-dark-700">
-              <input v-model="bindingDialog.groupIds" type="checkbox" :value="group.id" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
-              <span class="min-w-0 flex-1">
-                <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ group.name }}</span>
-                <span class="block text-xs text-gray-400">#{{ group.id }}</span>
+          <template v-else>
+            <input v-model.trim="bindingDialog.search" type="search" class="input mt-2" :placeholder="t('admin.instructionAudit.searchGroups')" />
+            <div class="mt-2 flex items-center justify-end gap-3 text-xs">
+              <button type="button" class="font-medium text-primary-600 hover:underline dark:text-primary-400" @click="selectVisibleGroups">{{ t('admin.instructionAudit.selectVisible') }}</button>
+              <button type="button" class="font-medium text-gray-500 hover:underline dark:text-gray-400" @click="bindingDialog.groupIds = []">{{ t('admin.instructionAudit.clearSelection') }}</button>
+            </div>
+            <div class="mt-2 max-h-72 overflow-y-auto rounded-lg border border-gray-200 dark:border-dark-600">
+              <label v-for="group in filteredGroupOptions" :key="group.id" class="flex cursor-pointer items-center gap-3 border-b border-gray-100 px-3 py-2.5 last:border-b-0 hover:bg-gray-50 dark:border-dark-700 dark:hover:bg-dark-700">
+                <input v-model="bindingDialog.groupIds" type="checkbox" :value="group.id" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-sm font-medium text-gray-900 dark:text-white">{{ group.name }}</span>
+                  <span class="block text-xs text-gray-400">#{{ group.id }}</span>
+                </span>
+                <span class="font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ group.platform }}</span>
+                <span v-if="group.status !== 'active'" :class="statusPill('disabled')">{{ t('common.disabled') }}</span>
+              </label>
+              <p v-if="!filteredGroupOptions.length" class="px-3 py-8 text-center text-sm text-gray-400">{{ t('admin.instructionAudit.noMatchingGroups') }}</p>
+            </div>
+          </template>
+        </div>
+        <div>
+          <label class="input-label">{{ t('admin.instructionAudit.clientScope') }}</label>
+          <div class="grid grid-cols-2 gap-1 rounded-md bg-gray-100 p-1 dark:bg-dark-700">
+            <button
+              v-for="mode in clientScopeModes"
+              :key="mode.value"
+              type="button"
+              class="rounded px-3 py-2 text-sm font-medium transition-colors"
+              :class="bindingDialog.clientScope === mode.value ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-600 dark:text-primary-300' : 'text-gray-500 dark:text-gray-400'"
+              @click="bindingDialog.clientScope = mode.value"
+            >
+              {{ mode.label }}
+            </button>
+          </div>
+          <div v-if="bindingDialog.clientScope === 'selected'" class="mt-3 grid gap-2 sm:grid-cols-2">
+            <label v-for="client in clientOptions" :key="client.value" class="flex cursor-pointer items-start gap-3 rounded-md border border-gray-200 px-3 py-2.5 hover:border-primary-300 dark:border-dark-600 dark:hover:border-primary-700">
+              <input v-model="bindingDialog.clientTypes" type="checkbox" :value="client.value" class="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+              <span class="min-w-0">
+                <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ client.label }}</span>
+                <span class="block break-all font-mono text-[11px] text-gray-400">{{ client.pattern }}</span>
               </span>
-              <span class="font-mono text-[11px] text-gray-500 dark:text-gray-400">{{ group.platform }}</span>
-              <span v-if="group.status !== 'active'" :class="statusPill('disabled')">{{ t('common.disabled') }}</span>
             </label>
-            <p v-if="!filteredGroupOptions.length" class="px-3 py-8 text-center text-sm text-gray-400">{{ t('admin.instructionAudit.noMatchingGroups') }}</p>
           </div>
+          <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.clientScopeHint') }}</p>
         </div>
         <div>
           <label class="input-label">{{ t('admin.instructionAudit.ruleSet') }}</label>
-          <select v-model.number="bindingDialog.ruleSetId" class="input">
+          <select v-model.number="bindingDialog.ruleSetId" class="input" :disabled="Boolean(bindingDialog.editingId)">
             <option :value="0">{{ t('admin.instructionAudit.selectRuleSet') }}</option>
             <option v-for="rule in ruleSets" :key="rule.id" :value="rule.id">{{ rule.name }}</option>
           </select>
@@ -555,7 +618,7 @@
       </div>
       <template #footer>
         <button type="button" class="btn btn-secondary" @click="bindingDialog.show = false">{{ t('common.cancel') }}</button>
-        <button type="button" class="btn btn-primary" :disabled="saving || !bindingDialog.groupIds.length || !bindingDialog.ruleSetId" @click="saveBinding">{{ t('common.save') }}</button>
+        <button type="button" class="btn btn-primary" :disabled="!canSaveBinding" @click="saveBinding">{{ t('common.save') }}</button>
       </template>
     </BaseDialog>
 
@@ -594,6 +657,8 @@ import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from './api'
 import { resolveInstructionHashDigest } from './hash'
 import type {
+  InstructionClientType,
+  InstructionDetectedClientType,
   InstructionEventPage,
   InstructionEvent,
   InstructionFieldResult,
@@ -630,6 +695,7 @@ const advancedFiltersOpen = ref(false)
 const eventFilters = reactive({
   q: '', range: '24h' as '1h' | '24h' | '7d' | 'custom', from: '', to: '',
   groupIds: [] as number[], reasons: [] as string[],
+  clientTypes: [] as InstructionDetectedClientType[],
   instructionsResults: [] as string[], input1Results: [] as string[],
   userNotifications: [] as string[], opsNotifications: [] as string[],
 })
@@ -643,6 +709,20 @@ const timeRanges = computed(() => [
 const reasonOptions = ['hash_mismatch', 'fields_missing', 'field_invalid', 'invalid_json', 'request_too_large', 'structure_too_complex', 'parse_timeout', 'config_unavailable']
 const fieldResultOptions = ['missing', 'invalid', 'mismatch', 'match', 'not_checked']
 const notificationOptions = ['pending', 'processing', 'retry', 'sent', 'failed', 'suppressed', 'no_recipient']
+const detectedClientTypes: readonly InstructionDetectedClientType[] = ['codex_vscode', 'codex_cli', 'codex_desktop', 'opencode', 'modelport_internal', 'other', 'unknown']
+const clientOptions = computed<Array<{ value: InstructionDetectedClientType, label: string, pattern: string }>>(() => [
+  { value: 'codex_vscode', label: t('admin.instructionAudit.clients.codex_vscode'), pattern: 'codex_vscode/ · codex_vscode_copilot/' },
+  { value: 'codex_cli', label: t('admin.instructionAudit.clients.codex_cli'), pattern: 'codex_cli_rs/ · codex-tui/' },
+  { value: 'codex_desktop', label: t('admin.instructionAudit.clients.codex_desktop'), pattern: 'Codex Desktop/ · codex_chatgpt_desktop/' },
+  { value: 'opencode', label: t('admin.instructionAudit.clients.opencode'), pattern: 'opencode/' },
+  { value: 'modelport_internal', label: t('admin.instructionAudit.clients.modelport_internal'), pattern: t('admin.instructionAudit.trustedInternalIdentity') },
+  { value: 'other', label: t('admin.instructionAudit.clients.other'), pattern: t('admin.instructionAudit.otherClientPattern') },
+  { value: 'unknown', label: t('admin.instructionAudit.clients.unknown'), pattern: t('admin.instructionAudit.unknownClientPattern') },
+])
+const clientScopeModes = computed(() => [
+  { value: 'all' as const, label: t('admin.instructionAudit.allClients') },
+  { value: 'selected' as const, label: t('admin.instructionAudit.selectedClients') },
+])
 
 const tabs = computed(() => [
   { value: 'rules' as const, label: t('admin.instructionAudit.rulesAndBindings'), count: bindings.value.length },
@@ -660,10 +740,11 @@ const overviewStats = computed(() => [
   { label: t('admin.instructionAudit.pendingEmails'), value: overview.value?.pending_email_count ?? 0 },
 ])
 
-type EventArrayFilterKey = 'groupIds' | 'reasons' | 'instructionsResults' | 'input1Results' | 'userNotifications' | 'opsNotifications'
+type EventArrayFilterKey = 'groupIds' | 'clientTypes' | 'reasons' | 'instructionsResults' | 'input1Results' | 'userNotifications' | 'opsNotifications'
 
 const activeFilterCount = computed(() =>
   eventFilters.groupIds.length
+  + eventFilters.clientTypes.length
   + eventFilters.reasons.length
   + eventFilters.instructionsResults.length
   + eventFilters.input1Results.length
@@ -678,6 +759,7 @@ const filterChips = computed(() => {
     const group = groupOptions.value.find((item) => item.id === id)
     chips.push({ key: `group-${id}`, label: `${t('admin.instructionAudit.group')}: ${group?.name || `#${id}`}`, remove: () => removeArrayFilter('groupIds', id) })
   }
+  for (const clientType of eventFilters.clientTypes) chips.push({ key: `client-${clientType}`, label: `${t('admin.instructionAudit.client')}: ${clientTypeLabel(clientType)}`, remove: () => removeArrayFilter('clientTypes', clientType) })
   for (const reason of eventFilters.reasons) chips.push({ key: `reason-${reason}`, label: reasonLabel(reason), remove: () => removeArrayFilter('reasons', reason) })
   for (const result of eventFilters.instructionsResults) chips.push({ key: `instructions-${result}`, label: `instructions: ${fieldResultLabel(result)}`, remove: () => removeArrayFilter('instructionsResults', result) })
   for (const result of eventFilters.input1Results) chips.push({ key: `input1-${result}`, label: `input[1]: ${fieldResultLabel(result)}`, remove: () => removeArrayFilter('input1Results', result) })
@@ -702,7 +784,17 @@ const hashDialog = reactive({
 })
 
 const ruleDialog = reactive({ show: false, id: null as number | null, name: '', description: '', enabled: true, hashIds: [] as number[] })
-const bindingDialog = reactive({ show: false, search: '', groupIds: [] as number[], ruleSetId: 0, enabled: true })
+const bindingDialog = reactive({
+  show: false,
+  editingId: null as number | null,
+  search: '',
+  groupIds: [] as number[],
+  ruleSetId: 0,
+  clientScope: 'all' as 'all' | 'selected',
+  clientTypes: [] as InstructionDetectedClientType[],
+  enabled: true,
+})
+const editingBinding = computed(() => bindings.value.find((binding) => binding.id === bindingDialog.editingId) ?? null)
 
 const filteredGroupOptions = computed(() => {
   const query = bindingDialog.search.trim().toLocaleLowerCase()
@@ -725,6 +817,13 @@ const canSaveHash = computed(() => {
   if (hashDialog.mode === 'plaintext') return hashDialog.plaintext.length > 0
   return /^[0-9a-f]{64}$/i.test(hashDialog.form.digest.trim())
 })
+
+const canSaveBinding = computed(() =>
+  !saving.value
+  && bindingDialog.groupIds.length > 0
+  && bindingDialog.ruleSetId > 0
+  && (bindingDialog.clientScope === 'all' || bindingDialog.clientTypes.length > 0),
+)
 
 const FieldDigest = defineComponent({
   props: { field: { type: Object as () => InstructionFieldResult, required: true } },
@@ -774,6 +873,7 @@ async function loadEvents(page = 1) {
     from: timeParams.from,
     to: timeParams.to,
     group_ids: joinFilter(eventFilters.groupIds),
+    client_types: joinFilter(eventFilters.clientTypes),
     reasons: joinFilter(eventFilters.reasons),
     instructions_results: joinFilter(eventFilters.instructionsResults),
     input1_results: joinFilter(eventFilters.input1Results),
@@ -813,6 +913,7 @@ async function syncEventFilterURL() {
       if (eventFilters.to) query.to = eventFilters.to
     }
     if (eventFilters.groupIds.length) query.group_ids = eventFilters.groupIds.join(',')
+    if (eventFilters.clientTypes.length) query.client_types = eventFilters.clientTypes.join(',')
     if (eventFilters.reasons.length) query.reasons = eventFilters.reasons.join(',')
     if (eventFilters.instructionsResults.length) query.instructions_results = eventFilters.instructionsResults.join(',')
     if (eventFilters.input1Results.length) query.input1_results = eventFilters.input1Results.join(',')
@@ -833,6 +934,7 @@ function hydrateEventFiltersFromURL() {
   eventFilters.from = String(route.query.from || '')
   eventFilters.to = String(route.query.to || '')
   eventFilters.groupIds = splitURLFilter(route.query.group_ids).map(Number).filter((id) => Number.isInteger(id) && id > 0)
+  eventFilters.clientTypes = splitURLFilter(route.query.client_types).filter(isInstructionDetectedClientType)
   eventFilters.reasons = splitURLFilter(route.query.reasons)
   eventFilters.instructionsResults = splitURLFilter(route.query.instructions_results)
   eventFilters.input1Results = splitURLFilter(route.query.input1_results)
@@ -880,7 +982,7 @@ function removeArrayFilter(key: EventArrayFilterKey, value: string | number) {
 
 function resetEventFilters() {
   Object.assign(eventFilters, {
-    q: '', range: '24h', from: '', to: '', groupIds: [], reasons: [],
+    q: '', range: '24h', from: '', to: '', groupIds: [], clientTypes: [], reasons: [],
     instructionsResults: [], input1Results: [], userNotifications: [], opsNotifications: [],
   })
   advancedFiltersOpen.value = false
@@ -983,8 +1085,19 @@ async function saveRuleSet() {
   }
 }
 
-async function openBindingDialog() {
-  Object.assign(bindingDialog, { show: true, search: '', groupIds: [], ruleSetId: ruleSets.value.find((rule) => rule.enabled)?.id ?? ruleSets.value[0]?.id ?? 0, enabled: true })
+function openBindingDialog(binding?: InstructionGroupBinding) {
+  const clientTypes = binding?.client_types?.length ? binding.client_types : ['all'] as InstructionClientType[]
+  const allClients = clientTypes.includes('all')
+  Object.assign(bindingDialog, {
+    show: true,
+    editingId: binding?.id ?? null,
+    search: '',
+    groupIds: binding ? [binding.group_id] : [],
+    ruleSetId: binding?.rule_set_id ?? ruleSets.value.find((rule) => rule.enabled)?.id ?? ruleSets.value[0]?.id ?? 0,
+    clientScope: allClients ? 'all' : 'selected',
+    clientTypes: allClients ? [] : clientTypes.filter(isInstructionDetectedClientType),
+    enabled: binding?.enabled ?? true,
+  })
 }
 
 function selectVisibleGroups() {
@@ -996,12 +1109,16 @@ function selectVisibleGroups() {
 }
 
 async function saveBinding() {
-  if (!bindingDialog.groupIds.length || !bindingDialog.ruleSetId) return
+  if (!canSaveBinding.value) return
   saving.value = true
   try {
+    const clientTypes: InstructionClientType[] = bindingDialog.clientScope === 'all'
+      ? ['all']
+      : [...bindingDialog.clientTypes]
     await instructionAuditAPI.saveGroupBindings({
       group_ids: bindingDialog.groupIds,
       rule_set_id: bindingDialog.ruleSetId,
+      client_types: clientTypes,
       enabled: bindingDialog.enabled,
     })
     bindingDialog.show = false
@@ -1020,6 +1137,7 @@ async function setBindingEnabled(binding: InstructionGroupBinding, enabled: bool
     await instructionAuditAPI.saveGroupBindings({
       group_ids: [binding.group_id],
       rule_set_id: binding.rule_set_id,
+      client_types: binding.client_types?.length ? binding.client_types : ['all'],
       enabled,
     })
     appStore.showSuccess(t('common.saved'))
@@ -1101,6 +1219,27 @@ function sourceLabel(source: InstructionObservedSource): string {
   if (source === 'instructions') return t('admin.instructionAudit.fieldOne')
   if (source === 'input1') return t('admin.instructionAudit.fieldTwo')
   return '-'
+}
+
+function isInstructionDetectedClientType(value: string): value is InstructionDetectedClientType {
+  return (detectedClientTypes as readonly string[]).includes(value)
+}
+
+function clientTypeLabel(clientType: string): string {
+  if (clientType === 'all') return t('admin.instructionAudit.allClients')
+  return clientOptions.value.find((client) => client.value === clientType)?.label || clientType
+}
+
+function clientTypePill(clientType: string): string {
+  const base = 'inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium'
+  if (clientType === 'all') return `${base} bg-primary-50 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300`
+  if (clientType === 'codex_vscode') return `${base} bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300`
+  if (clientType === 'codex_cli') return `${base} bg-cyan-50 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300`
+  if (clientType === 'codex_desktop') return `${base} bg-violet-50 text-violet-700 dark:bg-violet-950/40 dark:text-violet-300`
+  if (clientType === 'opencode') return `${base} bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300`
+  if (clientType === 'modelport_internal') return `${base} bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300`
+  if (clientType === 'unknown') return `${base} bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300`
+  return `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300`
 }
 
 function hashStatusLabel(status: InstructionHashStatus): string {

@@ -15,6 +15,7 @@ const (
 )
 
 var ErrInstructionAuditNoEffectiveGroupRules = errors.New("instruction audit requires effective group rules")
+var errInvalidInstructionClientType = errors.New("invalid instruction audit client type")
 
 type InstructionEngine interface {
 	EvaluateInstruction(context.Context, Request) *InstructionDecision
@@ -106,6 +107,7 @@ type InstructionGroupBinding struct {
 	GroupStatus string    `json:"group_status"`
 	RuleSetID   int64     `json:"rule_set_id"`
 	RuleSetName string    `json:"rule_set_name"`
+	ClientTypes []string  `json:"client_types"`
 	Enabled     bool      `json:"enabled"`
 	Effective   bool      `json:"effective"`
 	CreatedAt   time.Time `json:"created_at"`
@@ -113,9 +115,10 @@ type InstructionGroupBinding struct {
 }
 
 type SaveInstructionGroupBindingsRequest struct {
-	GroupIDs  []int64 `json:"group_ids"`
-	RuleSetID int64   `json:"rule_set_id"`
-	Enabled   bool    `json:"enabled"`
+	GroupIDs    []int64  `json:"group_ids"`
+	RuleSetID   int64    `json:"rule_set_id"`
+	ClientTypes []string `json:"client_types"`
+	Enabled     bool     `json:"enabled"`
 }
 
 type InstructionGroupOption struct {
@@ -133,6 +136,8 @@ type InstructionEvent struct {
 	APIKeyID               *int64                 `json:"api_key_id,omitempty"`
 	GroupID                *int64                 `json:"group_id,omitempty"`
 	GroupNameSnapshot      string                 `json:"group_name"`
+	ClientType             string                 `json:"client_type"`
+	ClientUserAgent        string                 `json:"client_user_agent"`
 	Model                  string                 `json:"model"`
 	Endpoint               string                 `json:"endpoint"`
 	Stage                  string                 `json:"stage"`
@@ -157,6 +162,7 @@ type InstructionEventFilter struct {
 	From               *time.Time
 	To                 *time.Time
 	GroupIDs           []int64
+	ClientTypes        []string
 	Reasons            []string
 	InstructionResults []string
 	Input1Results      []string
@@ -262,9 +268,16 @@ type instructionPolicyHash struct {
 }
 
 type instructionSnapshot struct {
-	Enabled       bool
-	ConfigVersion int64
-	AuditedGroups map[int64]struct{}
-	Policies      map[int64]instructionPolicy
-	LoadedAt      time.Time
+	Enabled             bool
+	ConfigVersion       int64
+	AuditedGroups       map[int64]struct{}
+	Policies            map[int64]instructionPolicy
+	AuditedClientScopes map[instructionPolicyScope]struct{}
+	ClientPolicies      map[instructionPolicyScope]instructionPolicy
+	LoadedAt            time.Time
+}
+
+type instructionPolicyScope struct {
+	GroupID    int64
+	ClientType string
 }

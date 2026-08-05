@@ -12,6 +12,7 @@ describe('instruction audit group scope', () => {
     const types = read('../types.ts')
     expect(api).toContain('/group-bindings')
     expect(types).toContain('group_ids: number[]')
+    expect(types).toContain('client_types?: InstructionClientType[]')
     expect(api).toContain('listGroups')
     expect(api).not.toContain('/bindings`')
     expect(api).not.toContain('/users')
@@ -24,6 +25,16 @@ describe('instruction audit group scope', () => {
     expect(view).toContain('type="checkbox"')
     expect(view).not.toContain('bindingDialog.userId')
     expect(view).not.toContain('bindingDialog.model')
+  })
+
+  it('supports editable multi-client scopes without trusting a user-agent internal marker', () => {
+    const view = read('../InstructionAuditView.vue')
+    expect(view).toContain("clientScope: 'all' as 'all' | 'selected'")
+    expect(view).toContain('bindingDialog.clientTypes')
+    expect(view).toContain('openBindingDialog(binding)')
+    expect(view).toContain('modelport_internal')
+    expect(view).toContain('trustedInternalIdentity')
+    expect(view).toContain("addArrayFilter('clientTypes', event.client_type)")
   })
 
   it('places the global switch under feature switches risk control', () => {
