@@ -77,6 +77,8 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	migration201, err := os.ReadFile(filepath.Join("..", "..", "migrations", "201_instruction_audit_client_scope.sql"))
 	require.NoError(t, err)
+	migration203, err := os.ReadFile(filepath.Join("..", "..", "migrations", "203_instruction_audit_rule_exceptions.sql"))
+	require.NoError(t, err)
 	for iteration := range 2 {
 		_, err = db.ExecContext(ctx, string(migration198))
 		require.NoError(t, err)
@@ -90,8 +92,92 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, string(migration201))
 		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, string(migration203))
+		require.NoError(t, err)
 	}
 	return db
+}
+
+func TestInstructionAuditPostgresRuleSetExceptionsAreEffective(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repo := NewInstructionRepository(db)
+	ctx := context.Background()
+	actorID := insertInstructionAuditUser(t, db, "exception-admin@example.test", "admin")
+	allowedUserID := insertInstructionAuditUser(t, db, "allowed@example.test", "user")
+	otherUserID := insertInstructionAuditUser(t, db, "other@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "Exception Group")
+
+	ruleSet, err := repo.SaveRuleSet(ctx, 0, SaveInstructionRuleSetRequest{
+		Name: "exception-only", Enabled: true, AllowEmptyFields: true,
+		AllowedUserIDs: []int64{allowedUserID},
+	}, actorID)
+	require.NoError(t, err)
+	require.True(t, ruleSet.AllowEmptyFields)
+	require.Empty(t, ruleSet.Hashes)
+	require.Equal(t, []InstructionRuleSetUser{{
+		ID: allowedUserID, Email: "allowed@example.test", Deleted: false,
+	}}, ruleSet.AllowedUsers)
+
+	_, err = repo.SaveGroupBindings(ctx, SaveInstructionGroupBindingsRequest{
+		GroupIDs: []int64{groupID}, RuleSetID: ruleSet.ID, Enabled: true,
+	}, actorID)
+	require.NoError(t, err)
+	update, err := repo.SetEnabled(ctx, true)
+	require.NoError(t, err)
+	require.False(t, update.Before)
+
+	bindings, err := repo.ListGroupBindings(ctx)
+	require.NoError(t, err)
+	require.Len(t, bindings, 1)
+	require.True(t, bindings[0].Effective)
+
+	snapshot, err := repo.LoadSnapshot(ctx)
+	require.NoError(t, err)
+	policy := snapshot.Policies[groupID]
+	require.True(t, policy.AllowEmptyFields)
+	_, userAllowed := policy.AllowedUsers[allowedUserID]
+	require.True(t, userAllowed)
+	require.Empty(t, policy.Hashes)
+
+	service := NewInstructionService(repo, nil, nil)
+	service.snapshot.Store(snapshot)
+	whitelisted := service.EvaluateInstruction(ctx, Request{
+		Protocol: instructionAuditProtocol, UserID: allowedUserID, GroupID: &groupID,
+		InstructionBody: []byte(`{`),
+	})
+	require.True(t, whitelisted.Allow)
+	require.Equal(t, "user_allowlist", whitelisted.Reason)
+
+	empty := service.EvaluateInstruction(ctx, Request{
+		Protocol: instructionAuditProtocol, UserID: otherUserID, GroupID: &groupID,
+		InstructionBody: []byte(`{"instructions":"","input":[{}, {"content":[]}]}`),
+	})
+	require.True(t, empty.Allow)
+	require.Equal(t, "empty_fields_allowed", empty.Reason)
+
+	nonEmpty := service.EvaluateInstruction(ctx, Request{
+		Protocol: instructionAuditProtocol, UserID: otherUserID, GroupID: &groupID,
+		InstructionBody: []byte(`{"instructions":"not-empty"}`),
+	})
+	require.False(t, nonEmpty.Allow)
+	require.Equal(t, "hash_mismatch", nonEmpty.Reason)
+
+	_, _, _, _, effectiveGroups, _, err := repo.OverviewCounts(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, effectiveGroups)
+
+	_, err = repo.SaveRuleSet(ctx, ruleSet.ID, SaveInstructionRuleSetRequest{
+		Name: "must-roll-back", Enabled: true, AllowedUserIDs: []int64{999999999},
+	}, actorID)
+	require.ErrorIs(t, err, errInstructionAuditAllowedUserNotFound)
+	rules, err := repo.ListRuleSets(ctx)
+	require.NoError(t, err)
+	require.Len(t, rules, 1)
+	require.Equal(t, "exception-only", rules[0].Name)
+	require.True(t, rules[0].AllowEmptyFields)
+	require.Equal(t, []InstructionRuleSetUser{{
+		ID: allowedUserID, Email: "allowed@example.test", Deleted: false,
+	}}, rules[0].AllowedUsers)
 }
 
 func insertInstructionAuditUser(t *testing.T, db *sql.DB, email, role string) int64 {

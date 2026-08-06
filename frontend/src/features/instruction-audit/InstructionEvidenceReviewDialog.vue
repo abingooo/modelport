@@ -11,10 +11,24 @@
     </div>
 
     <div v-else-if="review && event" class="space-y-5">
-      <div class="grid gap-3 rounded-md border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
+      <div class="grid gap-3 rounded-md border border-gray-200 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
+        <div class="min-w-0">
+          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.eventInfo') }}</p>
+          <div class="mt-1 flex items-center gap-1.5">
+            <span class="text-sm font-semibold text-primary-700 dark:text-primary-300">{{ t('admin.instructionAudit.eventNumber', { id: event.id }) }}</span>
+            <button type="button" class="icon-btn h-7 w-7" :title="t('common.copy')" :aria-label="t('common.copy')" @click="copyValue('event_id', String(event.id))">
+              <Icon name="copy" size="xs" />
+            </button>
+          </div>
+        </div>
         <div class="min-w-0">
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.requestId') }}</p>
-          <p class="mt-1 break-all font-mono text-sm text-gray-900 dark:text-white">{{ review.request_id || '-' }}</p>
+          <div class="mt-1 flex min-w-0 items-center gap-1.5">
+            <p class="min-w-0 break-all font-mono text-sm text-gray-900 dark:text-white">{{ review.request_id || '-' }}</p>
+            <button type="button" class="icon-btn h-7 w-7 shrink-0" :disabled="!review.request_id" :title="t('common.copy')" :aria-label="t('common.copy')" @click="copyValue('request_id', review.request_id)">
+              <Icon name="copy" size="xs" />
+            </button>
+          </div>
         </div>
         <div class="min-w-0">
           <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.client') }}</p>
@@ -23,10 +37,6 @@
             {{ event.client_user_agent }}
           </p>
         </div>
-        <button type="button" class="btn btn-secondary btn-sm shrink-0" :disabled="!review.request_id" @click="copyValue('request_id', review.request_id)">
-          <Icon name="copy" size="sm" />
-          {{ t('common.copy') }}
-        </button>
       </div>
 
       <div

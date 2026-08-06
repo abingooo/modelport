@@ -111,6 +111,20 @@ func (h *InstructionAdminHandler) UpdateHash(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *InstructionAdminHandler) DeleteHash(c *gin.Context) {
+	id, ok := instructionIDParam(c, "hash")
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteHash(c.Request.Context(), id); err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"hash_id": id})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"hash_id": id})
+	response.Success(c, gin.H{"deleted": true})
+}
+
 func (h *InstructionAdminHandler) ListRuleSets(c *gin.Context) {
 	items, err := h.service.ListRuleSets(c.Request.Context())
 	if err != nil {
@@ -132,6 +146,20 @@ func (h *InstructionAdminHandler) UpdateRuleSet(c *gin.Context) {
 	h.saveRuleSet(c, id)
 }
 
+func (h *InstructionAdminHandler) DeleteRuleSet(c *gin.Context) {
+	id, ok := instructionIDParam(c, "rule_set")
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteRuleSet(c.Request.Context(), id); err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"rule_set_id": id})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"rule_set_id": id})
+	response.Success(c, gin.H{"deleted": true})
+}
+
 func (h *InstructionAdminHandler) saveRuleSet(c *gin.Context, id int64) {
 	var request SaveInstructionRuleSetRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -141,11 +169,17 @@ func (h *InstructionAdminHandler) saveRuleSet(c *gin.Context, id int64) {
 	}
 	item, err := h.service.SaveRuleSet(c.Request.Context(), id, request, adminID(c))
 	if err != nil {
-		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"rule_set_id": id, "hash_count": len(request.HashIDs)})
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"rule_set_id": id, "hash_count": len(request.HashIDs),
+			"allowed_user_count": len(request.AllowedUserIDs), "allow_empty_fields": request.AllowEmptyFields,
+		})
 		response.ErrorFrom(c, err)
 		return
 	}
-	h.setAdminAudit(c, "success", "", map[string]any{"rule_set_id": item.ID, "hash_count": len(item.Hashes), "enabled": item.Enabled})
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"rule_set_id": item.ID, "hash_count": len(item.Hashes), "enabled": item.Enabled,
+		"allowed_user_count": len(item.AllowedUsers), "allow_empty_fields": item.AllowEmptyFields,
+	})
 	response.Success(c, item)
 }
 
@@ -222,6 +256,82 @@ func (h *InstructionAdminHandler) ListEvents(c *gin.Context) {
 	response.Success(c, items)
 }
 
+func (h *InstructionAdminHandler) DeleteEvent(c *gin.Context) {
+	id, ok := instructionIDParam(c, "event")
+	if !ok {
+		return
+	}
+	result, err := h.service.DeleteEvent(c.Request.Context(), id)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"event_id": id})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"event_id": id, "deleted_events": result.DeletedEvents})
+	response.Success(c, result)
+}
+
+func (h *InstructionAdminHandler) BatchDeleteEvents(c *gin.Context) {
+	var request DeleteInstructionEventsRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_delete_batch", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_delete_batch", "批量删除必须包含 1-500 个事件 ID"))
+		return
+	}
+	result, err := h.service.DeleteEventsByIDs(c.Request.Context(), request.IDs)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"requested_count": len(request.IDs)})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"requested_count": len(request.IDs), "deleted_events": result.DeletedEvents,
+	})
+	response.Success(c, result)
+}
+
+func (h *InstructionAdminHandler) PreviewDeleteEvents(c *gin.Context) {
+	var filter InstructionEventFilter
+	if err := c.ShouldBindJSON(&filter); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_delete_preview_invalid", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_delete_preview_invalid", "删除预览筛选无效"))
+		return
+	}
+	preview, err := h.service.PreviewDeleteEvents(c.Request.Context(), filter)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), nil)
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"matched_count": preview.MatchedCount, "snapshot_max_id": preview.SnapshotMaxID,
+		"filter_hash": preview.FilterHash,
+	})
+	response.Success(c, preview)
+}
+
+func (h *InstructionAdminHandler) DeleteEventsByFilter(c *gin.Context) {
+	var request DeleteInstructionEventsByFilterRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_delete_confirmation_invalid", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_delete_confirmation_invalid", "删除确认无效或已过期"))
+		return
+	}
+	result, err := h.service.DeleteEventsByFilter(c.Request.Context(), request)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"snapshot_max_id": request.SnapshotMaxID, "filter_hash": request.FilterHash,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"snapshot_max_id": request.SnapshotMaxID, "filter_hash": request.FilterHash,
+		"deleted_events": result.DeletedEvents,
+	})
+	response.Success(c, result)
+}
+
 func (h *InstructionAdminHandler) RevealEvidence(c *gin.Context) {
 	id, ok := instructionIDParam(c, "event")
 	if !ok {
@@ -292,6 +402,33 @@ func (h *InstructionAdminHandler) CreateCandidate(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *InstructionAdminHandler) AddEventToRuleSet(c *gin.Context) {
+	id, ok := instructionIDParam(c, "event")
+	if !ok {
+		return
+	}
+	var request AddInstructionEventToRuleSetRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_rule_sources", map[string]any{"event_id": id})
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_rule_sources", "加入规则集请求无效"))
+		return
+	}
+	result, err := h.service.AddEventToRuleSet(c.Request.Context(), id, request, adminID(c))
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"event_id": id, "rule_set_id": request.RuleSetID, "sources": request.Sources,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"event_id": id, "rule_set_id": result.RuleSetID, "hash_ids": result.HashIDs,
+		"created_hashes": result.CreatedHashes, "activated_hashes": result.ActivatedHashes,
+		"attached_hashes": result.AttachedHashes,
+	})
+	response.Success(c, result)
+}
+
 func instructionIDParam(c *gin.Context, resource string) (int64, bool) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
@@ -323,6 +460,12 @@ func instructionEventFilterFromQuery(c *gin.Context) (InstructionEventFilter, er
 		ClientTypes:        splitInstructionQuery(c.Query("client_types")),
 	}
 	var err error
+	if raw := strings.TrimSpace(c.Query("event_id")); raw != "" {
+		filter.EventID, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || filter.EventID <= 0 {
+			return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_invalid_event_id", "审核事件 ID 无效")
+		}
+	}
 	if filter.UserID, err = optionalInstructionUserID(c.Query("user_id")); err != nil {
 		return InstructionEventFilter{}, err
 	}

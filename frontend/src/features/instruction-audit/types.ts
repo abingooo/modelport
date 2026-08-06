@@ -49,10 +49,18 @@ export interface InstructionRuleSet {
   name: string
   description: string
   enabled: boolean
+  allow_empty_fields: boolean
   version: number
   hashes: InstructionHashEntry[]
+  allowed_users: InstructionRuleSetUser[]
   created_at: string
   updated_at: string
+}
+
+export interface InstructionRuleSetUser {
+  id: number
+  email: string
+  deleted: boolean
 }
 
 export interface InstructionGroupBinding {
@@ -130,6 +138,7 @@ export interface InstructionEvidenceReview {
 }
 
 export interface InstructionEventFilters {
+  event_id?: number
   q?: string
   from?: string
   to?: string
@@ -140,6 +149,42 @@ export interface InstructionEventFilters {
   user_notifications?: string
   ops_notifications?: string
   client_types?: string
+}
+
+export interface InstructionEventDeleteFilter {
+  event_id?: number
+  q?: string
+  user_id?: number
+  model?: string
+  from: string
+  to: string
+  group_ids: number[]
+  client_types: InstructionDetectedClientType[]
+  reasons: string[]
+  instructions_results: string[]
+  input1_results: string[]
+  user_notifications: string[]
+  ops_notifications: string[]
+}
+
+export interface InstructionDeletePreview {
+  matched_count: number
+  filter_summary: InstructionEventDeleteFilter
+  snapshot_max_id: number
+  filter_hash: string
+}
+
+export interface InstructionDeleteResult {
+  deleted_events: number
+}
+
+export interface AddInstructionEventToRuleSetResult {
+  rule_set_id: number
+  hash_ids: number[]
+  created_hashes: number
+  activated_hashes: number
+  attached_hashes: number
+  config_version: number
 }
 
 export interface InstructionEventPage {
@@ -173,7 +218,9 @@ export interface SaveInstructionRuleSetRequest {
   name: string
   description: string
   enabled: boolean
+  allow_empty_fields: boolean
   hash_ids: number[]
+  allowed_user_ids: number[]
 }
 
 export interface SaveInstructionGroupBindingsRequest {

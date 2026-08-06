@@ -83,3 +83,16 @@ func TestInstructionAuditClientScopeMigrationPreservesExistingCoverage(t *testin
 	require.NotContains(t, sql, "drop table")
 	require.NotContains(t, sql, "truncate")
 }
+
+func TestInstructionAuditRuleExceptionsMigrationIsAdditive(t *testing.T) {
+	body, err := FS.ReadFile("203_instruction_audit_rule_exceptions.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists allow_empty_fields")
+	require.Contains(t, sql, "create table if not exists instruction_audit_rule_set_users")
+	require.Contains(t, sql, "primary key (rule_set_id, user_id)")
+	require.Contains(t, sql, "references instruction_audit_rule_sets(id) on delete cascade")
+	require.Contains(t, sql, "references users(id) on delete cascade")
+	require.NotContains(t, sql, "drop table")
+	require.NotContains(t, sql, "truncate")
+}

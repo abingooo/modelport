@@ -80,6 +80,57 @@ func inspectInstructionRoot(root map[string]any, allowed []instructionPolicyHash
 	return instructionInspection{Instructions: instructions, Input1: input1, Reason: reason}
 }
 
+func instructionFieldsStrictlyEmpty(root map[string]any) bool {
+	if root == nil {
+		return false
+	}
+	if value, exists := root["instructions"]; exists {
+		text, ok := value.(string)
+		if !ok || text != "" {
+			return false
+		}
+	}
+
+	value, exists := root["input"]
+	if !exists {
+		return true
+	}
+	input, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	if len(input) <= 1 {
+		return true
+	}
+	item, ok := input[1].(map[string]any)
+	if !ok {
+		return false
+	}
+	contentValue, exists := item["content"]
+	if !exists {
+		return false
+	}
+	content, ok := contentValue.([]any)
+	if !ok || len(content) > maxInstructionAuditInputItems {
+		return false
+	}
+	for _, rawBlock := range content {
+		block, ok := rawBlock.(map[string]any)
+		if !ok {
+			return false
+		}
+		blockType, ok := block["type"].(string)
+		if !ok || blockType != "input_text" {
+			return false
+		}
+		text, ok := block["text"].(string)
+		if !ok || text != "" {
+			return false
+		}
+	}
+	return true
+}
+
 func strictInstructionModel(root map[string]any) (string, bool) {
 	model, ok := root["model"].(string)
 	model = strings.TrimSpace(model)

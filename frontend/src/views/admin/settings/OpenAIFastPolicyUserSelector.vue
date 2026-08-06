@@ -88,6 +88,7 @@ import Icon from "@/components/icons/Icon.vue";
 
 const props = defineProps<{
   modelValue: number[];
+  initialUsers?: SimpleUser[];
 }>();
 
 const emit = defineEmits<{
@@ -209,6 +210,20 @@ function handleDocumentClick(event: MouseEvent): void {
     showDropdown.value = false;
   }
 }
+
+watch(
+  () => props.initialUsers,
+  (users) => {
+    const next = { ...selectedUsers.value };
+    for (const user of users ?? []) {
+      if (Number.isInteger(user.id) && user.id > 0) {
+        next[user.id] = user;
+      }
+    }
+    selectedUsers.value = next;
+  },
+  { immediate: true },
+);
 
 watch(
   selectedUserIds,

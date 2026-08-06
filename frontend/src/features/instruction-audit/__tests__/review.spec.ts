@@ -27,6 +27,7 @@ describe('instruction audit evidence review', () => {
     expect(dialog).toContain('reviewConfirmed')
     expect(dialog).toContain('client_type: props.event.client_type')
     expect(dialog).toContain('client_user_agent: props.event.client_user_agent')
+    expect(dialog).toContain("copyValue('event_id', String(event.id))")
   })
 
   it('supports searchable, multi-value, URL-persisted audit filters', () => {
@@ -40,5 +41,23 @@ describe('instruction audit evidence review', () => {
     expect(view).toContain('syncEventFilterURL')
     expect(view).toContain('hydrateEventFiltersFromURL')
     expect(view).toContain('type="datetime-local"')
+  })
+
+  it('supports correlated events, guarded cleanup, resource deletion, and quick rule creation', () => {
+    const api = read('../api.ts')
+    const view = read('../InstructionAuditView.vue')
+
+    expect(api).toContain('deleteHash(id: number)')
+    expect(api).toContain('deleteRuleSet(id: number)')
+    expect(api).toContain('/events/batch-delete')
+    expect(api).toContain('/events/delete-preview')
+    expect(api).toContain('/events/delete-by-filter')
+    expect(api).toContain('/rule-set`')
+    expect(view).toContain('event_id: eventFilters.eventId || undefined')
+    expect(view).toContain('snapshot_max_id')
+    expect(api).toContain('filter_hash: preview.filter_hash')
+    expect(view).toContain('openAddToRuleSetDialog(event)')
+    expect(view).toContain('system_log_q')
+    expect(view).not.toContain('min-w-[960px]')
   })
 })

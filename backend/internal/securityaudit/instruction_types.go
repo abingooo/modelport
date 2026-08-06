@@ -29,6 +29,7 @@ type InstructionFieldResult struct {
 }
 
 type InstructionDecision struct {
+	EventID       int64                  `json:"-"`
 	Applicable    bool                   `json:"applicable"`
 	Allow         bool                   `json:"allow"`
 	Unavailable   bool                   `json:"unavailable"`
@@ -82,21 +83,31 @@ type UpdateInstructionHashRequest struct {
 }
 
 type InstructionRuleSet struct {
-	ID          int64                  `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Enabled     bool                   `json:"enabled"`
-	Version     int64                  `json:"version"`
-	Hashes      []InstructionHashEntry `json:"hashes"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
+	ID               int64                    `json:"id"`
+	Name             string                   `json:"name"`
+	Description      string                   `json:"description"`
+	Enabled          bool                     `json:"enabled"`
+	AllowEmptyFields bool                     `json:"allow_empty_fields"`
+	Version          int64                    `json:"version"`
+	Hashes           []InstructionHashEntry   `json:"hashes"`
+	AllowedUsers     []InstructionRuleSetUser `json:"allowed_users"`
+	CreatedAt        time.Time                `json:"created_at"`
+	UpdatedAt        time.Time                `json:"updated_at"`
+}
+
+type InstructionRuleSetUser struct {
+	ID      int64  `json:"id"`
+	Email   string `json:"email"`
+	Deleted bool   `json:"deleted"`
 }
 
 type SaveInstructionRuleSetRequest struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Enabled     bool    `json:"enabled"`
-	HashIDs     []int64 `json:"hash_ids"`
+	Name             string  `json:"name"`
+	Description      string  `json:"description"`
+	Enabled          bool    `json:"enabled"`
+	AllowEmptyFields bool    `json:"allow_empty_fields"`
+	HashIDs          []int64 `json:"hash_ids"`
+	AllowedUserIDs   []int64 `json:"allowed_user_ids"`
 }
 
 type InstructionGroupBinding struct {
@@ -156,18 +167,19 @@ type InstructionEvent struct {
 }
 
 type InstructionEventFilter struct {
-	Query              string
-	UserID             int64
-	Model              string
-	From               *time.Time
-	To                 *time.Time
-	GroupIDs           []int64
-	ClientTypes        []string
-	Reasons            []string
-	InstructionResults []string
-	Input1Results      []string
-	UserNotifications  []string
-	OpsNotifications   []string
+	EventID            int64      `json:"event_id,omitempty"`
+	Query              string     `json:"q,omitempty"`
+	UserID             int64      `json:"user_id,omitempty"`
+	Model              string     `json:"model,omitempty"`
+	From               *time.Time `json:"from,omitempty"`
+	To                 *time.Time `json:"to,omitempty"`
+	GroupIDs           []int64    `json:"group_ids,omitempty"`
+	ClientTypes        []string   `json:"client_types,omitempty"`
+	Reasons            []string   `json:"reasons,omitempty"`
+	InstructionResults []string   `json:"instructions_results,omitempty"`
+	Input1Results      []string   `json:"input1_results,omitempty"`
+	UserNotifications  []string   `json:"user_notifications,omitempty"`
+	OpsNotifications   []string   `json:"ops_notifications,omitempty"`
 }
 
 type InstructionEvidence struct {
@@ -221,6 +233,43 @@ type InstructionEventPage struct {
 	Pages    int                `json:"pages"`
 }
 
+type InstructionDeletePreview struct {
+	MatchedCount  int64                  `json:"matched_count"`
+	FilterSummary InstructionEventFilter `json:"filter_summary"`
+	SnapshotMaxID int64                  `json:"snapshot_max_id"`
+	FilterHash    string                 `json:"filter_hash"`
+}
+
+type InstructionDeleteResult struct {
+	DeletedEvents int64 `json:"deleted_events"`
+}
+
+type DeleteInstructionEventsRequest struct {
+	IDs []int64 `json:"ids"`
+}
+
+type DeleteInstructionEventsByFilterRequest struct {
+	Filter        InstructionEventFilter `json:"filter"`
+	SnapshotMaxID int64                  `json:"snapshot_max_id"`
+	FilterHash    string                 `json:"filter_hash"`
+	Confirm       bool                   `json:"confirm"`
+}
+
+type AddInstructionEventToRuleSetRequest struct {
+	RuleSetID       int64    `json:"rule_set_id"`
+	Sources         []string `json:"sources"`
+	ReviewConfirmed bool     `json:"review_confirmed"`
+}
+
+type AddInstructionEventToRuleSetResult struct {
+	RuleSetID       int64   `json:"rule_set_id"`
+	HashIDs         []int64 `json:"hash_ids"`
+	CreatedHashes   int     `json:"created_hashes"`
+	ActivatedHashes int     `json:"activated_hashes"`
+	AttachedHashes  int     `json:"attached_hashes"`
+	ConfigVersion   int64   `json:"config_version"`
+}
+
 type InstructionOverview struct {
 	Enabled                     bool       `json:"enabled"`
 	ConfigVersion               int64      `json:"config_version"`
@@ -257,8 +306,10 @@ type CreateInstructionCandidateRequest struct {
 }
 
 type instructionPolicy struct {
-	RuleSetIDs []int64
-	Hashes     []instructionPolicyHash
+	RuleSetIDs       []int64
+	Hashes           []instructionPolicyHash
+	AllowedUsers     map[int64]struct{}
+	AllowEmptyFields bool
 }
 
 type instructionPolicyHash struct {

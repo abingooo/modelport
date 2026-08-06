@@ -27,6 +27,18 @@ describe('instruction audit group scope', () => {
     expect(view).not.toContain('bindingDialog.model')
   })
 
+  it('supports strict empty-field and user allowlist exceptions per rule set', () => {
+    const view = read('../InstructionAuditView.vue')
+    const types = read('../types.ts')
+    expect(view).toContain('ruleDialog.allowEmptyFields')
+    expect(view).toContain('ruleDialog.allowedUserIds')
+    expect(view).toContain('OpenAIFastPolicyUserSelector')
+    expect(view).toContain(':initial-users="ruleDialog.initialUsers"')
+    expect(types).toContain('allow_empty_fields: boolean')
+    expect(types).toContain('allowed_users: InstructionRuleSetUser[]')
+    expect(types).toContain('allowed_user_ids: number[]')
+  })
+
   it('supports editable multi-client scopes without trusting a user-agent internal marker', () => {
     const view = read('../InstructionAuditView.vue')
     expect(view).toContain("clientScope: 'all' as 'all' | 'selected'")

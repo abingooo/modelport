@@ -3,8 +3,12 @@ import type {
   InstructionGroupBinding,
   InstructionGroupOption,
   InstructionEvent,
+  InstructionEventDeleteFilter,
   InstructionEventPage,
   InstructionEventFilters,
+  InstructionDeletePreview,
+  InstructionDeleteResult,
+  AddInstructionEventToRuleSetResult,
   InstructionEvidenceReview,
   InstructionHashEntry,
   InstructionOverview,
@@ -54,6 +58,10 @@ export const instructionAuditAPI = {
     return data
   },
 
+  async deleteHash(id: number): Promise<void> {
+    await apiClient.delete(`${basePath}/hashes/${id}`)
+  },
+
   async listRuleSets(): Promise<InstructionRuleSet[]> {
     const { data } = await apiClient.get<InstructionRuleSet[]>(`${basePath}/rule-sets`)
     return data
@@ -65,6 +73,10 @@ export const instructionAuditAPI = {
       : apiClient.post<InstructionRuleSet>(`${basePath}/rule-sets`, payload)
     const { data } = await request
     return data
+  },
+
+  async deleteRuleSet(id: number): Promise<void> {
+    await apiClient.delete(`${basePath}/rule-sets/${id}`)
   },
 
   async listGroupBindings(): Promise<InstructionGroupBinding[]> {
@@ -99,6 +111,31 @@ export const instructionAuditAPI = {
     return data
   },
 
+  async deleteEvent(id: number): Promise<InstructionDeleteResult> {
+    const { data } = await apiClient.delete<InstructionDeleteResult>(`${basePath}/events/${id}`)
+    return data
+  },
+
+  async batchDeleteEvents(ids: number[]): Promise<InstructionDeleteResult> {
+    const { data } = await apiClient.post<InstructionDeleteResult>(`${basePath}/events/batch-delete`, { ids })
+    return data
+  },
+
+  async previewDeleteEvents(filter: InstructionEventDeleteFilter): Promise<InstructionDeletePreview> {
+    const { data } = await apiClient.post<InstructionDeletePreview>(`${basePath}/events/delete-preview`, filter)
+    return data
+  },
+
+  async deleteEventsByFilter(filter: InstructionEventDeleteFilter, preview: InstructionDeletePreview): Promise<InstructionDeleteResult> {
+    const { data } = await apiClient.post<InstructionDeleteResult>(`${basePath}/events/delete-by-filter`, {
+      filter,
+      snapshot_max_id: preview.snapshot_max_id,
+      filter_hash: preview.filter_hash,
+      confirm: true,
+    })
+    return data
+  },
+
   async revealEvidence(id: number): Promise<InstructionEvidenceReview> {
     const { data } = await apiClient.get<InstructionEvidenceReview>(`${basePath}/events/${id}/evidence`)
     return data
@@ -111,6 +148,19 @@ export const instructionAuditAPI = {
   async createCandidate(eventId: number, source: 'instructions' | 'input1'): Promise<InstructionHashEntry> {
     const { data } = await apiClient.post<InstructionHashEntry>(`${basePath}/events/${eventId}/candidates`, {
       source,
+      review_confirmed: true,
+    })
+    return data
+  },
+
+  async addEventToRuleSet(
+    eventId: number,
+    ruleSetId: number,
+    sources: Array<'instructions' | 'input1'>,
+  ): Promise<AddInstructionEventToRuleSetResult> {
+    const { data } = await apiClient.post<AddInstructionEventToRuleSetResult>(`${basePath}/events/${eventId}/rule-set`, {
+      rule_set_id: ruleSetId,
+      sources,
       review_confirmed: true,
     })
     return data

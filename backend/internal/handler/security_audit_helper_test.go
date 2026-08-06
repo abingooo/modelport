@@ -12,6 +12,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestCachesSecurityAuditCompletionSkipsWebSocketStages(t *testing.T) {
@@ -134,15 +136,65 @@ func TestRunInstructionAuditCarriesClientIdentitySignalsAcrossTransports(t *test
 	}
 }
 
+func TestRunInstructionAuditLogsPersistedEventID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &capturingInstructionEngine{decision: &securityaudit.InstructionDecision{
+		EventID: 17, Applicable: true, Allow: false, Reason: "hash_mismatch",
+	}}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	core, logs := observer.New(zap.InfoLevel)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	decision := runInstructionAudit(c, zap.New(core), coordinator, nil, middleware2.AuthSubject{UserID: 7},
+		"openai_responses", "gpt-test", []byte(`{"instructions":"blocked"}`), false, "http")
+
+	require.NotNil(t, decision)
+	require.False(t, decision.AllowNextStage)
+	entries := logs.FilterMessage("instruction_audit.gateway_check_done").All()
+	require.Len(t, entries, 1)
+	require.Equal(t, zap.WarnLevel, entries[0].Level)
+	fields := entries[0].ContextMap()
+	require.EqualValues(t, 17, fields["event_id"])
+	require.Equal(t, "hash_mismatch", fields["reason"])
+}
+
+func TestRunInstructionAuditKeepsAllowedCompletionAtInfo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &capturingInstructionEngine{decision: &securityaudit.InstructionDecision{
+		Applicable: true, Allow: true, Reason: "hash_match",
+	}}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	core, logs := observer.New(zap.InfoLevel)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	decision := runInstructionAudit(c, zap.New(core), coordinator, nil, middleware2.AuthSubject{UserID: 7},
+		"openai_responses", "gpt-test", []byte(`{"instructions":"allowed"}`), false, "http")
+
+	require.Nil(t, decision)
+	entries := logs.FilterMessage("instruction_audit.gateway_check_done").All()
+	require.Len(t, entries, 1)
+	require.Equal(t, zap.InfoLevel, entries[0].Level)
+}
+
 type turnCountingEngine struct {
 	mode     securityaudit.Mode
 	enqueues atomic.Int64
 }
 
-type capturingInstructionEngine struct{ request securityaudit.Request }
+type capturingInstructionEngine struct {
+	request  securityaudit.Request
+	decision *securityaudit.InstructionDecision
+}
 
 func (e *capturingInstructionEngine) EvaluateInstruction(_ context.Context, request securityaudit.Request) *securityaudit.InstructionDecision {
 	e.request = request
+	if e.decision != nil {
+		return e.decision
+	}
 	return &securityaudit.InstructionDecision{Allow: true}
 }
 

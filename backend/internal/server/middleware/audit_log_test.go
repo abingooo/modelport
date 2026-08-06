@@ -148,14 +148,21 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 
 func TestInstructionAuditMutationRoutesHaveStableActionsAndOmitBodies(t *testing.T) {
 	expected := map[string]string{
-		"PUT /api/v1/admin/instruction-audit/enabled":                "admin.instruction_audit.enabled.update",
-		"POST /api/v1/admin/instruction-audit/hashes":                "admin.instruction_audit.hash.create",
-		"PUT /api/v1/admin/instruction-audit/hashes/:id":             "admin.instruction_audit.hash.update",
-		"POST /api/v1/admin/instruction-audit/rule-sets":             "admin.instruction_audit.rule_set.create",
-		"PUT /api/v1/admin/instruction-audit/rule-sets/:id":          "admin.instruction_audit.rule_set.update",
-		"POST /api/v1/admin/instruction-audit/group-bindings":        "admin.instruction_audit.group_binding.create",
-		"DELETE /api/v1/admin/instruction-audit/group-bindings/:id":  "admin.instruction_audit.group_binding.delete",
-		"POST /api/v1/admin/instruction-audit/events/:id/candidates": "admin.instruction_audit.candidate.create",
+		"PUT /api/v1/admin/instruction-audit/enabled":                  "admin.instruction_audit.enabled.update",
+		"POST /api/v1/admin/instruction-audit/hashes":                  "admin.instruction_audit.hash.create",
+		"PUT /api/v1/admin/instruction-audit/hashes/:id":               "admin.instruction_audit.hash.update",
+		"DELETE /api/v1/admin/instruction-audit/hashes/:id":            "admin.instruction_audit.hash.delete",
+		"POST /api/v1/admin/instruction-audit/rule-sets":               "admin.instruction_audit.rule_set.create",
+		"PUT /api/v1/admin/instruction-audit/rule-sets/:id":            "admin.instruction_audit.rule_set.update",
+		"DELETE /api/v1/admin/instruction-audit/rule-sets/:id":         "admin.instruction_audit.rule_set.delete",
+		"POST /api/v1/admin/instruction-audit/group-bindings":          "admin.instruction_audit.group_binding.create",
+		"DELETE /api/v1/admin/instruction-audit/group-bindings/:id":    "admin.instruction_audit.group_binding.delete",
+		"POST /api/v1/admin/instruction-audit/events/:id/candidates":   "admin.instruction_audit.candidate.create",
+		"DELETE /api/v1/admin/instruction-audit/events/:id":            "admin.instruction_audit.event.delete",
+		"POST /api/v1/admin/instruction-audit/events/batch-delete":     "admin.instruction_audit.events.batch_delete",
+		"POST /api/v1/admin/instruction-audit/events/delete-preview":   "admin.instruction_audit.events.delete_preview",
+		"POST /api/v1/admin/instruction-audit/events/delete-by-filter": "admin.instruction_audit.events.filter_delete",
+		"POST /api/v1/admin/instruction-audit/events/:id/rule-set":     "admin.instruction_audit.event.rule_set.add",
 	}
 	for route, action := range expected {
 		require.Equal(t, action, auditActionOverrides[route])

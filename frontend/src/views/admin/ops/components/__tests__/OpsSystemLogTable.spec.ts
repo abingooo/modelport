@@ -9,6 +9,11 @@ const mockListSystemLogs = vi.fn()
 const mockCleanupSystemLogs = vi.fn()
 const mockGetSystemLogSinkHealth = vi.fn()
 const mockGetRuntimeLogConfig = vi.fn()
+const mockRoute = vi.hoisted(() => ({ query: {} as Record<string, string> }))
+
+vi.mock('vue-router', () => ({
+  useRoute: () => mockRoute,
+}))
 
 vi.mock('@/api/admin/ops', () => ({
   opsAPI: {
@@ -73,6 +78,7 @@ const sinkHealth = {
 describe('OpsSystemLogTable host support', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockRoute.query = {}
     vi.spyOn(window, 'confirm').mockReturnValue(true)
     mockListSystemLogs.mockResolvedValue({
       items: [
@@ -83,6 +89,7 @@ describe('OpsSystemLogTable host support', () => {
           level: 'warn',
           component: 'app',
           message: 'request failed',
+          extra: { event_id: 77 },
         },
       ],
       total: 1,
@@ -106,6 +113,7 @@ describe('OpsSystemLogTable host support', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('api-node-1')
+    expect(wrapper.find('a[href*="event_id=77"]').exists()).toBe(true)
 
     const hostLabel = wrapper.findAll('label').find((label) => label.text().includes('admin.ops.systemLogs.host'))
     expect(hostLabel).toBeDefined()
@@ -124,6 +132,28 @@ describe('OpsSystemLogTable host support', () => {
     await flushPromises()
 
     expect(mockCleanupSystemLogs).toHaveBeenCalledWith(expect.objectContaining({ host: 'api-node-2' }))
+  })
+
+  it('hydrates an instruction-event deep link into system-log filters', async () => {
+    mockRoute.query = {
+      system_log_q: '"event_id": 77',
+      system_log_range: '30d',
+    }
+
+    mount(OpsSystemLogTable, {
+      global: {
+        stubs: {
+          Select: SelectStub,
+          Pagination: PaginationStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(mockListSystemLogs).toHaveBeenCalledWith(expect.objectContaining({
+      q: '"event_id": 77',
+      time_range: '30d',
+    }))
   })
 
   it.each([

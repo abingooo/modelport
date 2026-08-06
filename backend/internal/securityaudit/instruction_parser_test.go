@@ -107,6 +107,34 @@ func TestInspectInstructionPayloadFallsBackAfterInvalidInstructions(t *testing.T
 	}
 }
 
+func TestInstructionFieldsStrictlyEmpty(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "both absent", body: `{}`, want: true},
+		{name: "exact empty instructions", body: `{"instructions":""}`, want: true},
+		{name: "input index absent", body: `{"input":[{}]}`, want: true},
+		{name: "empty content array", body: `{"input":[{}, {"content":[]}]}`, want: true},
+		{name: "empty input text blocks", body: `{"instructions":"","input":[{}, {"content":[{"type":"input_text","text":""}]}]}`, want: true},
+		{name: "null instructions", body: `{"instructions":null}`},
+		{name: "whitespace instructions", body: `{"instructions":" "}`},
+		{name: "null input", body: `{"input":null}`},
+		{name: "invalid input item", body: `{"input":[{}, null]}`},
+		{name: "missing content", body: `{"input":[{}, {}]}`},
+		{name: "unsupported content", body: `{"input":[{}, {"content":[{"type":"input_image"}]}]}`},
+		{name: "whitespace input text", body: `{"input":[{}, {"content":[{"type":"input_text","text":" "}]}]}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, err := decodeStrictJSONObject([]byte(test.body))
+			require.NoError(t, err)
+			require.Equal(t, test.want, instructionFieldsStrictlyEmpty(root))
+		})
+	}
+}
+
 func TestInspectInstructionPayloadRejectsStrictJSONViolations(t *testing.T) {
 	for _, body := range [][]byte{
 		[]byte(`{"instructions":"one","instructions":"two"}`),

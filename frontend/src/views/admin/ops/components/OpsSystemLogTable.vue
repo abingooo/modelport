@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { opsAPI, type OpsRuntimeLogConfig, type OpsSystemLog, type OpsSystemLogSinkHealth } from '@/api/admin/ops'
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
@@ -10,6 +11,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 
 const appStore = useAppStore()
 const { t } = useI18n()
+const route = useRoute()
 
 // 与 DataTable 一致：< 768px 切换为卡片视图，避免宽表在移动端被截断。
 const isDesktopViewport = useMediaQuery('(min-width: 768px)')
@@ -66,6 +68,30 @@ const filters = reactive({
   q: ''
 })
 
+const systemLogTimeRanges = new Set(['5m', '30m', '1h', '6h', '24h', '7d', '30d'])
+
+const routeQueryString = (key: string) => {
+  const value = route.query[key]
+  if (typeof value === 'string') return value
+  if (Array.isArray(value) && typeof value[0] === 'string') return value[0]
+  return ''
+}
+
+const applySystemLogDeepLink = () => {
+  const query = routeQueryString('system_log_q').trim()
+  const range = routeQueryString('system_log_range').trim()
+  if (!query && !range) return false
+  if (query) filters.q = query
+  if (systemLogTimeRanges.has(range)) filters.time_range = range as typeof filters.time_range
+  page.value = 1
+  return true
+}
+
+const scrollToSystemLogs = async () => {
+  await nextTick()
+  document.getElementById('ops-system-logs')?.scrollIntoView?.({ block: 'start' })
+}
+
 const runtimeLevelOptions = [
   { value: 'debug', label: 'debug' },
   { value: 'info', label: 'info' },
@@ -121,6 +147,19 @@ const getExtraString = (extra: Record<string, any> | undefined, key: string) => 
   return ''
 }
 
+const instructionEventID = (row: OpsSystemLog): number | null => {
+  const raw = getExtraString(row.extra, 'event_id')
+  if (!raw) return null
+  const id = Number.parseInt(raw, 10)
+  return Number.isInteger(id) && id > 0 ? id : null
+}
+
+const instructionEventHref = (row: OpsSystemLog) => {
+  const id = instructionEventID(row)
+  if (!id) return ''
+  return `/admin/instruction-audit?tab=events&range=custom&event_id=${encodeURIComponent(String(id))}`
+}
+
 const formatSystemLogDetail = (row: OpsSystemLog) => {
   const parts: string[] = []
   const msg = String(row.message || '').trim()
@@ -133,6 +172,7 @@ const formatSystemLogDetail = (row: OpsSystemLog) => {
   const path = getExtraString(extra, 'path')
   const clientIP = getExtraString(extra, 'client_ip')
   const protocol = getExtraString(extra, 'protocol')
+  const eventID = getExtraString(extra, 'event_id')
 
   const accessParts: string[] = []
   if (statusCode) accessParts.push(`status=${statusCode}`)
@@ -151,6 +191,7 @@ const formatSystemLogDetail = (row: OpsSystemLog) => {
   if (row.account_id != null) corrParts.push(`acc=${row.account_id}`)
   if (row.platform) corrParts.push(`platform=${row.platform}`)
   if (row.model) corrParts.push(`model=${row.model}`)
+  if (eventID) corrParts.push(`event=${eventID}`)
   if (corrParts.length > 0) parts.push(corrParts.join(' '))
 
   const errors = getExtraString(extra, 'errors')
@@ -353,6 +394,15 @@ watch(() => props.refreshToken, () => {
   fetchHealth()
 })
 
+watch(
+  () => [route.query.system_log_q, route.query.system_log_range] as const,
+  async () => {
+    if (!applySystemLogDeepLink()) return
+    await fetchLogs()
+    await scrollToSystemLogs()
+  },
+)
+
 const onPageChange = (next: number) => {
   page.value = next
   fetchLogs()
@@ -372,15 +422,17 @@ const applyFilters = () => {
 const hasData = computed(() => logs.value.length > 0)
 
 onMounted(async () => {
+  const deepLinked = applySystemLogDeepLink()
   if (props.platformFilter) {
     filters.platform = props.platformFilter
   }
   await Promise.all([fetchLogs(), fetchHealth(), loadRuntimeConfig()])
+  if (deepLinked) await scrollToSystemLogs()
 })
 </script>
 
 <template>
-  <section class="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-900/60">
+  <section id="ops-system-logs" class="scroll-mt-4 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-900/60">
     <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
       <div>
         <h3 class="text-sm font-bold text-gray-900 dark:text-white">{{ t('admin.ops.systemLogs.title') }}</h3>
@@ -526,6 +578,9 @@ onMounted(async () => {
           <div v-if="row.host" class="truncate text-xs text-gray-500 dark:text-gray-400" :title="row.host">
             {{ row.host }}
           </div>
+          <a v-if="instructionEventID(row)" :href="instructionEventHref(row)" class="inline-flex text-xs font-semibold text-primary-600 hover:underline dark:text-primary-400">
+            {{ t('admin.instructionAudit.eventNumber', { id: instructionEventID(row) }) }}
+          </a>
           <div class="whitespace-normal break-all text-xs text-gray-700 dark:text-gray-300">
             {{ formatSystemLogDetail(row) }}
           </div>
@@ -553,6 +608,10 @@ onMounted(async () => {
                 </span>
               </td>
               <td class="px-3 py-2 text-xs text-gray-700 dark:text-gray-300 whitespace-normal break-all">
+                <a v-if="instructionEventID(row)" :href="instructionEventHref(row)" class="mb-1 inline-flex font-semibold text-primary-600 hover:underline dark:text-primary-400">
+                  {{ t('admin.instructionAudit.eventNumber', { id: instructionEventID(row) }) }}
+                </a>
+                <br v-if="instructionEventID(row)" />
                 {{ formatSystemLogDetail(row) }}
               </td>
             </tr>

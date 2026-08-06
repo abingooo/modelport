@@ -2,6 +2,7 @@ package securityaudit
 
 import (
 	"context"
+	"crypto/subtle"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -22,6 +23,7 @@ const (
 	instructionAuditProtocol                  = "openai_responses"
 	instructionBlockedEventPersistenceTimeout = 3 * time.Second
 	instructionSnapshotMaxStaleness           = 30 * time.Second
+	maxInstructionRuleSetAllowedUsers         = 500
 )
 
 var instructionDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -195,6 +197,17 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 	if s.instructionSnapshotStale(snapshot, startedAt) {
 		return s.blockInstructionConfigUnavailable(ctx, request, snapshot, startedAt)
 	}
+	if request.UserID > 0 {
+		if _, allowed := policy.AllowedUsers[request.UserID]; allowed {
+			return &InstructionDecision{
+				Applicable: true, Allow: true, Reason: "user_allowlist",
+				Instructions:  InstructionFieldResult{Result: "not_checked"},
+				Input1:        InstructionFieldResult{Result: "not_checked"},
+				RuleSetIDs:    append([]int64(nil), policy.RuleSetIDs...),
+				ConfigVersion: snapshot.ConfigVersion, Latency: time.Since(startedAt),
+			}
+		}
+	}
 
 	body := request.InstructionBody
 	if len(body) == 0 {
@@ -222,6 +235,10 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 		}
 	}
 	inspection := inspectInstructionRoot(root, policy.Hashes, time.Now().UTC())
+	if !inspection.Allow && policy.AllowEmptyFields && instructionFieldsStrictlyEmpty(root) {
+		inspection.Allow = true
+		inspection.Reason = "empty_fields_allowed"
+	}
 	decision := &InstructionDecision{
 		Applicable:    true,
 		Allow:         inspection.Allow,
@@ -312,6 +329,10 @@ func mergeInstructionPolicy(accumulator *instructionPolicyAccumulator, policy in
 	for _, hash := range policy.Hashes {
 		accumulator.hashes[hash.Digest] = hash
 	}
+	for userID := range policy.AllowedUsers {
+		accumulator.allowedUsers[userID] = struct{}{}
+	}
+	accumulator.allowEmptyFields = accumulator.allowEmptyFields || policy.AllowEmptyFields
 }
 
 func (s *InstructionService) recordBlocked(ctx context.Context, request Request, decision *InstructionDecision) {
@@ -351,9 +372,11 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 		)
 		return
 	}
+	decision.EventID = eventID
 	if s.notifications != nil {
 		groupID := instructionGroupID(event.Request.GroupID)
 		variables := map[string]string{
+			"event_id":     strconv.FormatInt(eventID, 10),
 			"request_id":   event.Request.RequestID,
 			"triggered_at": time.Now().UTC().Format(time.RFC3339),
 			"user_id":      strconv.FormatInt(event.Request.UserID, 10),
@@ -562,6 +585,27 @@ func (s *InstructionService) UpdateHash(ctx context.Context, id int64, request U
 	return item, nil
 }
 
+func (s *InstructionService) DeleteHash(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return infraerrors.BadRequest("instruction_audit_invalid_hash_id", "哈希 ID 无效")
+	}
+	version, references, err := s.repository.DeleteHash(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return infraerrors.NotFound("instruction_audit_hash_not_found", "哈希不存在")
+	}
+	if err != nil {
+		return err
+	}
+	if references > 0 {
+		return infraerrors.Conflict(
+			"instruction_audit_hash_referenced",
+			fmt.Sprintf("该哈希仍被 %d 个规则集引用，请先解除关联", references),
+		).WithMetadata(map[string]string{"reference_count": strconv.FormatInt(references, 10)})
+	}
+	s.refreshAfterMutation(ctx, version)
+	return nil
+}
+
 func (s *InstructionService) ListRuleSets(ctx context.Context) ([]InstructionRuleSet, error) {
 	return s.repository.ListRuleSets(ctx)
 }
@@ -572,12 +616,60 @@ func (s *InstructionService) SaveRuleSet(ctx context.Context, id int64, request 
 	if request.Name == "" || len(request.Name) > 160 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_rule_set", "规则集名称不能为空且不能超过 160 个字符")
 	}
+	allowedUserIDs, err := normalizeInstructionAllowedUserIDs(request.AllowedUserIDs)
+	if err != nil {
+		return nil, err
+	}
+	request.AllowedUserIDs = allowedUserIDs
 	item, err := s.repository.SaveRuleSet(ctx, id, request, actorID)
+	if errors.Is(err, errInstructionAuditAllowedUserNotFound) {
+		return nil, infraerrors.BadRequest("instruction_audit_allowed_user_not_found", "白名单中包含不存在的用户")
+	}
 	if err != nil {
 		return nil, err
 	}
 	s.refreshAfterMutation(ctx, 0)
 	return item, nil
+}
+
+func normalizeInstructionAllowedUserIDs(values []int64) ([]int64, error) {
+	seen := make(map[int64]struct{}, len(values))
+	result := make([]int64, 0, len(values))
+	for _, value := range values {
+		if value <= 0 {
+			return nil, infraerrors.BadRequest("instruction_audit_invalid_allowed_users", "用户白名单包含无效用户 ID")
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+		if len(result) > maxInstructionRuleSetAllowedUsers {
+			return nil, infraerrors.BadRequest("instruction_audit_invalid_allowed_users", "每个规则集最多允许 500 个白名单用户")
+		}
+	}
+	return result, nil
+}
+
+func (s *InstructionService) DeleteRuleSet(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return infraerrors.BadRequest("instruction_audit_invalid_rule_set_id", "规则集 ID 无效")
+	}
+	version, references, err := s.repository.DeleteRuleSet(ctx, id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return infraerrors.NotFound("instruction_audit_rule_set_not_found", "规则集不存在")
+	}
+	if err != nil {
+		return err
+	}
+	if references > 0 {
+		return infraerrors.Conflict(
+			"instruction_audit_rule_set_referenced",
+			fmt.Sprintf("该规则集仍有 %d 条审核范围绑定，请先解除关联", references),
+		).WithMetadata(map[string]string{"reference_count": strconv.FormatInt(references, 10)})
+	}
+	s.refreshAfterMutation(ctx, version)
+	return nil
 }
 
 func (s *InstructionService) ListGroupBindings(ctx context.Context) ([]InstructionGroupBinding, error) {
@@ -631,10 +723,77 @@ func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int,
 	if pageSize > 100 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_page_size", "每页最多 100 条")
 	}
+	var err error
+	if filter, err = normalizeInstructionEventFilter(filter, false); err != nil {
+		return nil, err
+	}
+	return s.repository.ListEvents(ctx, page, pageSize, filter)
+}
+
+func (s *InstructionService) DeleteEvent(ctx context.Context, id int64) (*InstructionDeleteResult, error) {
+	if id <= 0 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_event_id", "审核事件 ID 无效")
+	}
+	result, err := s.repository.DeleteEventsByIDs(ctx, []int64{id})
+	if err != nil {
+		return nil, err
+	}
+	if result.DeletedEvents == 0 {
+		return nil, infraerrors.NotFound("instruction_audit_event_not_found", "审核记录不存在")
+	}
+	return result, nil
+}
+
+func (s *InstructionService) DeleteEventsByIDs(ctx context.Context, ids []int64) (*InstructionDeleteResult, error) {
+	if len(ids) == 0 || len(ids) > 500 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_delete_batch", "批量删除必须包含 1-500 个事件 ID")
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, infraerrors.BadRequest("instruction_audit_invalid_event_id", "审核事件 ID 无效")
+		}
+	}
+	return s.repository.DeleteEventsByIDs(ctx, ids)
+}
+
+func (s *InstructionService) PreviewDeleteEvents(ctx context.Context, filter InstructionEventFilter) (*InstructionDeletePreview, error) {
+	normalized, err := normalizeInstructionEventFilter(filter, true)
+	if err != nil {
+		return nil, err
+	}
+	return s.repository.PreviewDeleteEvents(ctx, normalized)
+}
+
+func (s *InstructionService) DeleteEventsByFilter(ctx context.Context, request DeleteInstructionEventsByFilterRequest) (*InstructionDeleteResult, error) {
+	if !request.Confirm || request.SnapshotMaxID < 0 {
+		return nil, infraerrors.BadRequest("instruction_audit_delete_confirmation_invalid", "删除确认无效或已过期")
+	}
+	filter, err := normalizeInstructionEventFilter(request.Filter, true)
+	if err != nil {
+		return nil, err
+	}
+	expected := instructionEventFilterHash(filter, request.SnapshotMaxID)
+	provided := strings.ToLower(strings.TrimSpace(request.FilterHash))
+	if len(provided) != len(expected) || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		return nil, infraerrors.BadRequest("instruction_audit_delete_confirmation_invalid", "删除确认与筛选条件不一致")
+	}
+	return s.repository.DeleteEventsByFilter(ctx, filter, request.SnapshotMaxID, 200)
+}
+
+func normalizeInstructionEventFilter(filter InstructionEventFilter, requireDeleteRange bool) (InstructionEventFilter, error) {
 	filter.Query = strings.TrimSpace(filter.Query)
 	filter.Model = strings.TrimSpace(filter.Model)
+	if filter.EventID < 0 {
+		return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_invalid_event_id", "审核事件 ID 无效")
+	}
 	if filter.UserID < 0 {
-		return nil, infraerrors.BadRequest("instruction_audit_invalid_user_id", "用户 ID 无效")
+		return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_invalid_user_id", "用户 ID 无效")
+	}
+	if filter.From != nil && filter.To != nil && !filter.From.Before(*filter.To) {
+		return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_invalid_time_range", "时间范围无效")
+	}
+	if requireDeleteRange && (filter.From == nil || filter.To == nil) {
+		return InstructionEventFilter{}, infraerrors.BadRequest("instruction_audit_delete_range_required", "清理日志必须指定完整时间范围")
 	}
 	filter.GroupIDs = uniquePositiveInt64s(filter.GroupIDs)
 	filter.Reasons = normalizeInstructionFilterValues(filter.Reasons, validInstructionEventReasons)
@@ -664,7 +823,7 @@ func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int,
 	if filter.ClientTypes == nil {
 		filter.ClientTypes = []string{}
 	}
-	return s.repository.ListEvents(ctx, page, pageSize, filter)
+	return canonicalInstructionEventFilter(filter), nil
 }
 
 func (s *InstructionService) UpdateEvidenceRetention(ctx context.Context, days int) (*InstructionOverview, error) {
@@ -791,6 +950,57 @@ func (s *InstructionService) CreateCandidateFromEvent(ctx context.Context, event
 		ClientVersion:  strings.TrimSpace(request.ClientVersion),
 		Status:         "candidate",
 	}, actorID)
+}
+
+func (s *InstructionService) AddEventToRuleSet(
+	ctx context.Context,
+	eventID int64,
+	request AddInstructionEventToRuleSetRequest,
+	actorID int64,
+) (*AddInstructionEventToRuleSetResult, error) {
+	if !request.ReviewConfirmed {
+		return nil, infraerrors.BadRequest("instruction_audit_review_confirmation_required", "请先确认本次放行规则变更")
+	}
+	if request.RuleSetID <= 0 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_rule_set_id", "规则集 ID 无效")
+	}
+	event, err := s.GetEvent(ctx, eventID)
+	if err != nil {
+		return nil, err
+	}
+	sources := canonicalInstructionStrings(request.Sources)
+	if len(sources) == 0 || len(sources) > 2 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_rule_sources", "请选择至少一个可用审核字段")
+	}
+	hashes := make([]CreateInstructionHashRequest, 0, len(sources))
+	for _, source := range sources {
+		digest := ""
+		switch source {
+		case "instructions":
+			digest = strings.TrimSpace(event.Instructions.SHA256)
+		case "input1":
+			digest = strings.TrimSpace(event.Input1.SHA256)
+		default:
+			return nil, infraerrors.BadRequest("instruction_audit_invalid_rule_sources", "审核字段来源无效")
+		}
+		if !instructionDigestPattern.MatchString(digest) {
+			return nil, infraerrors.BadRequest("instruction_audit_candidate_digest_missing", "所选字段没有可用摘要")
+		}
+		hashes = append(hashes, CreateInstructionHashRequest{
+			Digest: digest, Name: fmt.Sprintf("事件 #%d %s", eventID, source),
+			Note: fmt.Sprintf("由审核事件 #%d 一键加入规则集", eventID), ObservedSource: source,
+			ClientName: event.ClientType, Status: "active",
+		})
+	}
+	result, err := s.repository.AddHashesToRuleSet(ctx, request.RuleSetID, hashes, actorID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, infraerrors.NotFound("instruction_audit_rule_set_not_found", "规则集不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.refreshAfterMutation(ctx, result.ConfigVersion)
+	return result, nil
 }
 
 func normalizeInstructionHashRequest(request CreateInstructionHashRequest) (CreateInstructionHashRequest, error) {
@@ -955,7 +1165,7 @@ func normalizeInstructionFilterValues(values []string, allowed map[string]struct
 
 func validInstructionEvidenceCopySource(source string) bool {
 	switch source {
-	case "instructions_plaintext", "instructions_hash", "input1_plaintext", "input1_hash", "request_id", "review_bundle":
+	case "instructions_plaintext", "instructions_hash", "input1_plaintext", "input1_hash", "event_id", "request_id", "review_bundle":
 		return true
 	default:
 		return false

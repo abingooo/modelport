@@ -3,12 +3,14 @@ package securityaudit
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,6 +121,53 @@ func TestInstructionServiceEvaluationScopeAndFallback(t *testing.T) {
 			require.Equal(t, test.wantAllow, decision.Allow)
 			require.Equal(t, test.wantReason, decision.Reason)
 		})
+	}
+}
+
+func TestInstructionServiceRuleSetExceptions(t *testing.T) {
+	const groupID int64 = 42
+	snapshot := instructionTestSnapshot(true, groupID)
+	policy := snapshot.Policies[groupID]
+	policy.AllowEmptyFields = true
+	policy.AllowedUsers = map[int64]struct{}{77: {}}
+	snapshot.Policies[groupID] = policy
+	service := &InstructionService{}
+	service.snapshot.Store(snapshot)
+
+	whitelisted := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, UserID: 77, GroupID: instructionTestGroupID(groupID),
+		InstructionBody: []byte(`{`),
+	})
+	require.True(t, whitelisted.Applicable)
+	require.True(t, whitelisted.Allow)
+	require.Equal(t, "user_allowlist", whitelisted.Reason)
+	require.Equal(t, "not_checked", whitelisted.Instructions.Result)
+
+	for _, body := range []string{
+		`{}`,
+		`{"instructions":""}`,
+		`{"input":[{}]}`,
+		`{"instructions":"","input":[{}, {"content":[{"type":"input_text","text":""}]}]}`,
+	} {
+		decision := service.EvaluateInstruction(context.Background(), Request{
+			Protocol: instructionAuditProtocol, UserID: 78, GroupID: instructionTestGroupID(groupID),
+			InstructionBody: []byte(body),
+		})
+		require.True(t, decision.Allow, body)
+		require.Equal(t, "empty_fields_allowed", decision.Reason)
+	}
+
+	for _, body := range []string{
+		`{"instructions":null}`,
+		`{"instructions":" "}`,
+		`{"input":null}`,
+		`{"input":[{}, {"content":[{"type":"input_image"}]}]}`,
+	} {
+		decision := service.EvaluateInstruction(context.Background(), Request{
+			Protocol: instructionAuditProtocol, UserID: 78, GroupID: instructionTestGroupID(groupID),
+			InstructionBody: []byte(body),
+		})
+		require.False(t, decision.Allow, body)
 	}
 }
 
@@ -280,9 +329,57 @@ func TestInstructionServicePersistsBlockedEventBeforeReturning(t *testing.T) {
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
 	service.recordBlocked(canceled, request, decision)
+	require.EqualValues(t, 17, decision.EventID)
 	require.Zero(t, service.failedBlockedEventPersists.Load())
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInstructionServiceMapsReferencedResourcesToConflict(t *testing.T) {
+	t.Run("hash", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id FROM instruction_audit_hashes WHERE id = \$1 FOR UPDATE`).
+			WithArgs(int64(9)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(9)))
+		mock.ExpectQuery(`SELECT COUNT\(\*\) FROM instruction_audit_rule_set_hashes WHERE hash_id = \$1`).
+			WithArgs(int64(9)).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		mock.ExpectRollback()
+
+		err = NewInstructionService(NewInstructionRepository(db), nil, nil).DeleteHash(context.Background(), 9)
+		require.Equal(t, http.StatusConflict, infraerrors.Code(err))
+		require.Equal(t, "instruction_audit_hash_referenced", infraerrors.Reason(err))
+		mock.ExpectClose()
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	t.Run("rule set", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectBegin()
+		mock.ExpectQuery(`SELECT id FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
+			WithArgs(int64(11)).
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
+		mock.ExpectQuery(`(?s)SELECT.*instruction_audit_group_bindings.*instruction_audit_bindings`).
+			WithArgs(int64(11)).
+			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
+		mock.ExpectRollback()
+
+		err = NewInstructionService(NewInstructionRepository(db), nil, nil).DeleteRuleSet(context.Background(), 11)
+		require.Equal(t, http.StatusConflict, infraerrors.Code(err))
+		require.Equal(t, "instruction_audit_rule_set_referenced", infraerrors.Reason(err))
+		mock.ExpectClose()
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+}
+
+func TestInstructionEvidenceCopySourcesIncludeEventID(t *testing.T) {
+	require.True(t, validInstructionEvidenceCopySource("event_id"))
+	require.False(t, validInstructionEvidenceCopySource("authorization"))
 }
 
 func TestInstructionServiceUsesStrictOriginalModel(t *testing.T) {

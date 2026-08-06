@@ -145,8 +145,20 @@ func runInstructionAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securi
 	decision := coordinator.CheckInstruction(c.Request.Context(), request)
 	if reqLog != nil {
 		blocked := decision != nil && !decision.AllowNextStage
-		reqLog.Info("instruction_audit.gateway_check_done",
-			zap.String("request_id", request.RequestID), zap.String("stage", request.Stage), zap.Bool("blocked", blocked))
+		fields := []zap.Field{
+			zap.String("request_id", request.RequestID), zap.String("stage", request.Stage), zap.Bool("blocked", blocked),
+		}
+		if blocked && decision.Instruction != nil {
+			fields = append(fields,
+				zap.Int64("event_id", decision.Instruction.EventID),
+				zap.String("reason", decision.Instruction.Reason),
+			)
+		}
+		if blocked {
+			reqLog.Warn("instruction_audit.gateway_check_done", fields...)
+		} else {
+			reqLog.Info("instruction_audit.gateway_check_done", fields...)
+		}
 	}
 	return decision
 }

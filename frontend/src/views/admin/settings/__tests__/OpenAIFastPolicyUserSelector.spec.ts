@@ -70,6 +70,21 @@ describe('OpenAIFastPolicyUserSelector', () => {
     expect(wrapper.emitted('update:modelValue')).toBeUndefined()
   })
 
+  it('uses initial user details without issuing hydration requests', async () => {
+    const wrapper = mount(OpenAIFastPolicyUserSelector, {
+      props: {
+        modelValue: [8],
+        initialUsers: [{ id: 8, email: 'seeded@example.com', deleted: false }],
+      },
+      global: { stubs: { Icon: true } },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('seeded@example.com')
+    expect(wrapper.text()).toContain('#8')
+    expect(mockGetUserById).not.toHaveBeenCalled()
+  })
+
   it('searches after one character and adds the selected user ID', async () => {
     mockSearchUsers.mockResolvedValue([
       { id: 9, email: 'alice@example.com', deleted: false },
