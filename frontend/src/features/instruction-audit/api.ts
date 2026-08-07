@@ -10,12 +10,22 @@ import type {
   InstructionDeleteResult,
   AddInstructionEventToRuleSetResult,
   InstructionEvidenceReview,
+  InstructionAIReview,
+  InstructionHashRawReview,
   InstructionHashEntry,
   InstructionOverview,
+  InstructionReasonPolicy,
+  InstructionRuntimeConfig,
+  InstructionStatistics,
+  InstructionStatisticsFilters,
+  InstructionTranslationJob,
+  InstructionTranslationRequest,
   InstructionRuleSet,
   SaveInstructionGroupBindingsRequest,
   SaveInstructionHashRequest,
   SaveInstructionRuleSetRequest,
+  UpdateInstructionReasonPolicyRequest,
+  UpdateInstructionRuntimeConfigRequest,
 } from './types'
 
 const basePath = '/admin/instruction-audit'
@@ -38,6 +48,26 @@ export const instructionAuditAPI = {
     return data
   },
 
+  async getRuntimeConfig(): Promise<InstructionRuntimeConfig> {
+    const { data } = await apiClient.get<InstructionRuntimeConfig>(`${basePath}/config`)
+    return data
+  },
+
+  async updateRuntimeConfig(payload: UpdateInstructionRuntimeConfigRequest): Promise<InstructionRuntimeConfig> {
+    const { data } = await apiClient.put<InstructionRuntimeConfig>(`${basePath}/config`, payload)
+    return data
+  },
+
+  async listReasonPolicies(): Promise<InstructionReasonPolicy[]> {
+    const { data } = await apiClient.get<InstructionReasonPolicy[]>(`${basePath}/reason-policies`)
+    return data
+  },
+
+  async updateReasonPolicy(reason: string, payload: UpdateInstructionReasonPolicyRequest): Promise<InstructionReasonPolicy> {
+    const { data } = await apiClient.put<InstructionReasonPolicy>(`${basePath}/reason-policies/${encodeURIComponent(reason)}`, payload)
+    return data
+  },
+
   async listHashes(status = ''): Promise<InstructionHashEntry[]> {
     const { data } = await apiClient.get<InstructionHashEntry[]>(`${basePath}/hashes`, {
       params: status ? { status } : undefined,
@@ -47,6 +77,35 @@ export const instructionAuditAPI = {
 
   async createHash(payload: SaveInstructionHashRequest): Promise<InstructionHashEntry> {
     const { data } = await apiClient.post<InstructionHashEntry>(`${basePath}/hashes`, payload)
+    return data
+  },
+
+  async getHash(id: number): Promise<InstructionHashEntry> {
+    const { data } = await apiClient.get<InstructionHashEntry>(`${basePath}/hashes/${id}`)
+    return data
+  },
+
+  async changeHashStatus(id: number, status: 'active' | 'disabled' | 'revoked'): Promise<InstructionHashEntry> {
+    const { data } = await apiClient.put<InstructionHashEntry>(`${basePath}/hashes/${id}/status`, { status })
+    return data
+  },
+
+  async revealHashRaw(id: number): Promise<InstructionHashRawReview> {
+    const { data } = await apiClient.get<InstructionHashRawReview>(`${basePath}/hashes/${id}/raw`)
+    return data
+  },
+
+  async recordHashRawCopy(id: number): Promise<void> {
+    await apiClient.post(`${basePath}/hashes/${id}/raw-access`, {})
+  },
+
+  async createTranslation(payload: InstructionTranslationRequest): Promise<InstructionTranslationJob> {
+    const { data } = await apiClient.post<InstructionTranslationJob>(`${basePath}/translations`, payload)
+    return data
+  },
+
+  async getTranslation(id: number): Promise<InstructionTranslationJob> {
+    const { data } = await apiClient.get<InstructionTranslationJob>(`${basePath}/translations/${id}`)
     return data
   },
 
@@ -106,8 +165,18 @@ export const instructionAuditAPI = {
     return data
   },
 
+  async getStatistics(params: InstructionStatisticsFilters): Promise<InstructionStatistics> {
+    const { data } = await apiClient.get<InstructionStatistics>(`${basePath}/statistics`, { params })
+    return data
+  },
+
   async getEvent(id: number): Promise<InstructionEvent> {
     const { data } = await apiClient.get<InstructionEvent>(`${basePath}/events/${id}`)
+    return data
+  },
+
+  async listEventAIReviews(id: number): Promise<InstructionAIReview[]> {
+    const { data } = await apiClient.get<InstructionAIReview[]>(`${basePath}/events/${id}/ai-reviews`)
     return data
   },
 

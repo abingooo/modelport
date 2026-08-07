@@ -5,22 +5,52 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	modelportrepository "github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 )
 
 const instructionAuditPostgresTestEnv = "INSTRUCTION_AUDIT_TEST_POSTGRES_DSN"
 
 func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db := openInstructionAuditSchema(t)
+	migrations := []string{
+		"198_instruction_audit.sql",
+		"199_instruction_audit_group_scope.sql",
+		"200_instruction_audit_review_notifications.sql",
+		"201_instruction_audit_client_scope.sql",
+		"203_instruction_audit_rule_exceptions.sql",
+		"204_instruction_audit_outcomes_and_policies.sql",
+		"205_instruction_audit_raw_ai_translation.sql",
+		"206_instruction_audit_outcome_aggregation.sql",
+		"208_instruction_audit_translation_execution.sql",
+		"209_instruction_audit_aggregate_retention.sql",
+		"210_instruction_audit_aggregate_shards.sql",
+	}
+	for iteration := range 2 {
+		for _, name := range migrations {
+			applyInstructionAuditMigration(t, db, name)
+			if iteration == 0 && name == "198_instruction_audit.sql" {
+				_, err := db.Exec(`UPDATE settings SET value = 'true' WHERE key = 'instruction_audit_enabled'`)
+				require.NoError(t, err)
+			}
+		}
+	}
+	return db
+}
+
+func openInstructionAuditSchema(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := strings.TrimSpace(os.Getenv(instructionAuditPostgresTestEnv))
 	if dsn == "" {
@@ -69,33 +99,806 @@ func openInstructionAuditIntegrationDB(t *testing.T) *sql.DB {
 		);
 	`)
 	require.NoError(t, err)
-	migration198, err := os.ReadFile(filepath.Join("..", "..", "migrations", "198_instruction_audit.sql"))
+	return db
+}
+
+func applyInstructionAuditMigration(t *testing.T, db *sql.DB, name string) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 	require.NoError(t, err)
-	migration199, err := os.ReadFile(filepath.Join("..", "..", "migrations", "199_instruction_audit_group_scope.sql"))
-	require.NoError(t, err)
-	migration200, err := os.ReadFile(filepath.Join("..", "..", "migrations", "200_instruction_audit_review_notifications.sql"))
-	require.NoError(t, err)
-	migration201, err := os.ReadFile(filepath.Join("..", "..", "migrations", "201_instruction_audit_client_scope.sql"))
-	require.NoError(t, err)
-	migration203, err := os.ReadFile(filepath.Join("..", "..", "migrations", "203_instruction_audit_rule_exceptions.sql"))
-	require.NoError(t, err)
-	for iteration := range 2 {
-		_, err = db.ExecContext(ctx, string(migration198))
-		require.NoError(t, err)
-		if iteration == 0 {
-			_, err = db.ExecContext(ctx, `UPDATE settings SET value = 'true' WHERE key = 'instruction_audit_enabled'`)
-			require.NoError(t, err)
+	if strings.HasSuffix(name, "_notx.sql") {
+		for _, statement := range strings.Split(string(body), ";") {
+			if strings.TrimSpace(statement) == "" {
+				continue
+			}
+			_, err = db.Exec(statement)
+			require.NoError(t, err, name)
 		}
-		_, err = db.ExecContext(ctx, string(migration199))
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, string(migration200))
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, string(migration201))
-		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, string(migration203))
+		return
+	}
+	_, err = db.Exec(string(body))
+	require.NoError(t, err, name)
+}
+
+func instructionAuditTableCount(t *testing.T, db *sql.DB, table string) int64 {
+	t.Helper()
+	var count int64
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM `+table).Scan(&count))
+	return count
+}
+
+func TestInstructionAuditPostgresV13MigrationPreservesV12DataAndIsIdempotent(t *testing.T) {
+	db := openInstructionAuditSchema(t)
+	for _, name := range []string{
+		"198_instruction_audit.sql",
+		"199_instruction_audit_group_scope.sql",
+		"200_instruction_audit_review_notifications.sql",
+		"201_instruction_audit_client_scope.sql",
+		"203_instruction_audit_rule_exceptions.sql",
+	} {
+		applyInstructionAuditMigration(t, db, name)
+	}
+
+	adminID := insertInstructionAuditUser(t, db, "migration-admin@example.test", "admin")
+	groupID := insertInstructionAuditGroup(t, db, "Migration Group")
+	var apiKeyID int64
+	require.NoError(t, db.QueryRow(`INSERT INTO api_keys DEFAULT VALUES RETURNING id`).Scan(&apiKeyID))
+	digest := sha256Hex("migration-standard")
+	var hashID, ruleSetID, eventID int64
+	require.NoError(t, db.QueryRow(`
+		INSERT INTO instruction_audit_hashes
+			(digest, name, observed_source, status, created_by)
+		VALUES ($1, 'migration hash', 'instructions', 'active', $2)
+		RETURNING id`, digest, adminID).Scan(&hashID))
+	require.NoError(t, db.QueryRow(`
+		INSERT INTO instruction_audit_rule_sets (name, enabled, created_by, updated_by)
+		VALUES ('migration rules', TRUE, $1, $1) RETURNING id`, adminID).Scan(&ruleSetID))
+	_, err := db.Exec(`INSERT INTO instruction_audit_rule_set_hashes (rule_set_id, hash_id, created_by) VALUES ($1, $2, $3)`, ruleSetID, hashID, adminID)
+	require.NoError(t, err)
+	_, err = db.Exec(`
+		INSERT INTO instruction_audit_group_bindings
+			(group_id, rule_set_id, client_types, enabled, created_by, updated_by)
+		VALUES ($1, $2, ARRAY['codex_cli']::TEXT[], TRUE, $3, $3)`, groupID, ruleSetID, adminID)
+	require.NoError(t, err)
+	require.NoError(t, db.QueryRow(`
+		INSERT INTO instruction_audit_events
+			(request_id, user_id, user_email_snapshot, api_key_id, group_id, group_name_snapshot,
+			 client_type, client_user_agent, model, endpoint, stage,
+			 instructions_present, instructions_sha256, instructions_result,
+			 input1_present, input1_sha256, input1_result,
+			 decision, reason, rule_set_ids, config_version, latency_ms, evidence_status)
+		VALUES
+			('migration-request', $1, 'migration-admin@example.test', $2, $3, 'Migration Group',
+			 'codex_cli', 'codex_cli_rs/0.145.0', 'gpt-test', '/v1/responses', 'http',
+			 TRUE, $4, 'mismatch', FALSE, '', 'missing',
+			 'blocked', 'hash_mismatch', jsonb_build_array($5::BIGINT), 7, 3, 'stored')
+		RETURNING id`, adminID, apiKeyID, groupID, digest, ruleSetID).Scan(&eventID))
+	_, err = db.Exec(`
+		INSERT INTO instruction_audit_evidence
+			(event_id, source, digest, ciphertext, key_version, plaintext_bytes, expires_at)
+		VALUES ($1, 'instructions', $2, decode('010203', 'hex'), 'legacy-v1', 18, NOW() + INTERVAL '30 days')`, eventID, digest)
+	require.NoError(t, err)
+	for _, audience := range []string{"user", "ops"} {
+		_, err = db.Exec(`
+			INSERT INTO security_notification_outbox
+				(source_type, source_id, audience, user_id, template_event, status)
+			VALUES ('instruction_audit', $1, $2, $3, $4, 'sent')`,
+			eventID, audience, adminID, "instruction_audit."+audience+"_notice")
 		require.NoError(t, err)
 	}
-	return db
+	_, err = db.Exec(`
+		INSERT INTO instruction_audit_evidence_access_logs
+			(event_id, actor_id, action, source, succeeded)
+		VALUES ($1, $2, 'reveal', 'instructions', TRUE)`, eventID, adminID)
+	require.NoError(t, err)
+
+	preserved := map[string]int64{}
+	for _, table := range []string{
+		"instruction_audit_events", "instruction_audit_hashes", "instruction_audit_rule_sets",
+		"instruction_audit_rule_set_hashes", "instruction_audit_group_bindings",
+		"instruction_audit_evidence", "instruction_audit_evidence_access_logs", "security_notification_outbox",
+	} {
+		preserved[table] = instructionAuditTableCount(t, db, table)
+	}
+
+	for iteration := range 2 {
+		for _, name := range []string{
+			"204_instruction_audit_outcomes_and_policies.sql",
+			"205_instruction_audit_raw_ai_translation.sql",
+			"206_instruction_audit_outcome_aggregation.sql",
+			"207_instruction_audit_v13_event_indexes_notx.sql",
+			"208_instruction_audit_translation_execution.sql",
+			"209_instruction_audit_aggregate_retention.sql",
+			"210_instruction_audit_aggregate_shards.sql",
+		} {
+			applyInstructionAuditMigration(t, db, name)
+		}
+		for table, expected := range preserved {
+			require.Equal(t, expected, instructionAuditTableCount(t, db, table), "%s iteration %d", table, iteration)
+		}
+	}
+
+	var initialReason, finalReason, outcome, action string
+	var bodyBytes, aiLatency sql.NullInt64
+	require.NoError(t, db.QueryRow(`
+		SELECT initial_reason, final_reason, final_outcome, policy_action, body_bytes, ai_latency_ms
+		FROM instruction_audit_events WHERE id = $1`, eventID).Scan(
+		&initialReason, &finalReason, &outcome, &action, &bodyBytes, &aiLatency,
+	))
+	require.Equal(t, "hash_mismatch", initialReason)
+	require.Equal(t, "hash_mismatch", finalReason)
+	require.Equal(t, InstructionOutcomeBlocked, outcome)
+	require.Equal(t, InstructionPolicyActionBlock, action)
+	require.False(t, bodyBytes.Valid)
+	require.False(t, aiLatency.Valid)
+
+	var rawStatus, sourceType string
+	require.NoError(t, db.QueryRow(`SELECT raw_content_status FROM instruction_audit_hash_raw_contents WHERE hash_id = $1`, hashID).Scan(&rawStatus))
+	require.NoError(t, db.QueryRow(`SELECT source_type FROM instruction_audit_hash_sources WHERE hash_id = $1`, hashID).Scan(&sourceType))
+	require.Equal(t, "raw_content_unavailable", rawStatus)
+	require.Equal(t, "import", sourceType)
+	require.EqualValues(t, 13, instructionAuditTableCount(t, db, "instruction_audit_reason_policies"))
+
+	var maxBodyBytes int64
+	var aggregateRetentionDays int
+	var aiEnabled, translationEnabled bool
+	require.NoError(t, db.QueryRow(`
+		SELECT max_body_bytes, aggregate_retention_days, ai_enabled, translation_enabled
+		FROM instruction_audit_runtime_config WHERE id = 1`).Scan(
+		&maxBodyBytes, &aggregateRetentionDays, &aiEnabled, &translationEnabled,
+	))
+	require.EqualValues(t, InstructionDefaultMaxBodyBytes, maxBodyBytes)
+	require.Equal(t, 365, aggregateRetentionDays)
+	require.False(t, aiEnabled)
+	require.False(t, translationEnabled)
+
+	var rollingEventID int64
+	require.NoError(t, db.QueryRow(`
+		INSERT INTO instruction_audit_events
+			(request_id, decision, reason, config_version, latency_ms)
+		VALUES ('rolling-v12-write', 'blocked', 'fields_missing', 7, 1)
+		RETURNING id`).Scan(&rollingEventID))
+	var rollingOutcome, rollingReason string
+	require.NoError(t, db.QueryRow(`
+		SELECT final_outcome, final_reason FROM instruction_audit_events WHERE id = $1`, rollingEventID).Scan(&rollingOutcome, &rollingReason))
+	require.Equal(t, InstructionOutcomeBlocked, rollingOutcome)
+	require.Equal(t, "fields_missing", rollingReason)
+}
+
+func TestInstructionAuditPostgresArchivesPassEventsWithoutDoubleCounting(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	userID := insertInstructionAuditUser(t, db, "statistics-user@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "Statistics Group")
+	archivedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Hour).Add(10 * time.Minute)
+
+	type outcomeCase struct {
+		outcome string
+		reason  string
+		action  string
+	}
+	cases := []outcomeCase{
+		{InstructionOutcomeBlocked, "hash_mismatch", InstructionPolicyActionBlock},
+		{InstructionOutcomePolicyAllow, "hash_mismatch", InstructionPolicyActionAllowAndRecord},
+		{InstructionOutcomeAIPass, "instructions_match", "ai_review"},
+		{InstructionOutcomeHashPass, "instructions_match", "hash_match"},
+		{InstructionOutcomeExceptionPass, "user_allowlist", "exception"},
+	}
+	eventIDs := make(map[string]int64, len(cases))
+	for _, item := range cases {
+		decision := &InstructionDecision{
+			Allow: item.outcome != InstructionOutcomeBlocked, InitialReason: item.reason,
+			FinalReason: item.reason, FinalOutcome: item.outcome, PolicyAction: item.action,
+			Instructions: InstructionFieldResult{Present: true, SHA256: sha256Hex(item.outcome), Result: "match"},
+			Input1:       InstructionFieldResult{Result: "not_checked"}, ConfigVersion: 9,
+			BodyBytes: 1024, Latency: 2 * time.Millisecond,
+		}
+		eventID, err := repository.RecordEvent(ctx, Request{
+			RequestID: "statistics-" + item.outcome, UserID: userID,
+			UserEmail: "statistics-user@example.test", GroupID: &groupID,
+			GroupName: "Statistics Group", InstructionClientType: InstructionClientCodexCLI,
+			UserAgent: "codex_cli_rs/0.145.0", Model: "gpt-statistics", Endpoint: "/v1/responses", Stage: "http",
+		}, decision, "not_available", nil, nil)
+		require.NoError(t, err)
+		eventIDs[item.outcome] = eventID
+		_, err = db.Exec(`UPDATE instruction_audit_events SET created_at = $1 WHERE id = $2`, archivedAt, eventID)
+		require.NoError(t, err)
+	}
+	var deterministicAILatency sql.NullInt64
+	require.NoError(t, db.QueryRow(`
+		SELECT ai_latency_ms FROM instruction_audit_events WHERE id = $1`,
+		eventIDs[InstructionOutcomeHashPass],
+	).Scan(&deterministicAILatency))
+	require.False(t, deterministicAILatency.Valid)
+	_, err := db.Exec(`UPDATE instruction_audit_events SET ai_latency_ms = 25 WHERE id = $1`, eventIDs[InstructionOutcomeAIPass])
+	require.NoError(t, err)
+
+	archived, err := repository.ArchiveExpiredPassEvents(ctx, 1, 100)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, archived)
+	archived, err = repository.ArchiveExpiredPassEvents(ctx, 1, 100)
+	require.NoError(t, err)
+	require.Zero(t, archived)
+
+	from := archivedAt.Add(-time.Hour)
+	to := time.Now().UTC().Add(time.Hour)
+	statistics, err := repository.InstructionStatistics(ctx, InstructionEventFilter{
+		From: &from, To: &to, GroupIDs: []int64{groupID}, UserID: userID,
+		Model: "gpt-stat", ClientTypes: []string{InstructionClientCodexCLI},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, statistics.Blocked)
+	require.EqualValues(t, 1, statistics.PolicyAllow)
+	require.EqualValues(t, 1, statistics.AIPass)
+	require.EqualValues(t, 1, statistics.HashPass)
+	require.EqualValues(t, 1, statistics.ExceptionPass)
+	require.EqualValues(t, 5, statistics.Total)
+	require.InDelta(t, 0.2, statistics.BlockRate, 0.0001)
+
+	persisted, aggregated, err := repository.InstructionOutcomeStorageCounts(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 3, persisted)
+	require.EqualValues(t, 2, aggregated)
+	var archiveWatermark int64
+	require.NoError(t, db.QueryRow(`SELECT last_event_id FROM instruction_audit_outcome_rollup_state WHERE id = 1`).Scan(&archiveWatermark))
+	require.Equal(t, eventIDs[InstructionOutcomeExceptionPass], archiveWatermark)
+
+	filtered, err := repository.InstructionStatistics(ctx, InstructionEventFilter{
+		From: &from, To: &to, Outcomes: []string{InstructionOutcomeHashPass},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, filtered.HashPass)
+	require.EqualValues(t, 1, filtered.Total)
+
+	filtered, err = repository.InstructionStatistics(ctx, InstructionEventFilter{
+		From: &from, To: &to, FinalReasons: []string{"hash_mismatch"},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, filtered.Blocked)
+	require.EqualValues(t, 1, filtered.PolicyAllow)
+	require.EqualValues(t, 2, filtered.Total)
+
+	partialFrom := archivedAt.Add(time.Minute)
+	partialTo := archivedAt.Add(20 * time.Minute)
+	partial, err := repository.InstructionStatistics(ctx, InstructionEventFilter{
+		From: &partialFrom, To: &partialTo,
+		Outcomes: []string{InstructionOutcomeHashPass, InstructionOutcomeExceptionPass},
+	})
+	require.NoError(t, err)
+	require.Zero(t, partial.Total)
+
+	matchingFrom := archivedAt.Add(-time.Minute)
+	matchingTo := archivedAt.Add(time.Minute)
+	partial, err = repository.InstructionStatistics(ctx, InstructionEventFilter{
+		From: &matchingFrom, To: &matchingTo,
+		Outcomes: []string{InstructionOutcomeHashPass, InstructionOutcomeExceptionPass},
+	})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, partial.HashPass)
+	require.EqualValues(t, 1, partial.ExceptionPass)
+	require.EqualValues(t, 2, partial.Total)
+	var archivedEventTimes int
+	require.NoError(t, db.QueryRow(`
+		SELECT COALESCE(SUM(cardinality(event_times)), 0)
+		FROM instruction_audit_outcome_hourly`).Scan(&archivedEventTimes))
+	require.Equal(t, 2, archivedEventTimes)
+
+	latency, err := repository.InstructionLatencyMetrics(ctx, from)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, latency.AuditSampleCount)
+	require.EqualValues(t, 2, latency.AuditP95MS)
+	require.EqualValues(t, 2, latency.AuditP99MS)
+	require.EqualValues(t, 1, latency.AISampleCount)
+	require.EqualValues(t, 25, latency.AIP95MS)
+	require.EqualValues(t, 25, latency.AIP99MS)
+
+	result, err := repository.DeleteEventsByIDs(ctx, []int64{eventIDs[InstructionOutcomeBlocked]})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, result.DeletedEvents)
+	statistics, err = repository.InstructionStatistics(ctx, InstructionEventFilter{From: &from, To: &to})
+	require.NoError(t, err)
+	require.Zero(t, statistics.Blocked)
+	require.EqualValues(t, 4, statistics.Total)
+
+	expiredBucket := time.Now().UTC().Add(-400 * 24 * time.Hour).Truncate(time.Hour)
+	_, err = db.Exec(`
+		UPDATE instruction_audit_outcome_hourly
+		SET bucket_at = $1::TIMESTAMPTZ,
+			event_times = ARRAY[$1::TIMESTAMPTZ + INTERVAL '10 minutes'],
+			first_event_at = $1::TIMESTAMPTZ + INTERVAL '10 minutes',
+			last_event_at = $1::TIMESTAMPTZ + INTERVAL '10 minutes'`, expiredBucket)
+	require.NoError(t, err)
+	deletedRows, deletedEvents, err := repository.PruneExpiredOutcomeAggregates(ctx, 365, 100)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, deletedRows)
+	require.EqualValues(t, 2, deletedEvents)
+	deletedRows, deletedEvents, err = repository.PruneExpiredOutcomeAggregates(ctx, 365, 100)
+	require.NoError(t, err)
+	require.Zero(t, deletedRows)
+	require.Zero(t, deletedEvents)
+	expiredCount, err := repository.ExpiredAggregateEventCount(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 2, expiredCount)
+}
+
+func TestInstructionAuditPostgresBoundsAggregateTimestampShards(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	archivedAt := time.Now().UTC().Add(-48 * time.Hour).Truncate(time.Second)
+	eventCount := instructionOutcomeAggregateShardSize + 1
+
+	result, err := db.Exec(`
+		INSERT INTO instruction_audit_events
+			(request_id, decision, reason, initial_reason, final_reason, final_outcome,
+			 policy_action, created_at)
+		SELECT 'aggregate-shard-' || value::TEXT, 'hash_pass', 'instructions_match',
+			'instructions_match', 'instructions_match', 'hash_pass', 'hash_match', $2
+		FROM generate_series(1, $1) AS value`, eventCount, archivedAt)
+	require.NoError(t, err)
+	inserted, err := result.RowsAffected()
+	require.NoError(t, err)
+	require.Equal(t, eventCount, inserted)
+
+	archived, err := repository.ArchiveExpiredPassEvents(ctx, 1, 5000)
+	require.NoError(t, err)
+	require.Equal(t, eventCount, archived)
+	var rows, maxEventsPerShard, totalEvents int64
+	require.NoError(t, db.QueryRow(`
+		SELECT COUNT(*), COALESCE(MAX(cardinality(event_times)), 0), COALESCE(SUM(event_count), 0)
+		FROM instruction_audit_outcome_hourly`).Scan(&rows, &maxEventsPerShard, &totalEvents))
+	require.EqualValues(t, 2, rows)
+	require.LessOrEqual(t, maxEventsPerShard, instructionOutcomeAggregateShardSize)
+	require.Equal(t, eventCount, totalEvents)
+
+	from, to := archivedAt.Add(-time.Minute), archivedAt.Add(time.Minute)
+	statistics, err := repository.InstructionStatistics(ctx, InstructionEventFilter{
+		From: &from, To: &to, Outcomes: []string{InstructionOutcomeHashPass},
+	})
+	require.NoError(t, err)
+	require.Equal(t, eventCount, statistics.HashPass)
+	require.Equal(t, eventCount, statistics.Total)
+}
+
+func TestInstructionAuditPostgresEventListPrioritizesActionableOutcomes(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	baseTime := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+
+	type outcomeCase struct {
+		outcome string
+		reason  string
+		action  string
+		offset  time.Duration
+	}
+	cases := []outcomeCase{
+		{InstructionOutcomeBlocked, "hash_mismatch", InstructionPolicyActionBlock, time.Minute},
+		{InstructionOutcomePolicyAllow, "hash_mismatch", InstructionPolicyActionAllowAndRecord, 2 * time.Minute},
+		{InstructionOutcomeAIPass, "instructions_match", "ai_review", 3 * time.Minute},
+		{InstructionOutcomeExceptionPass, "user_allowlist", "exception", 4 * time.Minute},
+		{InstructionOutcomeHashPass, "instructions_match", "hash_match", 5 * time.Minute},
+	}
+	for _, item := range cases {
+		decision := &InstructionDecision{
+			Allow: item.outcome != InstructionOutcomeBlocked, InitialReason: item.reason,
+			FinalReason: item.reason, FinalOutcome: item.outcome, PolicyAction: item.action,
+			Instructions: InstructionFieldResult{Present: true, SHA256: sha256Hex(item.outcome), Result: "match"},
+			Input1:       InstructionFieldResult{Result: "not_checked"}, ConfigVersion: 3,
+			BodyBytes: 256, Latency: 7 * time.Millisecond,
+		}
+		eventID, err := repository.RecordEvent(ctx, Request{
+			RequestID: "event-order-" + item.outcome, InstructionClientType: InstructionClientCodexCLI,
+			Model: "gpt-order", Endpoint: "/v1/responses", Stage: "http",
+		}, decision, "not_available", nil, nil)
+		require.NoError(t, err)
+		_, err = db.Exec(`UPDATE instruction_audit_events SET created_at = $1 WHERE id = $2`, baseTime.Add(item.offset), eventID)
+		require.NoError(t, err)
+	}
+
+	page, err := repository.ListEvents(ctx, 1, 10, InstructionEventFilter{})
+	require.NoError(t, err)
+	require.Len(t, page.Items, 5)
+	require.Equal(t, []string{
+		InstructionOutcomeAIPass,
+		InstructionOutcomePolicyAllow,
+		InstructionOutcomeBlocked,
+		InstructionOutcomeHashPass,
+		InstructionOutcomeExceptionPass,
+	}, []string{
+		page.Items[0].FinalOutcome,
+		page.Items[1].FinalOutcome,
+		page.Items[2].FinalOutcome,
+		page.Items[3].FinalOutcome,
+		page.Items[4].FinalOutcome,
+	})
+	for _, event := range page.Items {
+		require.Equal(t, event.LatencyMS, event.AuditLatencyMS)
+	}
+}
+
+func TestInstructionAuditPostgresCommitsAIPassWithExactTemporaryScope(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	userID := insertInstructionAuditUser(t, db, "ai-review-user@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "AI Review Group")
+	cipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("35", 32), EncryptionKeyConfigured: true},
+	})
+	require.NoError(t, err)
+	plaintext := "approved stable client instruction"
+	digest := sha256Hex(plaintext)
+	ciphertext, err := cipher.EncryptHashRaw(digest, plaintext)
+	require.NoError(t, err)
+	rawExpiresAt := time.Now().UTC().Add(30 * 24 * time.Hour)
+	automaticUntil := time.Now().UTC().Add(24 * time.Hour)
+	decision := &InstructionDecision{
+		Allow: true, InitialReason: "hash_mismatch", FinalReason: "instructions_match",
+		FinalOutcome: InstructionOutcomeAIPass, PolicyAction: "ai_review",
+		Instructions: InstructionFieldResult{
+			Present: true, SHA256: digest, Result: "mismatch", Plaintext: plaintext,
+		},
+		Input1: InstructionFieldResult{Result: "missing"}, ConfigVersion: 1,
+		BodyBytes: 4096, Latency: 3 * time.Millisecond, AILatency: 25 * time.Millisecond,
+	}
+	result, err := repository.CommitAIOutcome(ctx, instructionAIOutcomeCommit{
+		Request: Request{
+			RequestID: "ai-pass-request", UserID: userID, UserEmail: "ai-review-user@example.test",
+			GroupID: &groupID, GroupName: "AI Review Group", InstructionClientType: InstructionClientCodexCLI,
+			UserAgent: "codex_cli_rs/0.145.0", Model: "gpt-ai-review", Endpoint: "/v1/responses", Stage: "http",
+		},
+		Decision: decision, EvidenceStatus: "not_available",
+		Attempts: []instructionAIReviewAttempt{{
+			ReviewedSource: "instructions", ReviewedSHA256: digest, Result: "pass",
+			ApprovedSource: "instructions", Confidence: 0.99, Reason: "stable template",
+			ReviewerModel: "review-model", PromptVersion: "review-v1", LatencyMS: 25,
+		}},
+		FinalAttempt: 0,
+		ApprovedRaw: &instructionHashRawStorage{
+			Ciphertext: ciphertext, Status: "stored", ContentBytes: len([]byte(plaintext)),
+			HashAlgorithm: InstructionHashAlgorithmSHA256,
+			Normalization: InstructionHashNormalizationIdentityV1,
+			KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &rawExpiresAt,
+		},
+		ApprovedField: decision.Instructions, AutomaticUntil: automaticUntil,
+	})
+	require.NoError(t, err)
+	require.Positive(t, result.EventID)
+	require.Positive(t, result.AIReviewID)
+	require.NotNil(t, result.AutomaticHash)
+	require.Equal(t, digest, result.AutomaticHash.Digest)
+	require.Equal(t, "stored", result.AutomaticHash.RawStatus)
+	require.Equal(t, "active", result.AutomaticHash.Status)
+	require.NotNil(t, result.AutomaticHash.ValidUntil)
+	require.EqualValues(t, 2, result.ConfigVersion)
+
+	raw, err := repository.GetHashRaw(ctx, result.AutomaticHash.ID)
+	require.NoError(t, err)
+	revealed, err := cipher.DecryptHashRaw(digest, raw.Ciphertext)
+	require.NoError(t, err)
+	require.Equal(t, plaintext, revealed)
+
+	reviews, err := repository.ListAIReviewsForEvent(ctx, result.EventID)
+	require.NoError(t, err)
+	require.Len(t, reviews, 1)
+	require.Equal(t, "pass", reviews[0].Result)
+	require.Equal(t, result.AutomaticHash.ID, *reviews[0].AutomaticHashID)
+
+	snapshot, err := repository.LoadSnapshot(ctx)
+	require.NoError(t, err)
+	policy, applicable := instructionPolicyFor(snapshot, groupID, InstructionClientCodexCLI)
+	require.True(t, applicable)
+	require.Len(t, policy.Hashes, 1)
+	_, otherApplicable := instructionPolicyFor(snapshot, groupID, InstructionClientOpenCode)
+	require.False(t, otherApplicable)
+	var clientTypes []string
+	require.NoError(t, db.QueryRow(`
+		SELECT client_types FROM instruction_audit_group_bindings
+		WHERE group_id = $1`, groupID).Scan(pq.Array(&clientTypes)))
+	require.Equal(t, []string{InstructionClientCodexCLI}, clientTypes)
+
+	var sourceEventID, sourceReviewID int64
+	require.NoError(t, db.QueryRow(`
+		SELECT event_id, ai_review_id FROM instruction_audit_hash_sources
+		WHERE hash_id = $1 AND source_type = 'ai_review'`, result.AutomaticHash.ID).Scan(&sourceEventID, &sourceReviewID))
+	require.Equal(t, result.EventID, sourceEventID)
+	require.Equal(t, result.AIReviewID, sourceReviewID)
+
+	renewedUntil := automaticUntil.Add(6 * time.Hour)
+	renewedCiphertext, err := cipher.EncryptHashRaw(digest, plaintext)
+	require.NoError(t, err)
+	renewedDecision := *decision
+	renewedDecision.AIReviewID = nil
+	renewedDecision.RuleSetIDs = nil
+	renewedResult, err := repository.CommitAIOutcome(ctx, instructionAIOutcomeCommit{
+		Request: Request{
+			RequestID: "ai-pass-renewal", UserID: userID, UserEmail: "ai-review-user@example.test",
+			GroupID: &groupID, GroupName: "AI Review Group", InstructionClientType: InstructionClientCodexCLI,
+			UserAgent: "codex_cli_rs/0.145.0", Model: "gpt-ai-review", Endpoint: "/v1/responses", Stage: "http",
+		},
+		Decision: &renewedDecision, EvidenceStatus: "not_available",
+		Attempts: []instructionAIReviewAttempt{{
+			ReviewedSource: "instructions", ReviewedSHA256: digest, Result: "pass",
+			ApprovedSource: "instructions", Confidence: 0.99, Reason: "stable template",
+			ReviewerModel: "review-model", PromptVersion: "review-v1", LatencyMS: 25,
+		}},
+		FinalAttempt: 0,
+		ApprovedRaw: &instructionHashRawStorage{
+			Ciphertext: renewedCiphertext, Status: "stored", ContentBytes: len([]byte(plaintext)),
+			HashAlgorithm: InstructionHashAlgorithmSHA256,
+			Normalization: InstructionHashNormalizationIdentityV1,
+			KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &rawExpiresAt,
+		},
+		ApprovedField: decision.Instructions, AutomaticUntil: renewedUntil,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, renewedResult.AutomaticHash)
+	require.Equal(t, result.AutomaticHash.ID, renewedResult.AutomaticHash.ID)
+	require.NotNil(t, renewedResult.AutomaticHash.ValidUntil)
+	require.WithinDuration(t, renewedUntil, *renewedResult.AutomaticHash.ValidUntil, time.Second)
+	require.EqualValues(t, 3, renewedResult.ConfigVersion)
+}
+
+func TestInstructionAuditPostgresAIOutcomeRollsBackAtomically(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	userID := insertInstructionAuditUser(t, db, "ai-rollback-user@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "AI Rollback Group")
+	cipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("36", 32), EncryptionKeyConfigured: true},
+	})
+	require.NoError(t, err)
+	plaintext := "transaction must roll back"
+	digest := sha256Hex(plaintext)
+	ciphertext, err := cipher.EncryptHashRaw(digest, plaintext)
+	require.NoError(t, err)
+	rawExpiresAt := time.Now().UTC().Add(30 * 24 * time.Hour)
+	decision := &InstructionDecision{
+		Allow: true, InitialReason: "hash_mismatch", FinalReason: "instructions_match",
+		FinalOutcome: InstructionOutcomeAIPass, PolicyAction: "ai_review",
+		Instructions: InstructionFieldResult{
+			Present: true, SHA256: digest, Result: "mismatch", Plaintext: plaintext,
+		},
+		Input1: InstructionFieldResult{Result: "missing"}, ConfigVersion: 1,
+	}
+	_, err = db.Exec(`
+		CREATE FUNCTION reject_instruction_audit_rollback_event() RETURNS TRIGGER AS $$
+		BEGIN
+			IF NEW.request_id = 'force-ai-rollback' THEN
+				RAISE EXCEPTION 'forced AI transaction rollback';
+			END IF;
+			RETURN NEW;
+		END;
+		$$ LANGUAGE plpgsql;
+		CREATE TRIGGER trg_reject_instruction_audit_rollback_event
+		BEFORE INSERT ON instruction_audit_events
+		FOR EACH ROW EXECUTE FUNCTION reject_instruction_audit_rollback_event()`)
+	require.NoError(t, err)
+
+	_, err = repository.CommitAIOutcome(ctx, instructionAIOutcomeCommit{
+		Request: Request{
+			RequestID: "force-ai-rollback", UserID: userID, GroupID: &groupID,
+			InstructionClientType: InstructionClientCodexCLI, Model: "gpt-ai-review", Stage: "http",
+		},
+		Decision: decision, EvidenceStatus: "not_available",
+		Attempts: []instructionAIReviewAttempt{{
+			ReviewedSource: "instructions", ReviewedSHA256: digest, Result: "pass",
+			ApprovedSource: "instructions", Confidence: 0.99, Reason: "stable",
+			ReviewerModel: "review-model", PromptVersion: "review-v1",
+		}},
+		FinalAttempt: 0,
+		ApprovedRaw: &instructionHashRawStorage{
+			Ciphertext: ciphertext, Status: "stored", ContentBytes: len([]byte(plaintext)),
+			HashAlgorithm: InstructionHashAlgorithmSHA256,
+			Normalization: InstructionHashNormalizationIdentityV1,
+			KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &rawExpiresAt,
+		},
+		ApprovedField: decision.Instructions, AutomaticUntil: time.Now().UTC().Add(24 * time.Hour),
+	})
+	require.ErrorContains(t, err, "forced AI transaction rollback")
+	for _, table := range []string{
+		"instruction_audit_events", "instruction_audit_ai_reviews", "instruction_audit_hashes",
+		"instruction_audit_hash_raw_contents", "instruction_audit_hash_sources",
+		"instruction_audit_rule_sets", "instruction_audit_rule_set_hashes", "instruction_audit_group_bindings",
+	} {
+		require.Zero(t, instructionAuditTableCount(t, db, table), table)
+	}
+	var configVersion int64
+	require.NoError(t, db.QueryRow(`SELECT config_version FROM instruction_audit_state WHERE id = 1`).Scan(&configVersion))
+	require.EqualValues(t, 1, configVersion)
+}
+
+func TestInstructionAuditPostgresAICannotExpandPermanentManualHashScope(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	adminID := insertInstructionAuditUser(t, db, "ai-candidate-admin@example.test", "admin")
+	userID := insertInstructionAuditUser(t, db, "ai-candidate-user@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "AI Candidate Group")
+	plaintext := "permanent manual standard"
+	digest := sha256Hex(plaintext)
+	hash, err := repository.CreateHash(ctx, CreateInstructionHashRequest{
+		Digest: digest, Name: "manual permanent", ObservedSource: "instructions", Status: "active",
+	}, adminID)
+	require.NoError(t, err)
+	_, err = repository.SaveRuleSet(ctx, 0, SaveInstructionRuleSetRequest{
+		Name: "ordinary rules", Enabled: true, HashIDs: []int64{hash.ID},
+	}, adminID)
+	require.NoError(t, err)
+	cipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("37", 32), EncryptionKeyConfigured: true},
+	})
+	require.NoError(t, err)
+	ciphertext, err := cipher.EncryptHashRaw(digest, plaintext)
+	require.NoError(t, err)
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour)
+	decision := &InstructionDecision{
+		Allow: true, InitialReason: "hash_mismatch", FinalReason: "instructions_match",
+		FinalOutcome: InstructionOutcomeAIPass, PolicyAction: "ai_review",
+		Instructions: InstructionFieldResult{Present: true, SHA256: digest, Result: "mismatch", Plaintext: plaintext},
+		Input1:       InstructionFieldResult{Result: "missing"}, ConfigVersion: 1,
+	}
+	_, err = repository.CommitAIOutcome(ctx, instructionAIOutcomeCommit{
+		Request: Request{
+			RequestID: "ai-permanent-scope-expansion", UserID: userID, GroupID: &groupID,
+			InstructionClientType: InstructionClientCodexCLI, Model: "gpt-ai-review", Stage: "http",
+		},
+		Decision: decision, EvidenceStatus: "not_available",
+		Attempts: []instructionAIReviewAttempt{{
+			ReviewedSource: "instructions", ReviewedSHA256: digest, Result: "pass",
+			ApprovedSource: "instructions", Confidence: 0.99, Reason: "stable",
+			ReviewerModel: "review-model", PromptVersion: "review-v1",
+		}},
+		FinalAttempt: 0,
+		ApprovedRaw: &instructionHashRawStorage{
+			Ciphertext: ciphertext, Status: "stored", ContentBytes: len([]byte(plaintext)),
+			HashAlgorithm: InstructionHashAlgorithmSHA256,
+			Normalization: InstructionHashNormalizationIdentityV1,
+			KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &expiresAt,
+		},
+		ApprovedField: decision.Instructions, AutomaticUntil: time.Now().UTC().Add(24 * time.Hour),
+	})
+	require.ErrorIs(t, err, errInstructionAIAutomaticHashUnavailable)
+	unchanged, err := repository.GetHash(ctx, hash.ID)
+	require.NoError(t, err)
+	require.Equal(t, "active", unchanged.Status)
+	require.Zero(t, instructionAuditTableCount(t, db, "instruction_audit_ai_reviews"))
+	require.Zero(t, instructionAuditTableCount(t, db, "instruction_audit_events"))
+	var systemRuleSets int64
+	require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM instruction_audit_rule_sets WHERE system_managed`).Scan(&systemRuleSets))
+	require.Zero(t, systemRuleSets)
+}
+
+func TestInstructionAuditPostgresConcurrentAIPassDeduplicatesScope(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	ctx := context.Background()
+	userID := insertInstructionAuditUser(t, db, "ai-concurrent-user@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "AI Concurrent Group")
+	var schema string
+	require.NoError(t, db.QueryRow(`SELECT current_schema()`).Scan(&schema))
+	dsnURL, err := url.Parse(strings.TrimSpace(os.Getenv(instructionAuditPostgresTestEnv)))
+	require.NoError(t, err)
+	query := dsnURL.Query()
+	query.Set("search_path", schema)
+	dsnURL.RawQuery = query.Encode()
+	concurrentDB, err := sql.Open("postgres", dsnURL.String())
+	require.NoError(t, err)
+	concurrentDB.SetMaxOpenConns(4)
+	concurrentDB.SetMaxIdleConns(4)
+	require.NoError(t, concurrentDB.PingContext(ctx))
+	t.Cleanup(func() { require.NoError(t, concurrentDB.Close()) })
+	repository := NewInstructionRepository(concurrentDB)
+	cipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("38", 32), EncryptionKeyConfigured: true},
+	})
+	require.NoError(t, err)
+	plaintext := "concurrent stable instruction"
+	digest := sha256Hex(plaintext)
+	expiresAt := time.Now().UTC().Add(30 * 24 * time.Hour)
+	automaticUntil := time.Now().UTC().Add(24 * time.Hour)
+
+	commit := func(requestID string) error {
+		ciphertext, encryptErr := cipher.EncryptHashRaw(digest, plaintext)
+		if encryptErr != nil {
+			return encryptErr
+		}
+		decision := &InstructionDecision{
+			Allow: true, InitialReason: "hash_mismatch", FinalReason: "instructions_match",
+			FinalOutcome: InstructionOutcomeAIPass, PolicyAction: "ai_review",
+			Instructions: InstructionFieldResult{Present: true, SHA256: digest, Result: "mismatch", Plaintext: plaintext},
+			Input1:       InstructionFieldResult{Result: "missing"}, ConfigVersion: 1,
+		}
+		_, commitErr := repository.CommitAIOutcome(ctx, instructionAIOutcomeCommit{
+			Request: Request{
+				RequestID: requestID, UserID: userID, GroupID: &groupID,
+				InstructionClientType: InstructionClientCodexCLI, Model: "gpt-ai-review", Stage: "http",
+			},
+			Decision: decision, EvidenceStatus: "not_available",
+			Attempts: []instructionAIReviewAttempt{{
+				ReviewedSource: "instructions", ReviewedSHA256: digest, Result: "pass",
+				ApprovedSource: "instructions", Confidence: 0.99, Reason: "stable",
+				ReviewerModel: "review-model", PromptVersion: "review-v1",
+			}},
+			FinalAttempt: 0,
+			ApprovedRaw: &instructionHashRawStorage{
+				Ciphertext: ciphertext, Status: "stored", ContentBytes: len([]byte(plaintext)),
+				HashAlgorithm: InstructionHashAlgorithmSHA256,
+				Normalization: InstructionHashNormalizationIdentityV1,
+				KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &expiresAt,
+			},
+			ApprovedField: decision.Instructions, AutomaticUntil: automaticUntil,
+		})
+		return commitErr
+	}
+
+	start := make(chan struct{})
+	errorsByRequest := make(chan error, 2)
+	var wait sync.WaitGroup
+	for index := range 2 {
+		wait.Add(1)
+		go func(requestID string) {
+			defer wait.Done()
+			<-start
+			errorsByRequest <- commit(requestID)
+		}(fmt.Sprintf("ai-concurrent-%d", index))
+	}
+	close(start)
+	wait.Wait()
+	close(errorsByRequest)
+	for commitErr := range errorsByRequest {
+		require.NoError(t, commitErr)
+	}
+	require.EqualValues(t, 1, instructionAuditTableCount(t, db, "instruction_audit_hashes"))
+	require.EqualValues(t, 1, instructionAuditTableCount(t, db, "instruction_audit_rule_sets"))
+	require.EqualValues(t, 1, instructionAuditTableCount(t, db, "instruction_audit_group_bindings"))
+	require.EqualValues(t, 2, instructionAuditTableCount(t, db, "instruction_audit_ai_reviews"))
+	require.EqualValues(t, 2, instructionAuditTableCount(t, db, "instruction_audit_events"))
+	require.EqualValues(t, 2, instructionAuditTableCount(t, db, "instruction_audit_hash_sources"))
+}
+
+func TestInstructionAuditPostgresPersistsMultipleAIAttemptsForRejectedEvent(t *testing.T) {
+	db := openInstructionAuditIntegrationDB(t)
+	repository := NewInstructionRepository(db)
+	ctx := context.Background()
+	userID := insertInstructionAuditUser(t, db, "ai-rejected-user@example.test", "user")
+	groupID := insertInstructionAuditGroup(t, db, "AI Rejected Group")
+	instructionsDigest := sha256Hex("rejected instructions")
+	inputDigest := sha256Hex("uncertain input")
+	decision := &InstructionDecision{
+		Allow: false, InitialReason: "hash_mismatch", FinalReason: "ai_uncertain",
+		FinalOutcome: InstructionOutcomeBlocked, PolicyAction: InstructionPolicyActionBlock,
+		Instructions:  InstructionFieldResult{Present: true, SHA256: instructionsDigest, Result: "mismatch"},
+		Input1:        InstructionFieldResult{Present: true, SHA256: inputDigest, Result: "mismatch"},
+		ConfigVersion: 1,
+	}
+	result, err := repository.CommitAIOutcome(ctx, instructionAIOutcomeCommit{
+		Request: Request{
+			RequestID: "ai-rejected-request", UserID: userID, GroupID: &groupID,
+			InstructionClientType: InstructionClientCodexCLI, Model: "gpt-ai-review", Stage: "http",
+		},
+		Decision: decision, EvidenceStatus: "not_available",
+		Attempts: []instructionAIReviewAttempt{
+			{ReviewedSource: "instructions", ReviewedSHA256: instructionsDigest, Result: "reject", Confidence: 0.98, Reason: "unsafe", ReviewerModel: "review-model", PromptVersion: "review-v1", LatencyMS: 10},
+			{ReviewedSource: "input1", ReviewedSHA256: inputDigest, Result: "uncertain", Confidence: 0.6, Reason: "ambiguous", ReviewerModel: "review-model", PromptVersion: "review-v1", LatencyMS: 11},
+		},
+		FinalAttempt: 1,
+	})
+	require.NoError(t, err)
+	require.Zero(t, result.ConfigVersion)
+	reviews, err := repository.ListAIReviewsForEvent(ctx, result.EventID)
+	require.NoError(t, err)
+	require.Len(t, reviews, 2)
+	require.Equal(t, "reject", reviews[0].Result)
+	require.Equal(t, "uncertain", reviews[1].Result)
+	event, err := repository.GetEvent(ctx, result.EventID)
+	require.NoError(t, err)
+	require.Equal(t, "ai_uncertain", event.FinalReason)
+	require.Equal(t, InstructionOutcomeBlocked, event.FinalOutcome)
+	require.Equal(t, result.AIReviewID, *event.AIReviewID)
+	require.EqualValues(t, 1, event.ConfigVersion)
 }
 
 func TestInstructionAuditPostgresRuleSetExceptionsAreEffective(t *testing.T) {
@@ -415,6 +1218,7 @@ func TestInstructionAuditPostgresPersistsEncryptedEvidenceAndReviewTrail(t *test
 	instructionService.snapshot.Store(snapshot)
 
 	const plaintextCanary = "INSTRUCTION_AUDIT_PLAINTEXT_CANARY_DO_NOT_STORE"
+	const secondPlaintextCanary = "INSTRUCTION_AUDIT_SECOND_CANARY_DO_NOT_STORE"
 	request := Request{
 		RequestID: "request-1", UserID: userID, UserEmail: "user@example.test", APIKeyID: apiKeyID,
 		GroupID: &groupID, GroupName: "Metadata Group",
@@ -427,6 +1231,7 @@ func TestInstructionAuditPostgresPersistsEncryptedEvidenceAndReviewTrail(t *test
 	require.Equal(t, sha256Hex(plaintextCanary), first.Instructions.SHA256)
 
 	request.RequestID = "request-2"
+	request.InstructionBody = []byte(`{"model":"gpt-test","instructions":"` + secondPlaintextCanary + `"}`)
 	second := instructionService.EvaluateInstruction(ctx, request)
 	require.False(t, second.Allow)
 
@@ -483,6 +1288,52 @@ func TestInstructionAuditPostgresPersistsEncryptedEvidenceAndReviewTrail(t *test
 	}, adminID)
 	require.NoError(t, err)
 	require.Equal(t, sha256Hex(plaintextCanary), candidate.Digest)
+	require.Equal(t, "stored", candidate.RawStatus)
+	require.Equal(t, len([]byte(plaintextCanary)), candidate.ContentBytes)
+	raw, err := repo.GetHashRaw(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw.Ciphertext), plaintextCanary)
+	decryptedRaw, err := evidenceCipher.DecryptHashRaw(candidate.Digest, raw.Ciphertext)
+	require.NoError(t, err)
+	require.Equal(t, plaintextCanary, decryptedRaw)
+	sources, err := repo.ListHashSources(ctx, candidate.ID)
+	require.NoError(t, err)
+	require.Len(t, sources, 1)
+	require.Equal(t, "manual", sources[0].SourceType)
+	require.Equal(t, "instructions", sources[0].FieldName)
+	require.NotNil(t, sources[0].EventID)
+	require.Equal(t, eventID, *sources[0].EventID)
+
+	var secondEventID int64
+	require.NoError(t, db.QueryRow(`SELECT id FROM instruction_audit_events WHERE request_id = 'request-2'`).Scan(&secondEventID))
+	secondReview, err := instructionService.RevealEvidence(ctx, secondEventID, InstructionEvidenceAccess{ActorID: adminID})
+	require.NoError(t, err)
+	require.Equal(t, "stored", secondReview.Status)
+	ruleSet, err := repo.SaveRuleSet(ctx, 0, SaveInstructionRuleSetRequest{
+		Name: "reviewed event rules", Enabled: true,
+	}, adminID)
+	require.NoError(t, err)
+	added, err := instructionService.AddEventToRuleSet(ctx, secondEventID, AddInstructionEventToRuleSetRequest{
+		RuleSetID: ruleSet.ID, Sources: []string{"instructions"}, ReviewConfirmed: true,
+	}, adminID)
+	require.NoError(t, err)
+	require.Equal(t, 1, added.CreatedHashes)
+	require.Equal(t, 1, added.AttachedHashes)
+	require.Len(t, added.HashIDs, 1)
+	addedHash, err := repo.GetHash(ctx, added.HashIDs[0])
+	require.NoError(t, err)
+	require.Equal(t, sha256Hex(secondPlaintextCanary), addedHash.Digest)
+	require.Equal(t, "stored", addedHash.RawStatus)
+	addedRaw, err := repo.GetHashRaw(ctx, addedHash.ID)
+	require.NoError(t, err)
+	decryptedAddedRaw, err := evidenceCipher.DecryptHashRaw(addedHash.Digest, addedRaw.Ciphertext)
+	require.NoError(t, err)
+	require.Equal(t, secondPlaintextCanary, decryptedAddedRaw)
+	addedSources, err := repo.ListHashSources(ctx, addedHash.ID)
+	require.NoError(t, err)
+	require.Len(t, addedSources, 1)
+	require.NotNil(t, addedSources[0].EventID)
+	require.Equal(t, secondEventID, *addedSources[0].EventID)
 
 	notificationRepo := modelportrepository.NewSecurityNotificationRepository(db)
 	for _, input := range []service.SecurityNotificationAudienceInput{

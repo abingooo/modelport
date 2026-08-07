@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,48 @@ func TestLenientResponsesReaderPreservesDecodedStrictAuditSource(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, raw, auditSource)
 	require.Contains(t, string(normalized), `\u000a`)
+}
+
+func TestLenientResponsesReaderRejectsDecodedBodyAboveGatewayLimit(t *testing.T) {
+	raw := bytes.Repeat([]byte("a"), 65<<20)
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressed.Bytes()))
+	request.Header.Set("Content-Encoding", "gzip")
+	_, _, err = readLenientJSONRequestBodyWithAuditSource(request, &config.Config{
+		Gateway: config.GatewayConfig{MaxBodySize: 64 << 20},
+	})
+	maxErr, ok := extractMaxBytesError(err)
+	require.True(t, ok)
+	require.EqualValues(t, 64<<20, maxErr.Limit)
+}
+
+func TestLenientResponsesReaderPreservesDecodedBodyAboveInstructionLimit(t *testing.T) {
+	prefix := []byte(`{"instructions":"unknown","metadata":"`)
+	suffix := []byte(`"}`)
+	raw := make([]byte, 65<<20)
+	copied := copy(raw, prefix)
+	for index := copied; index < len(raw)-len(suffix); index++ {
+		raw[index] = 'a'
+	}
+	copy(raw[len(raw)-len(suffix):], suffix)
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	_, err := writer.Write(raw)
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressed.Bytes()))
+	request.Header.Set("Content-Encoding", "gzip")
+	_, auditSource, err := readLenientJSONRequestBodyWithAuditSource(request, &config.Config{
+		Gateway: config.GatewayConfig{MaxBodySize: 128 << 20},
+	})
+	require.NoError(t, err)
+	require.Len(t, auditSource, 65<<20)
 }
 
 func TestRequestBodyLimitTooLarge(t *testing.T) {

@@ -117,7 +117,7 @@ func RegisterAdminRoutes(
 		registerPromptAuditRoutes(admin, h)
 
 		// Responses 指令哈希审核
-		registerInstructionAuditRoutes(admin, h)
+		registerInstructionAuditRoutes(admin, h, stepUpAuth)
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
@@ -127,34 +127,49 @@ func RegisterAdminRoutes(
 	}
 }
 
-func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAuth middleware.StepUpAuthMiddleware) {
 	instructionAudit := admin.Group("/instruction-audit")
+	forced := func(handler gin.HandlerFunc) []gin.HandlerFunc {
+		return []gin.HandlerFunc{middleware.ForceStepUp, gin.HandlerFunc(stepUpAuth), handler}
+	}
 	{
 		instructionAudit.GET("/overview", h.Admin.InstructionAudit.GetOverview)
-		instructionAudit.PUT("/enabled", h.Admin.InstructionAudit.UpdateEnabled)
-		instructionAudit.PUT("/evidence-retention", h.Admin.InstructionAudit.UpdateEvidenceRetention)
+		instructionAudit.GET("/config", h.Admin.InstructionAudit.GetRuntimeConfig)
+		instructionAudit.PUT("/config", forced(h.Admin.InstructionAudit.UpdateRuntimeConfig)...)
+		instructionAudit.GET("/reason-policies", h.Admin.InstructionAudit.ListReasonPolicies)
+		instructionAudit.PUT("/reason-policies/:reason", forced(h.Admin.InstructionAudit.UpdateReasonPolicy)...)
+		instructionAudit.PUT("/enabled", forced(h.Admin.InstructionAudit.UpdateEnabled)...)
+		instructionAudit.PUT("/evidence-retention", forced(h.Admin.InstructionAudit.UpdateEvidenceRetention)...)
 		instructionAudit.GET("/hashes", h.Admin.InstructionAudit.ListHashes)
-		instructionAudit.POST("/hashes", h.Admin.InstructionAudit.CreateHash)
-		instructionAudit.PUT("/hashes/:id", h.Admin.InstructionAudit.UpdateHash)
-		instructionAudit.DELETE("/hashes/:id", h.Admin.InstructionAudit.DeleteHash)
+		instructionAudit.GET("/hashes/:id", h.Admin.InstructionAudit.GetHash)
+		instructionAudit.POST("/hashes", forced(h.Admin.InstructionAudit.CreateHash)...)
+		instructionAudit.PUT("/hashes/:id", forced(h.Admin.InstructionAudit.UpdateHash)...)
+		instructionAudit.PUT("/hashes/:id/status", forced(h.Admin.InstructionAudit.ChangeHashStatus)...)
+		instructionAudit.DELETE("/hashes/:id", forced(h.Admin.InstructionAudit.DeleteHash)...)
+		instructionAudit.GET("/hashes/:id/raw", forced(h.Admin.InstructionAudit.RevealHashRaw)...)
+		instructionAudit.POST("/hashes/:id/raw-access", forced(h.Admin.InstructionAudit.RecordHashRawCopy)...)
+		instructionAudit.POST("/translations", forced(h.Admin.InstructionAudit.CreateTranslation)...)
+		instructionAudit.GET("/translations/:id", forced(h.Admin.InstructionAudit.GetTranslation)...)
 		instructionAudit.GET("/rule-sets", h.Admin.InstructionAudit.ListRuleSets)
-		instructionAudit.POST("/rule-sets", h.Admin.InstructionAudit.CreateRuleSet)
-		instructionAudit.PUT("/rule-sets/:id", h.Admin.InstructionAudit.UpdateRuleSet)
-		instructionAudit.DELETE("/rule-sets/:id", h.Admin.InstructionAudit.DeleteRuleSet)
+		instructionAudit.POST("/rule-sets", forced(h.Admin.InstructionAudit.CreateRuleSet)...)
+		instructionAudit.PUT("/rule-sets/:id", forced(h.Admin.InstructionAudit.UpdateRuleSet)...)
+		instructionAudit.DELETE("/rule-sets/:id", forced(h.Admin.InstructionAudit.DeleteRuleSet)...)
 		instructionAudit.GET("/group-bindings", h.Admin.InstructionAudit.ListGroupBindings)
-		instructionAudit.POST("/group-bindings", h.Admin.InstructionAudit.SaveGroupBindings)
-		instructionAudit.DELETE("/group-bindings/:id", h.Admin.InstructionAudit.DeleteGroupBinding)
+		instructionAudit.POST("/group-bindings", forced(h.Admin.InstructionAudit.SaveGroupBindings)...)
+		instructionAudit.DELETE("/group-bindings/:id", forced(h.Admin.InstructionAudit.DeleteGroupBinding)...)
 		instructionAudit.GET("/groups", h.Admin.InstructionAudit.ListGroupOptions)
 		instructionAudit.GET("/events", h.Admin.InstructionAudit.ListEvents)
-		instructionAudit.POST("/events/batch-delete", h.Admin.InstructionAudit.BatchDeleteEvents)
-		instructionAudit.POST("/events/delete-preview", h.Admin.InstructionAudit.PreviewDeleteEvents)
-		instructionAudit.POST("/events/delete-by-filter", h.Admin.InstructionAudit.DeleteEventsByFilter)
+		instructionAudit.GET("/statistics", h.Admin.InstructionAudit.GetStatistics)
+		instructionAudit.POST("/events/batch-delete", forced(h.Admin.InstructionAudit.BatchDeleteEvents)...)
+		instructionAudit.POST("/events/delete-preview", forced(h.Admin.InstructionAudit.PreviewDeleteEvents)...)
+		instructionAudit.POST("/events/delete-by-filter", forced(h.Admin.InstructionAudit.DeleteEventsByFilter)...)
 		instructionAudit.GET("/events/:id", h.Admin.InstructionAudit.GetEvent)
-		instructionAudit.DELETE("/events/:id", h.Admin.InstructionAudit.DeleteEvent)
-		instructionAudit.GET("/events/:id/evidence", h.Admin.InstructionAudit.RevealEvidence)
-		instructionAudit.POST("/events/:id/evidence-access", h.Admin.InstructionAudit.RecordEvidenceCopy)
-		instructionAudit.POST("/events/:id/candidates", h.Admin.InstructionAudit.CreateCandidate)
-		instructionAudit.POST("/events/:id/rule-set", h.Admin.InstructionAudit.AddEventToRuleSet)
+		instructionAudit.GET("/events/:id/ai-reviews", h.Admin.InstructionAudit.ListEventAIReviews)
+		instructionAudit.DELETE("/events/:id", forced(h.Admin.InstructionAudit.DeleteEvent)...)
+		instructionAudit.GET("/events/:id/evidence", forced(h.Admin.InstructionAudit.RevealEvidence)...)
+		instructionAudit.POST("/events/:id/evidence-access", forced(h.Admin.InstructionAudit.RecordEvidenceCopy)...)
+		instructionAudit.POST("/events/:id/candidates", forced(h.Admin.InstructionAudit.CreateCandidate)...)
+		instructionAudit.POST("/events/:id/rule-set", forced(h.Admin.InstructionAudit.AddEventToRuleSet)...)
 	}
 }
 

@@ -149,6 +149,8 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 func TestInstructionAuditMutationRoutesHaveStableActionsAndOmitBodies(t *testing.T) {
 	expected := map[string]string{
 		"PUT /api/v1/admin/instruction-audit/enabled":                  "admin.instruction_audit.enabled.update",
+		"PUT /api/v1/admin/instruction-audit/config":                   "admin.instruction_audit.config.update",
+		"PUT /api/v1/admin/instruction-audit/reason-policies/:reason":  "admin.instruction_audit.reason_policy.update",
 		"POST /api/v1/admin/instruction-audit/hashes":                  "admin.instruction_audit.hash.create",
 		"PUT /api/v1/admin/instruction-audit/hashes/:id":               "admin.instruction_audit.hash.update",
 		"DELETE /api/v1/admin/instruction-audit/hashes/:id":            "admin.instruction_audit.hash.delete",

@@ -39,6 +39,25 @@
         </div>
       </div>
 
+      <dl class="grid gap-3 rounded-md border border-gray-200 px-4 py-3 dark:border-dark-600 sm:grid-cols-2 lg:grid-cols-4">
+        <div>
+          <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.finalOutcome') }}</dt>
+          <dd class="mt-1 text-sm font-semibold text-gray-900 dark:text-white">{{ outcomeLabel(event.final_outcome) }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.initialReason') }}</dt>
+          <dd class="mt-1 break-words text-sm text-gray-900 dark:text-white">{{ reasonLabel(event.initial_reason || event.reason) }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.finalReason') }}</dt>
+          <dd class="mt-1 break-words text-sm text-gray-900 dark:text-white">{{ reasonLabel(event.final_reason || event.reason) }}</dd>
+        </div>
+        <div>
+          <dt class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.performance') }}</dt>
+          <dd class="mt-1 text-sm tabular-nums text-gray-900 dark:text-white">{{ formatBytes(event.body_bytes) }} · {{ event.audit_latency_ms ?? event.latency_ms }} ms<span v-if="event.ai_latency_ms != null"> · AI {{ event.ai_latency_ms }} ms</span></dd>
+        </div>
+      </dl>
+
       <div
         v-if="review.status !== 'stored'"
         class="rounded-md border px-4 py-3 text-sm"
@@ -73,14 +92,15 @@
           </div>
 
           <div v-if="field.available">
-            <div class="mb-1.5 flex items-center justify-between gap-3">
-              <span class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.blockedPlaintext') }}</span>
-              <button type="button" class="btn btn-ghost btn-sm" @click="copyValue(`${field.source}_plaintext`, field.plaintext || '')">
-                <Icon name="copy" size="sm" />
-                {{ t('common.copy') }}
-              </button>
-            </div>
-            <pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-gray-950 p-3 font-mono text-xs leading-5 text-gray-100">{{ field.plaintext }}</pre>
+            <InstructionTranslationPanel
+              resource-type="event"
+              :resource-id="event.id"
+              :field-name="field.source"
+              :original="field.plaintext || ''"
+              :enabled="translationEnabled"
+              :external-enabled="externalTranslationEnabled"
+              @copy-original="copyValue(`${field.source}_plaintext`, field.plaintext || '')"
+            />
             <p class="mt-2 break-all text-[11px] text-gray-500 dark:text-gray-400">
               {{ t('admin.instructionAudit.recomputedHash') }}: <span class="font-mono">{{ field.recomputed_sha256 || '-' }}</span>
             </p>
@@ -101,6 +121,28 @@
         </div>
       </section>
 
+      <section class="space-y-3">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.aiReviews.title') }}</h3>
+          <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.aiReviews.count', { count: aiReviews.length }) }}</span>
+        </div>
+        <div v-if="aiReviews.length" class="divide-y divide-gray-100 overflow-hidden rounded-md border border-gray-200 dark:divide-dark-700 dark:border-dark-600">
+          <article v-for="item in aiReviews" :key="item.id" class="grid min-w-0 gap-3 px-3 py-3 sm:grid-cols-[minmax(120px,0.6fr)_minmax(0,1fr)_auto]">
+            <div>
+              <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ aiResultLabel(item.result) }}</p>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ sourceLabel(item.reviewed_source as 'instructions' | 'input1') }} · {{ (item.confidence * 100).toFixed(1) }}%</p>
+            </div>
+            <div class="min-w-0">
+              <p class="break-words text-sm text-gray-700 dark:text-gray-200">{{ item.reason || '-' }}</p>
+              <p class="mt-1 break-all font-mono text-[11px] text-gray-400">{{ item.reviewer_model }} · {{ item.prompt_version }} · {{ item.latency_ms }} ms</p>
+              <p v-if="item.automatic_hash_id" class="mt-1 text-xs text-primary-600 dark:text-primary-400">{{ t('admin.instructionAudit.aiReviews.hashCreated', { id: item.automatic_hash_id }) }}</p>
+            </div>
+            <time class="text-xs text-gray-400">{{ formatDate(item.created_at) }}</time>
+          </article>
+        </div>
+        <p v-else class="rounded-md border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">{{ t('admin.instructionAudit.aiReviews.empty') }}</p>
+      </section>
+
       <label v-if="review.status === 'stored'" class="flex cursor-pointer items-start gap-3 rounded-md border border-primary-200 bg-primary-50/60 px-4 py-3 dark:border-primary-900/60 dark:bg-primary-950/20">
         <input v-model="reviewConfirmed" type="checkbox" class="mt-0.5 h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
         <span class="text-sm text-gray-700 dark:text-gray-200">{{ t('admin.instructionAudit.reviewConfirmation') }}</span>
@@ -119,6 +161,7 @@
         {{ t('admin.instructionAudit.copyReviewBundle') }}
       </button>
     </template>
+    <TotpStepUpDialog :controller="stepUp" />
   </BaseDialog>
 </template>
 
@@ -126,12 +169,16 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from './api'
+import InstructionTranslationPanel from './components/InstructionTranslationPanel.vue'
 import type {
+  InstructionAIReview,
   InstructionEvidenceField,
   InstructionEvidenceReview,
   InstructionEvidenceStatus,
@@ -141,6 +188,8 @@ import type {
 const props = defineProps<{
   show: boolean
   event: InstructionEvent | null
+  translationEnabled: boolean
+  externalTranslationEnabled: boolean
 }>()
 
 const emit = defineEmits<{
@@ -151,9 +200,11 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
+const stepUp = useStepUp()
 const loading = ref(false)
 const review = ref<InstructionEvidenceReview | null>(null)
 const reviewConfirmed = ref(false)
+const aiReviews = ref<InstructionAIReview[]>([])
 
 const reviewFields = computed<InstructionEvidenceField[]>(() => {
   if (review.value?.fields?.length) return review.value.fields
@@ -178,12 +229,18 @@ watch(
   async ([show, eventId]) => {
     review.value = null
     reviewConfirmed.value = false
+    aiReviews.value = []
     if (!show || !eventId) return
     loading.value = true
     try {
-      review.value = await instructionAuditAPI.revealEvidence(eventId)
+      const [nextReview, nextAIReviews] = await Promise.all([
+        stepUp.run(() => instructionAuditAPI.revealEvidence(eventId)),
+        instructionAuditAPI.listEventAIReviews(eventId),
+      ])
+      review.value = nextReview
+      aiReviews.value = nextAIReviews
     } catch (error) {
-      appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+      if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
       emit('close')
     } finally {
       loading.value = false
@@ -195,16 +252,17 @@ watch(
 function close() {
   review.value = null
   reviewConfirmed.value = false
+  aiReviews.value = []
   emit('close')
 }
 
 async function copyValue(source: string, value: string) {
   if (!props.event || !value) return
   try {
-    await instructionAuditAPI.recordEvidenceCopy(props.event.id, source)
+    await stepUp.run(() => instructionAuditAPI.recordEvidenceCopy(props.event!.id, source))
     await copyToClipboard(value)
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
   }
 }
 
@@ -257,5 +315,24 @@ function consistencyPill(field: InstructionEvidenceField): string {
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString()
+}
+
+function reasonLabel(reason: string): string {
+  return reason ? t(`admin.instructionAudit.reasons.${reason}`, reason) : '-'
+}
+
+function outcomeLabel(outcome: string): string {
+  return outcome ? t(`admin.instructionAudit.outcomes.${outcome}`, outcome) : '-'
+}
+
+function aiResultLabel(result: string): string {
+  return t(`admin.instructionAudit.aiReviews.results.${result}`, result)
+}
+
+function formatBytes(value?: number | null): string {
+  if (value == null) return '-'
+  if (value < 1024) return `${value} B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
+  return `${(value / 1024 / 1024).toFixed(2)} MiB`
 }
 </script>

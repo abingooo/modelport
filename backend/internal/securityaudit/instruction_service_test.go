@@ -1,8 +1,10 @@
 package securityaudit
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -11,8 +13,21 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	modelportservice "github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+type recordingInstructionNotificationEnqueuer struct {
+	inputs []modelportservice.SecurityNotificationEnqueueInput
+}
+
+func (r *recordingInstructionNotificationEnqueuer) Enqueue(
+	_ context.Context,
+	input modelportservice.SecurityNotificationEnqueueInput,
+) error {
+	r.inputs = append(r.inputs, input)
+	return nil
+}
 
 func instructionTestSnapshot(enabled bool, groupID int64, values ...string) *instructionSnapshot {
 	hashes := make([]instructionPolicyHash, 0, len(values))
@@ -331,6 +346,120 @@ func TestInstructionServicePersistsBlockedEventBeforeReturning(t *testing.T) {
 	service.recordBlocked(canceled, request, decision)
 	require.EqualValues(t, 17, decision.EventID)
 	require.Zero(t, service.failedBlockedEventPersists.Load())
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInstructionServiceFailsClosedWhenAllowedOutcomeCannotPersist(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	service := NewInstructionService(NewInstructionRepository(db), nil, nil)
+	decision := &InstructionDecision{
+		Applicable:    true,
+		Allow:         true,
+		Reason:        "instructions_match",
+		InitialReason: "instructions_match",
+		FinalReason:   "instructions_match",
+		FinalOutcome:  InstructionOutcomeHashPass,
+		PolicyAction:  "hash_match",
+		Instructions: InstructionFieldResult{
+			Present: true,
+			SHA256:  sha256Hex("trusted"),
+			Result:  "match",
+		},
+		Input1: InstructionFieldResult{Result: "not_checked"},
+	}
+
+	mock.ExpectBegin().WillReturnError(errors.New("database unavailable"))
+	service.recordOutcomeOrFailClosed(context.Background(), Request{RequestID: "req-fail-closed"}, decision)
+
+	require.False(t, decision.Allow)
+	require.True(t, decision.Unavailable)
+	require.Equal(t, "config_unavailable", decision.Reason)
+	require.Equal(t, "config_unavailable", decision.FinalReason)
+	require.Equal(t, InstructionOutcomeBlocked, decision.FinalOutcome)
+	require.Equal(t, InstructionPolicyActionBlock, decision.PolicyAction)
+	require.EqualValues(t, 1, service.failedBlockedEventPersists.Load())
+	mock.ExpectClose()
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInstructionOutcomeNotificationsRespectAudienceAndAlertPolicy(t *testing.T) {
+	request := Request{
+		RequestID: "notification-request", UserID: 7, UserEmail: "user@example.test",
+		APIKeyID: 9, GroupID: instructionTestGroupID(3), GroupName: "OpenAI",
+		InstructionClientType: InstructionClientCodexCLI, Model: "gpt-test",
+	}
+	baseDecision := InstructionDecision{
+		AlertEnabled: true, InitialReason: "hash_mismatch", FinalReason: "hash_mismatch",
+		PolicyAction: InstructionPolicyActionBlock, ConfigVersion: 12,
+		Instructions: InstructionFieldResult{Present: true, SHA256: sha256Hex("notification-canary"), Result: "mismatch", Plaintext: "notification-plaintext-canary"},
+		Input1:       InstructionFieldResult{Result: "missing"},
+	}
+
+	tests := []struct {
+		name         string
+		outcome      string
+		alert        bool
+		wantCalls    int
+		wantSkipUser bool
+	}{
+		{name: "blocked notifies user and ops", outcome: InstructionOutcomeBlocked, alert: true, wantCalls: 1},
+		{name: "policy allow notifies only ops", outcome: InstructionOutcomePolicyAllow, alert: true, wantCalls: 1, wantSkipUser: true},
+		{name: "disabled alert queues nothing", outcome: InstructionOutcomeBlocked, alert: false},
+		{name: "normal pass queues nothing", outcome: InstructionOutcomeHashPass, alert: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := &recordingInstructionNotificationEnqueuer{}
+			service := &InstructionService{notifications: recorder}
+			decision := baseDecision
+			decision.FinalOutcome = test.outcome
+			decision.AlertEnabled = test.alert
+			service.enqueueInstructionOutcomeNotifications(context.Background(), request, &decision, 41)
+			require.Len(t, recorder.inputs, test.wantCalls)
+			if test.wantCalls == 0 {
+				return
+			}
+			input := recorder.inputs[0]
+			require.Equal(t, test.wantSkipUser, input.SkipUser)
+			require.False(t, input.SkipOps)
+			require.Equal(t, modelportservice.NotificationEmailEventInstructionAuditUserNotice, input.UserTemplate)
+			require.Equal(t, modelportservice.NotificationEmailEventInstructionAuditOpsNotice, input.OpsTemplate)
+			require.Equal(t, "41", input.Variables["event_id"])
+			for _, value := range input.Variables {
+				require.NotContains(t, value, "notification-plaintext-canary")
+			}
+		})
+	}
+}
+
+func TestInstructionAuditOperationalLogsExcludeRequestPlaintext(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	service := NewInstructionService(NewInstructionRepository(db), nil, nil)
+	const canary = "MODELPORT-INSTRUCTION-PLAINTEXT-CANARY-17013"
+	decision := &InstructionDecision{
+		Allow: false, InitialReason: "hash_mismatch", FinalReason: "hash_mismatch",
+		FinalOutcome: InstructionOutcomeBlocked, PolicyAction: InstructionPolicyActionBlock,
+		Instructions: InstructionFieldResult{Present: true, SHA256: sha256Hex(canary), Result: "mismatch", Plaintext: canary},
+		Input1:       InstructionFieldResult{Result: "missing"},
+	}
+	request := Request{
+		RequestID: "log-canary-request", UserID: 7, APIKeyID: 9,
+		Body: []byte(canary), InstructionBody: []byte(canary),
+	}
+
+	var output bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	mock.ExpectBegin().WillReturnError(errors.New("database unavailable"))
+	require.Error(t, service.recordOutcome(context.Background(), request, decision))
+	require.Contains(t, output.String(), "instruction_audit.record_event_failed")
+	require.NotContains(t, output.String(), canary)
+	mock.ExpectClose()
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
 }

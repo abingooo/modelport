@@ -20,28 +20,32 @@ func TestInstructionRepositoryListEventsAppliesLegacyUserAndModelFilters(t *test
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
-	filterClause := `(?s).*\$11 = 0 OR e\.user_id = \$11.*\$12 = '%%' OR e\.model ILIKE \$12.*cardinality\(\$13::TEXT\[\]\).*\$14 = 0 OR e\.id = \$14.*`
+	filterClause := `(?s).*\$11 = 0 OR e\.user_id = \$11.*\$12 = '%%' OR e\.model ILIKE \$12.*cardinality\(\$13::TEXT\[\]\).*\$14 = 0 OR e\.id = \$14.*cardinality\(\$15::TEXT\[\]\).*cardinality\(\$16::TEXT\[\]\).*cardinality\(\$17::TEXT\[\]\).*`
 	args := []driver.Value{
 		"", "%%", nil, nil,
 		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 		sqlmock.AnyArg(), sqlmock.AnyArg(), int64(42), "%gpt-5%", sqlmock.AnyArg(), int64(0),
+		sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 	}
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT COUNT(*)") + filterClause).
 		WithArgs(args...).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
-	mock.ExpectQuery(`(?s)SELECT e\.id.*` + filterClause + `.*LIMIT \$15 OFFSET \$16`).
+	mock.ExpectQuery(`(?s)SELECT e\.id.*` + filterClause + `.*LIMIT \$18 OFFSET \$19`).
 		WithArgs(append(args, 20, 0)...).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id", "request_id", "user_id", "user_email_snapshot", "api_key_id", "group_id",
 			"group_name_snapshot", "client_type", "client_user_agent", "model", "endpoint", "stage", "instructions_present",
 			"instructions_sha256", "instructions_result", "input1_present", "input1_sha256",
-			"input1_result", "decision", "reason", "rule_set_ids", "config_version", "latency_ms",
+			"input1_result", "decision", "reason", "initial_reason", "final_reason", "final_outcome",
+			"policy_action", "rule_set_ids", "config_version", "body_bytes", "latency_ms", "ai_latency_ms",
+			"ai_review_id",
 			"evidence_status", "evidence_expires_at", "user_notification_status",
 			"ops_notification_status", "created_at",
 		}).AddRow(
 			int64(1), "request-1", int64(42), "user@example.test", nil, int64(7),
 			"test-group", "codex_cli", "codex_cli_rs/0.145.0", "gpt-5", "/v1/responses", "http", true, "", "mismatch",
-			false, "", "missing", "blocked", "hash_mismatch", []byte("[]"), int64(1), 2,
+			false, "", "missing", "blocked", "hash_mismatch", "hash_mismatch", "hash_mismatch", "blocked",
+			"block", []byte("[]"), int64(1), int64(1024), 2, nil, nil,
 			"stored", nil, "pending", "sent", time.Now().UTC(),
 		))
 	mock.ExpectClose()
@@ -142,6 +146,12 @@ func TestInstructionRepositoryAddHashesToRuleSetCreatesAndReactivatesAtomically(
 	mock.ExpectExec(`UPDATE instruction_audit_hashes`).
 		WithArgs(int64(21)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO instruction_audit_hash_raw_contents`).
+		WithArgs(int64(21)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO instruction_audit_hash_sources`).
+		WithArgs(int64(21), "manual", "", nil, nil, "", "", nil, "", actorID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO instruction_audit_rule_set_hashes`).
 		WithArgs(ruleSetID, int64(21), actorID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -151,6 +161,12 @@ func TestInstructionRepositoryAddHashesToRuleSetCreatesAndReactivatesAtomically(
 	mock.ExpectQuery(`INSERT INTO instruction_audit_hashes`).
 		WithArgs(secondDigest, "new", "from event", "input1", "codex_cli", "", actorID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(22)))
+	mock.ExpectExec(`INSERT INTO instruction_audit_hash_raw_contents`).
+		WithArgs(int64(22)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO instruction_audit_hash_sources`).
+		WithArgs(int64(22), "manual", "input1", nil, nil, "", "", nil, "", actorID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO instruction_audit_rule_set_hashes`).
 		WithArgs(ruleSetID, int64(22), actorID).
 		WillReturnResult(sqlmock.NewResult(0, 1))

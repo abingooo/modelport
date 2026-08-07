@@ -123,3 +123,20 @@ func TestInstructionAuditAdminRoutesExposeOnlyGroupScopedBindings(t *testing.T) 
 	require.NotContains(t, routes, `instructionAudit.GET("/users"`)
 	require.NotContains(t, routes, `instructionAudit.POST("/bindings"`)
 }
+
+func TestInstructionAuditTranslationRoutesRequireForcedStepUp(t *testing.T) {
+	source, err := os.ReadFile("admin.go")
+	require.NoError(t, err)
+	routes := string(source)
+	require.Contains(t, routes, `instructionAudit.POST("/translations", forced(`)
+	require.Contains(t, routes, `instructionAudit.GET("/translations/:id", forced(`)
+	handlerSource, err := os.ReadFile("../../securityaudit/instruction_handler.go")
+	require.NoError(t, err)
+	handlers := string(handlerSource)
+	for _, marker := range []string{"func (h *InstructionAdminHandler) CreateTranslation", "func (h *InstructionAdminHandler) GetTranslation"} {
+		start := strings.Index(handlers, marker)
+		require.NotEqual(t, -1, start)
+		window := handlers[start:min(len(handlers), start+1800)]
+		require.Contains(t, window, `c.Header("Cache-Control", "no-store")`)
+	}
+}

@@ -17,6 +17,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/redis/go-redis/v9"
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -31,6 +32,19 @@ var instructionDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 var validInstructionEventReasons = map[string]struct{}{
 	"hash_mismatch": {}, "fields_missing": {}, "field_invalid": {}, "invalid_json": {},
 	"request_too_large": {}, "structure_too_complex": {}, "parse_timeout": {}, "config_unavailable": {},
+	"group_not_allowed": {}, "client_not_allowed": {}, "ai_rejected": {}, "ai_uncertain": {}, "ai_error": {},
+	"instructions_match": {}, "input1_match": {}, "user_allowlist": {}, "empty_fields_allowed": {},
+}
+
+var validInstructionPolicyReasons = map[string]struct{}{
+	"hash_mismatch": {}, "fields_missing": {}, "field_invalid": {}, "invalid_json": {},
+	"request_too_large": {}, "structure_too_complex": {}, "parse_timeout": {}, "config_unavailable": {},
+	"group_not_allowed": {}, "client_not_allowed": {}, "ai_rejected": {}, "ai_uncertain": {}, "ai_error": {},
+}
+
+var validInstructionOutcomes = map[string]struct{}{
+	InstructionOutcomeBlocked: {}, InstructionOutcomePolicyAllow: {}, InstructionOutcomeAIPass: {},
+	InstructionOutcomeHashPass: {}, InstructionOutcomeExceptionPass: {},
 }
 
 var validInstructionFieldResults = map[string]struct{}{
@@ -43,14 +57,22 @@ var validSecurityNotificationStatuses = map[string]struct{}{
 }
 
 type InstructionService struct {
-	repository     *InstructionRepository
-	redis          *redis.Client
-	evidenceCipher *InstructionEvidenceCipher
-	notifications  *service.SecurityNotificationService
+	repository      *InstructionRepository
+	redis           *redis.Client
+	evidenceCipher  *InstructionEvidenceCipher
+	notifications   instructionNotificationEnqueuer
+	secretEncryptor service.SecretEncryptor
+	aiReviewer      InstructionAIReviewer
+	translator      InstructionTranslator
 
 	snapshot                   atomic.Pointer[instructionSnapshot]
+	parserBudget               atomic.Pointer[instructionParserBudget]
+	aiBudget                   atomic.Pointer[instructionAIConcurrencyBudget]
 	requiredConfigVersion      atomic.Int64
 	failedBlockedEventPersists atomic.Uint64
+	translationActive          atomic.Int64
+	translationProcessed       atomic.Uint64
+	translationFailed          atomic.Uint64
 	reloadMu                   sync.Mutex
 
 	stateMu       sync.RWMutex
@@ -59,6 +81,15 @@ type InstructionService struct {
 	lifecycleMu sync.Mutex
 	cancel      context.CancelFunc
 	wg          sync.WaitGroup
+}
+
+type instructionNotificationEnqueuer interface {
+	Enqueue(context.Context, service.SecurityNotificationEnqueueInput) error
+}
+
+type instructionParserBudget struct {
+	capacity  int64
+	semaphore *semaphore.Weighted
 }
 
 type instructionBlockedEvent struct {
@@ -70,6 +101,8 @@ func NewInstructionService(repository *InstructionRepository, redisClient *redis
 	return &InstructionService{
 		repository: repository,
 		redis:      redisClient,
+		aiReviewer: NewOpenAIInstructionReviewer(),
+		translator: NewOpenAIInstructionTranslator(),
 	}
 }
 
@@ -79,10 +112,12 @@ func ProvideInstructionService(
 	emailService *service.EmailService,
 	evidenceCipher *InstructionEvidenceCipher,
 	notifications *service.SecurityNotificationService,
+	secretEncryptor service.SecretEncryptor,
 ) *InstructionService {
 	result := NewInstructionService(repository, redisClient, emailService)
 	result.evidenceCipher = evidenceCipher
 	result.notifications = notifications
+	result.secretEncryptor = secretEncryptor
 	return result
 }
 
@@ -107,6 +142,11 @@ func (s *InstructionService) Start(ctx context.Context) error {
 	s.wg.Add(2)
 	go s.refreshLoop(runCtx)
 	go s.evidenceCleanupLoop(runCtx)
+	s.wg.Add(instructionTranslationMaxWorkers + 1)
+	for workerID := 0; workerID < instructionTranslationMaxWorkers; workerID++ {
+		go s.translationWorker(runCtx, workerID)
+	}
+	go s.translationMaintenanceLoop(runCtx)
 	if s.redis != nil {
 		s.wg.Add(1)
 		go s.subscribeLoop(runCtx)
@@ -153,6 +193,10 @@ func (s *InstructionService) Reload(ctx context.Context) error {
 		s.setLoadError("configuration refresh failed")
 		return err
 	}
+	if err := s.activateInstructionRuntimeSecrets(snapshot); err != nil {
+		s.setLoadError("runtime credential activation failed")
+		return err
+	}
 	if required := s.requiredConfigVersion.Load(); snapshot.ConfigVersion < required {
 		s.setLoadError("required configuration version is not available")
 		return fmt.Errorf("instruction audit snapshot version %d is below required version %d", snapshot.ConfigVersion, required)
@@ -173,7 +217,19 @@ func (s *InstructionService) storeSnapshot(snapshot *instructionSnapshot) error 
 		return fmt.Errorf("instruction audit snapshot version regressed from %d to %d", current.ConfigVersion, snapshot.ConfigVersion)
 	}
 	s.snapshot.Store(snapshot)
+	s.configureInstructionParserBudget(snapshot.Runtime.MaxInflightBodyBytes)
+	s.configureInstructionAIBudget(snapshot.Runtime.AIMaxConcurrency)
 	return nil
+}
+
+func (s *InstructionService) configureInstructionParserBudget(capacity int64) {
+	if capacity <= 0 {
+		capacity = InstructionDefaultMaxInflightBodyBytes
+	}
+	if current := s.parserBudget.Load(); current != nil && current.capacity == capacity {
+		return
+	}
+	s.parserBudget.Store(&instructionParserBudget{capacity: capacity, semaphore: semaphore.NewWeighted(capacity)})
 }
 
 func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Request) *InstructionDecision {
@@ -199,33 +255,39 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 	}
 	if request.UserID > 0 {
 		if _, allowed := policy.AllowedUsers[request.UserID]; allowed {
-			return &InstructionDecision{
+			decision := &InstructionDecision{
 				Applicable: true, Allow: true, Reason: "user_allowlist",
+				InitialReason: "user_allowlist", FinalReason: "user_allowlist",
+				FinalOutcome: InstructionOutcomeExceptionPass, PolicyAction: "exception",
 				Instructions:  InstructionFieldResult{Result: "not_checked"},
 				Input1:        InstructionFieldResult{Result: "not_checked"},
 				RuleSetIDs:    append([]int64(nil), policy.RuleSetIDs...),
-				ConfigVersion: snapshot.ConfigVersion, Latency: time.Since(startedAt),
+				ConfigVersion: snapshot.ConfigVersion,
 			}
+			body := instructionRequestBody(request)
+			decision.BodyBytes = int64(len(body))
+			decision.Latency = time.Since(startedAt)
+			s.recordOutcomeOrFailClosed(ctx, request, decision)
+			return decision
 		}
 	}
 
-	body := request.InstructionBody
-	if len(body) == 0 {
-		body = request.Body
-	}
-	root, err := decodeStrictJSONObject(body)
+	body := instructionRequestBody(request)
+	root, err := s.parseInstructionRoot(ctx, body, snapshot.Runtime)
 	if err != nil {
 		decision := &InstructionDecision{
 			Applicable:    true,
-			Allow:         false,
 			Reason:        instructionAuditParseReason(err),
+			InitialReason: instructionAuditParseReason(err),
 			Instructions:  InstructionFieldResult{Result: "invalid"},
 			Input1:        InstructionFieldResult{Result: "not_checked"},
 			RuleSetIDs:    append([]int64(nil), policy.RuleSetIDs...),
 			ConfigVersion: snapshot.ConfigVersion,
+			BodyBytes:     int64(len(body)),
 		}
+		applyInstructionReasonPolicy(snapshot, decision, time.Now().UTC())
 		decision.Latency = time.Since(startedAt)
-		s.recordBlocked(ctx, request, decision)
+		s.recordOutcomeOrFailClosed(ctx, request, decision)
 		return decision
 	}
 
@@ -243,15 +305,28 @@ func (s *InstructionService) EvaluateInstruction(ctx context.Context, request Re
 		Applicable:    true,
 		Allow:         inspection.Allow,
 		Reason:        inspection.Reason,
+		InitialReason: inspection.Reason,
+		FinalReason:   inspection.Reason,
 		Instructions:  inspection.Instructions,
 		Input1:        inspection.Input1,
 		RuleSetIDs:    append([]int64(nil), policy.RuleSetIDs...),
 		ConfigVersion: snapshot.ConfigVersion,
+		BodyBytes:     int64(len(body)),
+	}
+	if inspection.Allow {
+		decision.FinalOutcome = InstructionOutcomeHashPass
+		decision.PolicyAction = "hash_match"
+		if inspection.Reason == "empty_fields_allowed" {
+			decision.FinalOutcome = InstructionOutcomeExceptionPass
+			decision.PolicyAction = "exception"
+		}
+	} else if instructionAIReviewEnabled(snapshot, decision) {
+		return s.evaluateInstructionWithAI(ctx, request, decision, snapshot, startedAt)
+	} else {
+		applyInstructionReasonPolicy(snapshot, decision, time.Now().UTC())
 	}
 	decision.Latency = time.Since(startedAt)
-	if !decision.Allow {
-		s.recordBlocked(ctx, request, decision)
-	}
+	s.recordOutcomeOrFailClosed(ctx, request, decision)
 	return decision
 }
 
@@ -278,12 +353,18 @@ func (s *InstructionService) blockInstructionConfigUnavailable(ctx context.Conte
 		Allow:         false,
 		Unavailable:   true,
 		Reason:        "config_unavailable",
+		InitialReason: "config_unavailable",
+		FinalReason:   "config_unavailable",
+		FinalOutcome:  InstructionOutcomeBlocked,
+		PolicyAction:  InstructionPolicyActionBlock,
+		AlertEnabled:  true,
 		Instructions:  InstructionFieldResult{Result: "not_checked"},
 		Input1:        InstructionFieldResult{Result: "not_checked"},
 		ConfigVersion: configVersion,
+		BodyBytes:     int64(len(instructionRequestBody(request))),
 		Latency:       time.Since(startedAt),
 	}
-	s.recordBlocked(ctx, request, decision)
+	_ = s.recordOutcome(ctx, request, decision)
 	return decision
 }
 
@@ -336,8 +417,40 @@ func mergeInstructionPolicy(accumulator *instructionPolicyAccumulator, policy in
 }
 
 func (s *InstructionService) recordBlocked(ctx context.Context, request Request, decision *InstructionDecision) {
-	if s == nil || s.repository == nil || decision == nil {
+	if decision != nil {
+		decision.Allow = false
+		if decision.InitialReason == "" {
+			decision.InitialReason = decision.Reason
+		}
+		if decision.FinalReason == "" {
+			decision.FinalReason = decision.Reason
+		}
+		if decision.FinalOutcome == "" {
+			decision.FinalOutcome = InstructionOutcomeBlocked
+		}
+		if decision.PolicyAction == "" {
+			decision.PolicyAction = InstructionPolicyActionBlock
+		}
+	}
+	_ = s.recordOutcome(ctx, request, decision)
+}
+
+func (s *InstructionService) recordOutcomeOrFailClosed(ctx context.Context, request Request, decision *InstructionDecision) {
+	if err := s.recordOutcome(ctx, request, decision); err == nil || decision == nil || !decision.Allow {
 		return
+	}
+	decision.Allow = false
+	decision.Unavailable = true
+	decision.Reason = "config_unavailable"
+	decision.FinalReason = "config_unavailable"
+	decision.FinalOutcome = InstructionOutcomeBlocked
+	decision.PolicyAction = InstructionPolicyActionBlock
+	decision.AlertEnabled = true
+}
+
+func (s *InstructionService) recordOutcome(ctx context.Context, request Request, decision *InstructionDecision) error {
+	if s == nil || s.repository == nil || decision == nil {
+		return nil
 	}
 	eventRequest := request
 	if request.GroupID != nil {
@@ -348,7 +461,12 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 	event.Request.Body = nil
 	event.Request.InstructionBody = nil
 	event.Decision.RuleSetIDs = append([]int64(nil), decision.RuleSetIDs...)
-	evidenceStatus, evidenceExpiresAt, evidence := s.prepareEvidence(ctx, decision)
+	evidenceStatus, evidenceExpiresAt, evidence := "not_available", (*time.Time)(nil), []InstructionEvidence(nil)
+	if decision.FinalOutcome == InstructionOutcomeBlocked ||
+		decision.FinalOutcome == InstructionOutcomePolicyAllow ||
+		decision.FinalOutcome == InstructionOutcomeAIPass {
+		evidenceStatus, evidenceExpiresAt, evidence = s.prepareEvidence(ctx, decision)
+	}
 	event.Decision.Instructions.Plaintext = ""
 	event.Decision.Input1.Plaintext = ""
 	if ctx == nil {
@@ -356,45 +474,69 @@ func (s *InstructionService) recordBlocked(ctx context.Context, request Request,
 	}
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), instructionBlockedEventPersistenceTimeout)
 	defer cancel()
-	eventID, err := s.repository.RecordBlocked(
+	eventID, err := s.repository.RecordEvent(
 		recordCtx, event.Request, &event.Decision, evidenceStatus, evidenceExpiresAt, evidence,
 	)
 	if err != nil {
 		s.failedBlockedEventPersists.Add(1)
-		slog.Error("instruction_audit.record_blocked_failed",
+		slog.Error("instruction_audit.record_event_failed",
 			"request_id", event.Request.RequestID,
 			"user_id", event.Request.UserID,
 			"api_key_id", event.Request.APIKeyID,
 			"group_id", instructionGroupID(event.Request.GroupID),
 			"model", event.Request.Model,
-			"reason", event.Decision.Reason,
+			"reason", event.Decision.FinalReason,
+			"outcome", event.Decision.FinalOutcome,
 			"error", err,
 		)
-		return
+		return err
 	}
 	decision.EventID = eventID
-	if s.notifications != nil {
-		groupID := instructionGroupID(event.Request.GroupID)
+	s.enqueueInstructionOutcomeNotifications(recordCtx, event.Request, decision, eventID)
+	return nil
+}
+
+func (s *InstructionService) enqueueInstructionOutcomeNotifications(
+	ctx context.Context,
+	request Request,
+	decision *InstructionDecision,
+	eventID int64,
+) {
+	if s.notifications != nil && decision.AlertEnabled &&
+		(decision.FinalOutcome == InstructionOutcomeBlocked || decision.FinalOutcome == InstructionOutcomePolicyAllow) {
+		groupID := instructionGroupID(request.GroupID)
 		variables := map[string]string{
-			"event_id":     strconv.FormatInt(eventID, 10),
-			"request_id":   event.Request.RequestID,
-			"triggered_at": time.Now().UTC().Format(time.RFC3339),
-			"user_id":      strconv.FormatInt(event.Request.UserID, 10),
-			"user_email":   event.Request.UserEmail,
-			"api_key_id":   strconv.FormatInt(event.Request.APIKeyID, 10),
-			"group_id":     strconv.FormatInt(groupID, 10),
-			"group_name":   event.Request.GroupName,
-			"client_type":  event.Request.InstructionClientType,
-			"model":        event.Request.Model,
-			"admin_qq":     "2145236436",
+			"event_id":             strconv.FormatInt(eventID, 10),
+			"request_id":           request.RequestID,
+			"triggered_at":         time.Now().UTC().Format(time.RFC3339),
+			"user_id":              strconv.FormatInt(request.UserID, 10),
+			"user_email":           request.UserEmail,
+			"api_key_id":           strconv.FormatInt(request.APIKeyID, 10),
+			"group_id":             strconv.FormatInt(groupID, 10),
+			"group_name":           request.GroupName,
+			"client_type":          request.InstructionClientType,
+			"model":                request.Model,
+			"admin_qq":             "2145236436",
+			"initial_reason":       decision.InitialReason,
+			"final_reason":         decision.FinalReason,
+			"final_outcome":        decision.FinalOutcome,
+			"policy_action":        decision.PolicyAction,
+			"config_version":       strconv.FormatInt(decision.ConfigVersion, 10),
+			"instructions_present": strconv.FormatBool(decision.Instructions.Present),
+			"instructions_result":  decision.Instructions.Result,
+			"instructions_sha256":  decision.Instructions.SHA256,
+			"input1_present":       strconv.FormatBool(decision.Input1.Present),
+			"input1_result":        decision.Input1.Result,
+			"input1_sha256":        decision.Input1.SHA256,
 		}
-		err = s.notifications.Enqueue(recordCtx, service.SecurityNotificationEnqueueInput{
+		err := s.notifications.Enqueue(ctx, service.SecurityNotificationEnqueueInput{
 			SourceType: service.SecurityNotificationSourceInstructionAudit,
-			SourceID:   eventID, UserID: event.Request.UserID, UserEmail: event.Request.UserEmail,
-			DedupeScope:  fmt.Sprintf("%d:%d:instruction-audit", event.Request.UserID, groupID),
+			SourceID:   eventID, UserID: request.UserID, UserEmail: request.UserEmail,
+			DedupeScope:  fmt.Sprintf("%d:%d:instruction-audit", request.UserID, groupID),
 			UserTemplate: service.NotificationEmailEventInstructionAuditUserNotice,
 			OpsTemplate:  service.NotificationEmailEventInstructionAuditOpsNotice,
 			Variables:    variables,
+			SkipUser:     decision.FinalOutcome != InstructionOutcomeBlocked,
 		})
 		if err != nil {
 			slog.Warn("instruction_audit.notification_enqueue_failed", "event_id", eventID, "error", err)
@@ -474,11 +616,40 @@ func (s *InstructionService) Overview(ctx context.Context) (*InstructionOverview
 	if days, retentionErr := s.repository.GetEvidenceRetentionDays(ctx); retentionErr == nil {
 		overview.EvidenceRetentionDays = days
 	}
+	if persisted, aggregated, outcomeErr := s.repository.InstructionOutcomeStorageCounts(ctx); outcomeErr == nil {
+		overview.PersistedOutcomeCount = persisted
+		overview.AggregatedOutcomeCount = aggregated
+	}
+	if expired, expiredErr := s.repository.ExpiredAggregateEventCount(ctx); expiredErr == nil {
+		overview.ExpiredAggregateEventCount = expired
+	}
+	overview.StatisticsLossCount = int64(s.failedBlockedEventPersists.Load())
+	if latency, latencyErr := s.repository.InstructionLatencyMetrics(ctx, time.Now().UTC().Add(-24*time.Hour)); latencyErr == nil {
+		overview.AuditLatencySampleCount = latency.AuditSampleCount
+		overview.AuditLatencyP95MS = latency.AuditP95MS
+		overview.AuditLatencyP99MS = latency.AuditP99MS
+		overview.AILatencySampleCount = latency.AISampleCount
+		overview.AILatencyP95MS = latency.AIP95MS
+		overview.AILatencyP99MS = latency.AIP99MS
+	}
+	if pending, processing, failed, translationErr := s.repository.TranslationQueueCounts(ctx); translationErr == nil {
+		overview.TranslationPendingCount = pending
+		overview.TranslationProcessingCount = processing
+		overview.TranslationFailedCount = failed
+	}
+	overview.TranslationActiveWorkers = s.translationActive.Load()
+	overview.TranslationProcessedTotal = int64(s.translationProcessed.Load())
+	overview.TranslationWorkerFailTotal = int64(s.translationFailed.Load())
 	if snapshot := s.snapshot.Load(); snapshot != nil {
 		overview.Enabled = snapshot.Enabled
 		overview.ConfigVersion = snapshot.ConfigVersion
 		loadedAt := snapshot.LoadedAt
 		overview.LoadedAt = &loadedAt
+		overview.MaxBodyBytes = snapshot.Runtime.MaxBodyBytes
+		overview.ParseTimeoutMS = snapshot.Runtime.ParseTimeoutMS
+		overview.MaxInflightBodyBytes = snapshot.Runtime.MaxInflightBodyBytes
+		overview.AIEnabled = snapshot.Runtime.AIEnabled
+		overview.TranslationEnabled = snapshot.Runtime.TranslationEnabled
 	}
 	s.stateMu.RLock()
 	overview.LoadError = s.lastLoadError
@@ -527,7 +698,30 @@ func (s *InstructionService) CreateHash(ctx context.Context, request CreateInstr
 	} else if !errors.Is(findErr, sql.ErrNoRows) {
 		return nil, findErr
 	}
-	item, err := s.repository.CreateHash(ctx, normalized, actorID)
+	var raw *instructionHashRawStorage
+	if normalized.RawContent != "" {
+		if s.evidenceCipher == nil || !s.evidenceCipher.Available() {
+			return nil, infraerrors.BadRequest("instruction_audit_encryption_required", "保存哈希原文前必须配置固定加密密钥")
+		}
+		ciphertext, encryptErr := s.evidenceCipher.EncryptHashRaw(normalized.Digest, normalized.RawContent)
+		if encryptErr != nil {
+			return nil, encryptErr
+		}
+		retentionDays := 30
+		if config, configErr := s.repository.GetRuntimeConfig(ctx); configErr == nil && config.RawContentRetentionDays > 0 {
+			retentionDays = config.RawContentRetentionDays
+		}
+		expiresAt := time.Now().UTC().Add(time.Duration(retentionDays) * 24 * time.Hour)
+		raw = &instructionHashRawStorage{
+			Ciphertext: ciphertext, Status: "stored", ContentBytes: len([]byte(normalized.RawContent)),
+			HashAlgorithm: InstructionHashAlgorithmSHA256,
+			Normalization: InstructionHashNormalizationIdentityV1,
+			KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &expiresAt,
+		}
+	}
+	item, err := s.repository.CreateHashWithRaw(ctx, normalized, actorID, raw, InstructionHashSource{
+		SourceType: "manual", FieldName: normalized.ObservedSource, CreatedBy: nullableInstructionActor(actorID),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +756,11 @@ func (s *InstructionService) UpdateHash(ctx context.Context, id int64, request U
 		item.ClientVersion = strings.TrimSpace(*request.ClientVersion)
 	}
 	if request.Status != nil {
-		item.Status = strings.TrimSpace(*request.Status)
+		nextStatus := strings.TrimSpace(*request.Status)
+		if item.Status == "revoked" && nextStatus != "revoked" {
+			return nil, infraerrors.Conflict("instruction_audit_hash_revoked", "已撤销哈希不能重新启用")
+		}
+		item.Status = nextStatus
 	}
 	if request.ClearValidFrom {
 		item.ValidFrom = nil
@@ -730,6 +928,20 @@ func (s *InstructionService) ListEvents(ctx context.Context, page, pageSize int,
 	return s.repository.ListEvents(ctx, page, pageSize, filter)
 }
 
+func (s *InstructionService) Statistics(ctx context.Context, filter InstructionEventFilter) (*InstructionStatistics, error) {
+	if filter.From == nil && filter.To == nil {
+		filter.From, filter.To = instructionStatisticsDefaultRange(time.Now().UTC())
+	}
+	if len(filter.FinalReasons) == 0 && len(filter.Reasons) > 0 {
+		filter.FinalReasons = append([]string(nil), filter.Reasons...)
+	}
+	normalized, err := normalizeInstructionEventFilter(filter, false)
+	if err != nil {
+		return nil, err
+	}
+	return s.repository.InstructionStatistics(ctx, normalized)
+}
+
 func (s *InstructionService) DeleteEvent(ctx context.Context, id int64) (*InstructionDeleteResult, error) {
 	if id <= 0 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_event_id", "审核事件 ID 无效")
@@ -797,6 +1009,9 @@ func normalizeInstructionEventFilter(filter InstructionEventFilter, requireDelet
 	}
 	filter.GroupIDs = uniquePositiveInt64s(filter.GroupIDs)
 	filter.Reasons = normalizeInstructionFilterValues(filter.Reasons, validInstructionEventReasons)
+	filter.InitialReasons = normalizeInstructionFilterValues(filter.InitialReasons, validInstructionEventReasons)
+	filter.FinalReasons = normalizeInstructionFilterValues(filter.FinalReasons, validInstructionEventReasons)
+	filter.Outcomes = normalizeInstructionFilterValues(filter.Outcomes, validInstructionOutcomes)
 	filter.InstructionResults = normalizeInstructionFilterValues(filter.InstructionResults, validInstructionFieldResults)
 	filter.Input1Results = normalizeInstructionFilterValues(filter.Input1Results, validInstructionFieldResults)
 	filter.UserNotifications = normalizeInstructionFilterValues(filter.UserNotifications, validSecurityNotificationStatuses)
@@ -807,6 +1022,15 @@ func normalizeInstructionEventFilter(filter InstructionEventFilter, requireDelet
 	}
 	if filter.Reasons == nil {
 		filter.Reasons = []string{}
+	}
+	if filter.InitialReasons == nil {
+		filter.InitialReasons = []string{}
+	}
+	if filter.FinalReasons == nil {
+		filter.FinalReasons = []string{}
+	}
+	if filter.Outcomes == nil {
+		filter.Outcomes = []string{}
 	}
 	if filter.InstructionResults == nil {
 		filter.InstructionResults = []string{}
@@ -932,16 +1156,11 @@ func (s *InstructionService) CreateCandidateFromEvent(ctx context.Context, event
 	if digest == "" {
 		return nil, infraerrors.BadRequest("instruction_audit_candidate_digest_missing", "该字段没有可用摘要")
 	}
-	if existing, findErr := s.repository.FindHashByDigest(ctx, digest); findErr == nil {
-		return existing, nil
-	} else if !errors.Is(findErr, sql.ErrNoRows) {
-		return nil, findErr
-	}
 	name := strings.TrimSpace(request.Name)
 	if name == "" {
 		name = fmt.Sprintf("事件 #%d 候选", eventID)
 	}
-	return s.CreateHash(ctx, CreateInstructionHashRequest{
+	hashRequest, err := normalizeInstructionHashRequest(CreateInstructionHashRequest{
 		Digest:         digest,
 		Name:           name,
 		Note:           strings.TrimSpace(request.Note),
@@ -949,7 +1168,30 @@ func (s *InstructionService) CreateCandidateFromEvent(ctx context.Context, event
 		ClientName:     strings.TrimSpace(request.ClientName),
 		ClientVersion:  strings.TrimSpace(request.ClientVersion),
 		Status:         "candidate",
-	}, actorID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.hashRawFromEventEvidence(ctx, event, source, digest)
+	if err != nil {
+		return nil, err
+	}
+	eventSource := InstructionHashSource{
+		SourceType: "manual", FieldName: source, EventID: &eventID,
+		CreatedBy: nullableInstructionActor(actorID),
+	}
+	material := instructionHashMaterial{Request: hashRequest, Raw: raw, Source: eventSource}
+	if existing, findErr := s.repository.FindHashByDigest(ctx, digest); findErr == nil {
+		return s.repository.EnrichHashMaterial(ctx, existing.ID, material, actorID)
+	} else if !errors.Is(findErr, sql.ErrNoRows) {
+		return nil, findErr
+	}
+	item, err := s.repository.CreateHashWithRaw(ctx, hashRequest, actorID, raw, eventSource)
+	if err != nil {
+		return nil, err
+	}
+	s.refreshAfterMutation(ctx, 0)
+	return item, nil
 }
 
 func (s *InstructionService) AddEventToRuleSet(
@@ -964,6 +1206,13 @@ func (s *InstructionService) AddEventToRuleSet(
 	if request.RuleSetID <= 0 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_rule_set_id", "规则集 ID 无效")
 	}
+	reviewed, err := s.repository.HasSuccessfulEvidenceReveal(ctx, eventID, actorID)
+	if err != nil {
+		return nil, err
+	}
+	if !reviewed {
+		return nil, infraerrors.BadRequest("instruction_audit_evidence_review_required", "请先打开证据详情完成审查")
+	}
 	event, err := s.GetEvent(ctx, eventID)
 	if err != nil {
 		return nil, err
@@ -972,7 +1221,7 @@ func (s *InstructionService) AddEventToRuleSet(
 	if len(sources) == 0 || len(sources) > 2 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_rule_sources", "请选择至少一个可用审核字段")
 	}
-	hashes := make([]CreateInstructionHashRequest, 0, len(sources))
+	materials := make([]instructionHashMaterial, 0, len(sources))
 	for _, source := range sources {
 		digest := ""
 		switch source {
@@ -986,15 +1235,30 @@ func (s *InstructionService) AddEventToRuleSet(
 		if !instructionDigestPattern.MatchString(digest) {
 			return nil, infraerrors.BadRequest("instruction_audit_candidate_digest_missing", "所选字段没有可用摘要")
 		}
-		hashes = append(hashes, CreateInstructionHashRequest{
+		hashRequest := CreateInstructionHashRequest{
 			Digest: digest, Name: fmt.Sprintf("事件 #%d %s", eventID, source),
 			Note: fmt.Sprintf("由审核事件 #%d 一键加入规则集", eventID), ObservedSource: source,
 			ClientName: event.ClientType, Status: "active",
+		}
+		raw, rawErr := s.hashRawFromEventEvidence(ctx, event, source, digest)
+		if rawErr != nil {
+			return nil, rawErr
+		}
+		materials = append(materials, instructionHashMaterial{
+			Request: hashRequest,
+			Raw:     raw,
+			Source: InstructionHashSource{
+				SourceType: "manual", FieldName: source, EventID: &eventID,
+				CreatedBy: nullableInstructionActor(actorID),
+			},
 		})
 	}
-	result, err := s.repository.AddHashesToRuleSet(ctx, request.RuleSetID, hashes, actorID)
+	result, err := s.repository.AddHashMaterialsToRuleSet(ctx, request.RuleSetID, materials, actorID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, infraerrors.NotFound("instruction_audit_rule_set_not_found", "规则集不存在")
+	}
+	if errors.Is(err, errInstructionAuditHashRevoked) {
+		return nil, infraerrors.Conflict("instruction_audit_hash_revoked", "已撤销哈希不能重新启用")
 	}
 	if err != nil {
 		return nil, err
@@ -1003,8 +1267,64 @@ func (s *InstructionService) AddEventToRuleSet(
 	return result, nil
 }
 
+func (s *InstructionService) hashRawFromEventEvidence(
+	ctx context.Context,
+	event *InstructionEvent,
+	source string,
+	digest string,
+) (*instructionHashRawStorage, error) {
+	if event == nil || event.EvidenceStatus != "stored" {
+		return nil, nil
+	}
+	if s.evidenceCipher == nil || !s.evidenceCipher.Available() {
+		return nil, infraerrors.BadRequest("instruction_audit_encryption_required", "保存哈希原文前必须配置固定加密密钥")
+	}
+	evidence, err := s.repository.ListEvidence(ctx, event.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range evidence {
+		if item.Source != source {
+			continue
+		}
+		if item.Digest != digest {
+			return nil, infraerrors.Conflict("instruction_audit_evidence_integrity_failed", "审核证据摘要不一致")
+		}
+		plaintext, decryptErr := s.evidenceCipher.Decrypt(item.Source, item.Digest, item.Ciphertext)
+		if decryptErr != nil || sha256Hex(plaintext) != digest || len([]byte(plaintext)) != item.PlaintextBytes {
+			return nil, infraerrors.Conflict("instruction_audit_evidence_integrity_failed", "审核证据完整性校验失败")
+		}
+		ciphertext, encryptErr := s.evidenceCipher.EncryptHashRaw(digest, plaintext)
+		if encryptErr != nil {
+			return nil, encryptErr
+		}
+		retentionDays := 30
+		if config, configErr := s.repository.GetRuntimeConfig(ctx); configErr == nil && config.RawContentRetentionDays > 0 {
+			retentionDays = config.RawContentRetentionDays
+		}
+		expiresAt := time.Now().UTC().Add(time.Duration(retentionDays) * 24 * time.Hour)
+		return &instructionHashRawStorage{
+			Ciphertext: ciphertext, Status: "stored", ContentBytes: len([]byte(plaintext)),
+			HashAlgorithm: InstructionHashAlgorithmSHA256,
+			Normalization: InstructionHashNormalizationIdentityV1,
+			KeyVersion:    instructionHashRawKeyVersion, ExpiresAt: &expiresAt,
+		}, nil
+	}
+	return nil, infraerrors.BadRequest("instruction_audit_evidence_unavailable", "所选字段的审核证据不可用")
+}
+
 func normalizeInstructionHashRequest(request CreateInstructionHashRequest) (CreateInstructionHashRequest, error) {
 	request.Digest = strings.ToLower(strings.TrimSpace(request.Digest))
+	if request.RawContent != "" {
+		if len([]byte(request.RawContent)) > maxInstructionAuditTextBytes {
+			return CreateInstructionHashRequest{}, infraerrors.BadRequest("instruction_audit_raw_content_too_large", "哈希原文不能超过 1 MiB")
+		}
+		computed := sha256Hex(request.RawContent)
+		if request.Digest != "" && request.Digest != computed {
+			return CreateInstructionHashRequest{}, infraerrors.BadRequest("instruction_audit_digest_content_mismatch", "摘要与原文不一致")
+		}
+		request.Digest = computed
+	}
 	request.Name = strings.TrimSpace(request.Name)
 	request.Note = strings.TrimSpace(request.Note)
 	request.ObservedSource = strings.TrimSpace(request.ObservedSource)
@@ -1054,7 +1374,7 @@ func validateInstructionHash(item InstructionHashEntry) error {
 
 func validInstructionHashStatus(status string) bool {
 	switch status {
-	case "candidate", "active", "disabled", "expired":
+	case "candidate", "active", "disabled", "expired", "revoked":
 		return true
 	default:
 		return false
@@ -1108,14 +1428,44 @@ func (s *InstructionService) evidenceCleanupLoop(ctx context.Context) {
 	defer s.wg.Done()
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
+	s.runInstructionMaintenance(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := s.repository.ExpireEvidence(ctx); err != nil {
-				slog.Warn("instruction_audit.evidence_cleanup_failed", "error", err)
-			}
+			s.runInstructionMaintenance(ctx)
+		}
+	}
+}
+
+func (s *InstructionService) runInstructionMaintenance(ctx context.Context) {
+	if _, err := s.repository.ExpireEvidence(ctx); err != nil {
+		slog.Warn("instruction_audit.evidence_cleanup_failed", "error", err)
+	}
+	if _, err := s.repository.ExpireHashRawContents(ctx); err != nil {
+		slog.Warn("instruction_audit.hash_raw_cleanup_failed", "error", err)
+	}
+	retentionDays := instructionPassRetention(s.snapshot.Load())
+	for batch := 0; batch < 20; batch++ {
+		archived, err := s.repository.ArchiveExpiredPassEvents(ctx, retentionDays, 500)
+		if err != nil {
+			slog.Warn("instruction_audit.pass_event_archive_failed", "error", err)
+			break
+		}
+		if archived == 0 {
+			break
+		}
+	}
+	aggregateRetentionDays := instructionAggregateRetention(s.snapshot.Load())
+	for batch := 0; batch < 20; batch++ {
+		deletedRows, _, err := s.repository.PruneExpiredOutcomeAggregates(ctx, aggregateRetentionDays, 500)
+		if err != nil {
+			slog.Warn("instruction_audit.outcome_aggregate_cleanup_failed", "error", err)
+			break
+		}
+		if deletedRows == 0 {
+			break
 		}
 	}
 }

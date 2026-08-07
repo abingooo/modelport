@@ -140,6 +140,23 @@ func TestEnforceStepUpDisabledSkipsAllChecks(t *testing.T) {
 	})
 }
 
+func TestForceStepUpOverridesDisabledSetting(t *testing.T) {
+	c, rec := newStepUpTestContext(t)
+	c.Set(string(ContextKeyUser), AuthSubject{UserID: 1})
+	c.Set("modelport_force_step_up", true)
+
+	ok := enforceStepUp(
+		c,
+		stubStepUpGrantChecker{granted: false},
+		stubStepUpUserReader{user: &service.User{ID: 1, TotpEnabled: true}},
+		stubStepUpSettingReader{enabled: false},
+	)
+
+	require.False(t, ok)
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Contains(t, rec.Body.String(), "STEP_UP_REQUIRED")
+}
+
 // settings 为 nil 时保持门控（fail-closed），避免装配缺陷静默关闭安全控制。
 func TestEnforceStepUpNilSettingsFailsClosed(t *testing.T) {
 	c, rec := newStepUpTestContext(t)

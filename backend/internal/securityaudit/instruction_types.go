@@ -12,6 +12,13 @@ const (
 	InstructionConfigInvalidationChannel       = "modelport:instruction_audit:config:invalidate"
 	InstructionErrorCodeRejected               = "request_rejected"
 	InstructionClientMessage                   = "Request rejected by security policy."
+	InstructionOutcomeBlocked                  = "blocked"
+	InstructionOutcomePolicyAllow              = "policy_allow"
+	InstructionOutcomeAIPass                   = "ai_pass"
+	InstructionOutcomeHashPass                 = "hash_pass"
+	InstructionOutcomeExceptionPass            = "exception_pass"
+	InstructionPolicyActionBlock               = "block"
+	InstructionPolicyActionAllowAndRecord      = "allow_and_record"
 )
 
 var ErrInstructionAuditNoEffectiveGroupRules = errors.New("instruction audit requires effective group rules")
@@ -34,31 +41,48 @@ type InstructionDecision struct {
 	Allow         bool                   `json:"allow"`
 	Unavailable   bool                   `json:"unavailable"`
 	Reason        string                 `json:"reason"`
+	InitialReason string                 `json:"initial_reason"`
+	FinalReason   string                 `json:"final_reason"`
+	FinalOutcome  string                 `json:"final_outcome"`
+	PolicyAction  string                 `json:"policy_action"`
 	Instructions  InstructionFieldResult `json:"instructions"`
 	Input1        InstructionFieldResult `json:"input1"`
 	RuleSetIDs    []int64                `json:"rule_set_ids"`
 	ConfigVersion int64                  `json:"config_version"`
+	BodyBytes     int64                  `json:"body_bytes"`
+	AIReviewID    *int64                 `json:"ai_review_id,omitempty"`
+	AlertEnabled  bool                   `json:"-"`
 	Latency       time.Duration          `json:"-"`
+	AILatency     time.Duration          `json:"-"`
 }
 
 type InstructionHashEntry struct {
-	ID             int64      `json:"id"`
-	Digest         string     `json:"digest"`
-	Name           string     `json:"name"`
-	Note           string     `json:"note"`
-	ObservedSource string     `json:"observed_source"`
-	ClientName     string     `json:"client_name"`
-	ClientVersion  string     `json:"client_version"`
-	Status         string     `json:"status"`
-	ValidFrom      *time.Time `json:"valid_from,omitempty"`
-	ValidUntil     *time.Time `json:"valid_until,omitempty"`
-	CreatedBy      *int64     `json:"created_by,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID             int64                   `json:"id"`
+	Digest         string                  `json:"digest"`
+	Name           string                  `json:"name"`
+	Note           string                  `json:"note"`
+	ObservedSource string                  `json:"observed_source"`
+	ClientName     string                  `json:"client_name"`
+	ClientVersion  string                  `json:"client_version"`
+	Status         string                  `json:"status"`
+	HashAlgorithm  string                  `json:"hash_algorithm"`
+	Normalization  string                  `json:"normalization_version"`
+	FieldName      string                  `json:"field_name"`
+	RawStatus      string                  `json:"raw_content_status"`
+	ContentBytes   int                     `json:"content_bytes"`
+	KeyVersion     string                  `json:"encryption_key_version,omitempty"`
+	RawExpiresAt   *time.Time              `json:"raw_expires_at,omitempty"`
+	Sources        []InstructionHashSource `json:"sources,omitempty"`
+	ValidFrom      *time.Time              `json:"valid_from,omitempty"`
+	ValidUntil     *time.Time              `json:"valid_until,omitempty"`
+	CreatedBy      *int64                  `json:"created_by,omitempty"`
+	CreatedAt      time.Time               `json:"created_at"`
+	UpdatedAt      time.Time               `json:"updated_at"`
 }
 
 type CreateInstructionHashRequest struct {
 	Digest         string     `json:"digest"`
+	RawContent     string     `json:"raw_content"`
 	Name           string     `json:"name"`
 	Note           string     `json:"note"`
 	ObservedSource string     `json:"observed_source"`
@@ -88,6 +112,8 @@ type InstructionRuleSet struct {
 	Description      string                   `json:"description"`
 	Enabled          bool                     `json:"enabled"`
 	AllowEmptyFields bool                     `json:"allow_empty_fields"`
+	SystemManaged    bool                     `json:"system_managed"`
+	SystemKey        string                   `json:"system_key,omitempty"`
 	Version          int64                    `json:"version"`
 	Hashes           []InstructionHashEntry   `json:"hashes"`
 	AllowedUsers     []InstructionRuleSetUser `json:"allowed_users"`
@@ -156,9 +182,17 @@ type InstructionEvent struct {
 	Input1                 InstructionFieldResult `json:"input1"`
 	Decision               string                 `json:"decision"`
 	Reason                 string                 `json:"reason"`
+	InitialReason          string                 `json:"initial_reason"`
+	FinalReason            string                 `json:"final_reason"`
+	FinalOutcome           string                 `json:"final_outcome"`
+	PolicyAction           string                 `json:"policy_action"`
 	RuleSetIDs             []int64                `json:"rule_set_ids"`
 	ConfigVersion          int64                  `json:"config_version"`
+	BodyBytes              *int64                 `json:"body_bytes,omitempty"`
 	LatencyMS              int                    `json:"latency_ms"`
+	AuditLatencyMS         int                    `json:"audit_latency_ms"`
+	AILatencyMS            *int                   `json:"ai_latency_ms,omitempty"`
+	AIReviewID             *int64                 `json:"ai_review_id,omitempty"`
 	EvidenceStatus         string                 `json:"evidence_status"`
 	EvidenceExpiresAt      *time.Time             `json:"evidence_expires_at,omitempty"`
 	UserNotificationStatus string                 `json:"user_notification_status"`
@@ -176,6 +210,9 @@ type InstructionEventFilter struct {
 	GroupIDs           []int64    `json:"group_ids,omitempty"`
 	ClientTypes        []string   `json:"client_types,omitempty"`
 	Reasons            []string   `json:"reasons,omitempty"`
+	InitialReasons     []string   `json:"initial_reasons,omitempty"`
+	FinalReasons       []string   `json:"final_reasons,omitempty"`
+	Outcomes           []string   `json:"outcomes,omitempty"`
 	InstructionResults []string   `json:"instructions_results,omitempty"`
 	Input1Results      []string   `json:"input1_results,omitempty"`
 	UserNotifications  []string   `json:"user_notifications,omitempty"`
@@ -286,6 +323,27 @@ type InstructionOverview struct {
 	PersistFailureCount         int64      `json:"persist_failure_count"`
 	EvidenceEncryptionAvailable bool       `json:"evidence_encryption_available"`
 	EvidenceRetentionDays       int        `json:"evidence_retention_days"`
+	MaxBodyBytes                int64      `json:"max_body_bytes"`
+	ParseTimeoutMS              int        `json:"parse_timeout_ms"`
+	MaxInflightBodyBytes        int64      `json:"max_inflight_body_bytes"`
+	AIEnabled                   bool       `json:"ai_enabled"`
+	TranslationEnabled          bool       `json:"translation_enabled"`
+	TranslationPendingCount     int64      `json:"translation_pending_count"`
+	TranslationProcessingCount  int64      `json:"translation_processing_count"`
+	TranslationFailedCount      int64      `json:"translation_failed_count"`
+	TranslationActiveWorkers    int64      `json:"translation_active_workers"`
+	TranslationProcessedTotal   int64      `json:"translation_processed_total"`
+	TranslationWorkerFailTotal  int64      `json:"translation_worker_fail_total"`
+	PersistedOutcomeCount       int64      `json:"persisted_outcome_count"`
+	AggregatedOutcomeCount      int64      `json:"aggregated_outcome_count"`
+	ExpiredAggregateEventCount  int64      `json:"expired_aggregate_event_count"`
+	StatisticsLossCount         int64      `json:"statistics_loss_count"`
+	AuditLatencySampleCount     int64      `json:"audit_latency_sample_count"`
+	AuditLatencyP95MS           int64      `json:"audit_latency_p95_ms"`
+	AuditLatencyP99MS           int64      `json:"audit_latency_p99_ms"`
+	AILatencySampleCount        int64      `json:"ai_latency_sample_count"`
+	AILatencyP95MS              int64      `json:"ai_latency_p95_ms"`
+	AILatencyP99MS              int64      `json:"ai_latency_p99_ms"`
 }
 
 type UpdateInstructionEnabledRequest struct {
@@ -325,6 +383,8 @@ type instructionSnapshot struct {
 	Policies            map[int64]instructionPolicy
 	AuditedClientScopes map[instructionPolicyScope]struct{}
 	ClientPolicies      map[instructionPolicyScope]instructionPolicy
+	ReasonPolicies      map[string]InstructionReasonPolicy
+	Runtime             InstructionRuntimeConfig
 	LoadedAt            time.Time
 }
 

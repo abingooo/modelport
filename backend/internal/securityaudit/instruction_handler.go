@@ -26,6 +26,80 @@ func (h *InstructionAdminHandler) GetOverview(c *gin.Context) {
 	response.Success(c, overview)
 }
 
+func (h *InstructionAdminHandler) GetRuntimeConfig(c *gin.Context) {
+	config, err := h.service.RuntimeConfig(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, config)
+}
+
+func (h *InstructionAdminHandler) UpdateRuntimeConfig(c *gin.Context) {
+	var request UpdateInstructionRuntimeConfigRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_runtime_config", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_runtime_config", "运行配置请求无效"))
+		return
+	}
+	config, err := h.service.UpdateRuntimeConfig(c.Request.Context(), request, adminID(c))
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"expected_config_version": request.ExpectedVersion,
+			"max_body_bytes":          request.MaxBodyBytes,
+			"parse_timeout_ms":        request.ParseTimeoutMS,
+			"ai_enabled":              request.AIEnabled,
+			"translation_enabled":     request.TranslationEnabled,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"config_version":      config.ConfigVersion,
+		"max_body_bytes":      config.MaxBodyBytes,
+		"parse_timeout_ms":    config.ParseTimeoutMS,
+		"ai_enabled":          config.AIEnabled,
+		"translation_enabled": config.TranslationEnabled,
+	})
+	response.Success(c, config)
+}
+
+func (h *InstructionAdminHandler) ListReasonPolicies(c *gin.Context) {
+	items, err := h.service.ListReasonPolicies(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, items)
+}
+
+func (h *InstructionAdminHandler) UpdateReasonPolicy(c *gin.Context) {
+	reason := strings.TrimSpace(c.Param("reason"))
+	var request UpdateInstructionReasonPolicyRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_reason_policy", map[string]any{"reason": reason})
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_reason_policy", "原因策略请求无效"))
+		return
+	}
+	item, err := h.service.UpdateReasonPolicy(c.Request.Context(), reason, request, adminID(c))
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"reason": reason, "action": request.Action,
+			"ai_review_enabled": request.AIReviewEnabled,
+			"alert_enabled":     request.AlertEnabled,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"reason": item.Reason, "action": item.Action,
+		"ai_review_enabled": item.AIReviewEnabled,
+		"alert_enabled":     item.AlertEnabled,
+		"config_version":    item.ConfigVersion,
+	})
+	response.Success(c, item)
+}
+
 func (h *InstructionAdminHandler) UpdateEnabled(c *gin.Context) {
 	var request UpdateInstructionEnabledRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -71,6 +145,116 @@ func (h *InstructionAdminHandler) ListHashes(c *gin.Context) {
 		return
 	}
 	response.Success(c, items)
+}
+
+func (h *InstructionAdminHandler) GetHash(c *gin.Context) {
+	id, ok := instructionIDParam(c, "hash")
+	if !ok {
+		return
+	}
+	item, err := h.service.GetHashDetail(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, item)
+}
+
+func (h *InstructionAdminHandler) RevealHashRaw(c *gin.Context) {
+	id, ok := instructionIDParam(c, "hash")
+	if !ok {
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	item, err := h.service.RevealHashRaw(c.Request.Context(), id, instructionSensitiveAccess(c, "reveal"))
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"hash_id": id, "action": "reveal"})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"hash_id": id, "action": "reveal"})
+	response.Success(c, item)
+}
+
+func (h *InstructionAdminHandler) RecordHashRawCopy(c *gin.Context) {
+	id, ok := instructionIDParam(c, "hash")
+	if !ok {
+		return
+	}
+	if err := h.service.RecordHashRawCopy(c.Request.Context(), id, instructionSensitiveAccess(c, "copy")); err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"hash_id": id, "action": "copy"})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"hash_id": id, "action": "copy"})
+	response.Success(c, gin.H{"recorded": true})
+}
+
+func (h *InstructionAdminHandler) CreateTranslation(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	var request InstructionTranslationRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		h.setAdminAudit(c, "failed", "instruction_audit_invalid_translation_request", nil)
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_translation_request", "翻译请求无效"))
+		return
+	}
+	job, err := h.service.CreateTranslationJob(
+		c.Request.Context(), request, adminID(c), instructionSensitiveAccess(c, "translate"),
+	)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"resource_type": request.ResourceType, "resource_id": request.ResourceID,
+			"field_name": request.FieldName, "provider": request.Provider,
+			"target_language": request.TargetLanguage,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"translation_job_id": job.ID, "resource_type": job.ResourceType,
+		"resource_id": job.ResourceID, "field_name": job.FieldName,
+		"provider": job.Provider, "target_language": job.TargetLanguage,
+	})
+	response.Success(c, job)
+}
+
+func (h *InstructionAdminHandler) GetTranslation(c *gin.Context) {
+	id, ok := instructionIDParam(c, "translation_job")
+	if !ok {
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	job, err := h.service.GetTranslationJob(
+		c.Request.Context(), id, instructionSensitiveAccess(c, "reveal"),
+	)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"translation_job_id": id})
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, job)
+}
+
+func (h *InstructionAdminHandler) ChangeHashStatus(c *gin.Context) {
+	id, ok := instructionIDParam(c, "hash")
+	if !ok {
+		return
+	}
+	var request ChangeInstructionHashStatusRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_hash_status", "哈希状态请求无效"))
+		return
+	}
+	item, err := h.service.ChangeHashStatus(
+		c.Request.Context(), id, request.Status, adminID(c), instructionSensitiveAccess(c, ""),
+	)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{"hash_id": id, "status": request.Status})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{"hash_id": id, "status": item.Status})
+	response.Success(c, item)
 }
 
 func (h *InstructionAdminHandler) CreateHash(c *gin.Context) {
@@ -256,6 +440,20 @@ func (h *InstructionAdminHandler) ListEvents(c *gin.Context) {
 	response.Success(c, items)
 }
 
+func (h *InstructionAdminHandler) GetStatistics(c *gin.Context) {
+	filter, err := instructionEventFilterFromQuery(c)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	statistics, err := h.service.Statistics(c.Request.Context(), filter)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, statistics)
+}
+
 func (h *InstructionAdminHandler) DeleteEvent(c *gin.Context) {
 	id, ok := instructionIDParam(c, "event")
 	if !ok {
@@ -381,6 +579,19 @@ func (h *InstructionAdminHandler) GetEvent(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *InstructionAdminHandler) ListEventAIReviews(c *gin.Context) {
+	id, ok := instructionIDParam(c, "event")
+	if !ok {
+		return
+	}
+	items, err := h.service.ListAIReviewsForEvent(c.Request.Context(), id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, items)
+}
+
 func (h *InstructionAdminHandler) CreateCandidate(c *gin.Context) {
 	id, ok := instructionIDParam(c, "event")
 	if !ok {
@@ -453,6 +664,9 @@ func optionalInstructionUserID(value string) (int64, error) {
 func instructionEventFilterFromQuery(c *gin.Context) (InstructionEventFilter, error) {
 	filter := InstructionEventFilter{
 		Query: c.Query("q"), Model: c.Query("model"), Reasons: splitInstructionQuery(c.Query("reasons")),
+		InitialReasons:     splitInstructionQuery(c.Query("initial_reasons")),
+		FinalReasons:       splitInstructionQuery(c.Query("final_reasons")),
+		Outcomes:           splitInstructionQuery(c.Query("final_outcomes")),
 		InstructionResults: splitInstructionQuery(c.Query("instructions_results")),
 		Input1Results:      splitInstructionQuery(c.Query("input1_results")),
 		UserNotifications:  splitInstructionQuery(c.Query("user_notifications")),
@@ -519,6 +733,17 @@ func instructionEvidenceAccess(c *gin.Context, action, source string) Instructio
 	}
 	return InstructionEvidenceAccess{
 		ActorID: adminID(c), Action: action, Source: source, RequestID: requestID,
+		ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent"),
+	}
+}
+
+func instructionSensitiveAccess(c *gin.Context, action string) InstructionSensitiveAccess {
+	requestID := strings.TrimSpace(c.GetHeader("X-Request-Id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(c.Writer.Header().Get("X-Request-Id"))
+	}
+	return InstructionSensitiveAccess{
+		ActorID: adminID(c), Action: action, RequestID: requestID,
 		ClientIP: c.ClientIP(), UserAgent: c.GetHeader("User-Agent"),
 	}
 }

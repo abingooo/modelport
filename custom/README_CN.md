@@ -6,6 +6,10 @@
 TokensHub 首次切换 ModelPort 的生产准入、蓝绿迁移和回滚边界见
 [`docs/MODELPORT_PRODUCTION_CUTOVER_CN.md`](../docs/MODELPORT_PRODUCTION_CUTOVER_CN.md)。
 
+指令审核的执行架构、安全边界和管理员操作分别见
+[`docs/INSTRUCTION_AUDIT_ARCHITECTURE_CN.md`](../docs/INSTRUCTION_AUDIT_ARCHITECTURE_CN.md) 和
+[`docs/INSTRUCTION_AUDIT_ADMIN_GUIDE_CN.md`](../docs/INSTRUCTION_AUDIT_ADMIN_GUIDE_CN.md)。
+
 ## 本地工具链
 
 每次进入新终端后加载项目工具链：

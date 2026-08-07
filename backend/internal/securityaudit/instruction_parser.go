@@ -1,27 +1,27 @@
 package securityaudit
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
 const (
-	maxInstructionAuditBodyBytes  = 16 << 20
+	maxInstructionAuditBodyBytes  = 64 << 20
 	maxInstructionAuditDepth      = 64
 	maxInstructionAuditTextBytes  = 1 << 20
+	maxInstructionAuditKeyBytes   = 1 << 20
 	maxInstructionAuditInputItems = 256
 	maxInstructionAuditJSONValues = 64 << 10
 	maxInstructionAuditContainer  = 16 << 10
-	maxInstructionAuditParseTime  = 250 * time.Millisecond
+	maxInstructionAuditParseTime  = 500 * time.Millisecond
+	instructionAuditClockInterval = 4 << 10
 )
 
 var (
@@ -38,8 +38,70 @@ type instructionInspection struct {
 	Reason       string
 }
 
+type instructionAuditParserLimits struct {
+	MaxBodyBytes      int
+	MaxDepth          int
+	MaxTextBytes      int
+	MaxKeyBytes       int
+	MaxInputItems     int
+	MaxJSONValues     int
+	MaxContainerItems int
+	ParseTimeout      time.Duration
+	now               func() time.Time
+}
+
+func defaultInstructionAuditParserLimits() instructionAuditParserLimits {
+	return instructionAuditParserLimits{
+		MaxBodyBytes:      maxInstructionAuditBodyBytes,
+		MaxDepth:          maxInstructionAuditDepth,
+		MaxTextBytes:      maxInstructionAuditTextBytes,
+		MaxKeyBytes:       maxInstructionAuditKeyBytes,
+		MaxInputItems:     maxInstructionAuditInputItems,
+		MaxJSONValues:     maxInstructionAuditJSONValues,
+		MaxContainerItems: maxInstructionAuditContainer,
+		ParseTimeout:      maxInstructionAuditParseTime,
+		now:               time.Now,
+	}
+}
+
+func (limits instructionAuditParserLimits) normalized() instructionAuditParserLimits {
+	defaults := defaultInstructionAuditParserLimits()
+	if limits.MaxBodyBytes <= 0 {
+		limits.MaxBodyBytes = defaults.MaxBodyBytes
+	}
+	if limits.MaxDepth <= 0 {
+		limits.MaxDepth = defaults.MaxDepth
+	}
+	if limits.MaxTextBytes <= 0 {
+		limits.MaxTextBytes = defaults.MaxTextBytes
+	}
+	if limits.MaxKeyBytes <= 0 {
+		limits.MaxKeyBytes = defaults.MaxKeyBytes
+	}
+	if limits.MaxInputItems <= 0 {
+		limits.MaxInputItems = defaults.MaxInputItems
+	}
+	if limits.MaxJSONValues <= 0 {
+		limits.MaxJSONValues = defaults.MaxJSONValues
+	}
+	if limits.MaxContainerItems <= 0 {
+		limits.MaxContainerItems = defaults.MaxContainerItems
+	}
+	if limits.ParseTimeout <= 0 {
+		limits.ParseTimeout = defaults.ParseTimeout
+	}
+	if limits.now == nil {
+		limits.now = defaults.now
+	}
+	return limits
+}
+
 func inspectInstructionPayload(body []byte, allowed []instructionPolicyHash) instructionInspection {
-	root, err := decodeStrictJSONObject(body)
+	return inspectInstructionPayloadWithLimits(body, allowed, defaultInstructionAuditParserLimits())
+}
+
+func inspectInstructionPayloadWithLimits(body []byte, allowed []instructionPolicyHash, limits instructionAuditParserLimits) instructionInspection {
+	root, err := decodeStrictJSONObjectWithLimits(body, limits)
 	if err != nil {
 		return instructionInspection{
 			Instructions: InstructionFieldResult{Result: "invalid"},
@@ -244,106 +306,610 @@ func instructionAuditParseReason(err error) string {
 }
 
 func decodeStrictJSONObject(body []byte) (map[string]any, error) {
+	return decodeStrictJSONObjectWithLimits(body, defaultInstructionAuditParserLimits())
+}
+
+func decodeStrictJSONObjectWithLimits(body []byte, limits instructionAuditParserLimits) (map[string]any, error) {
+	limits = limits.normalized()
 	if len(body) == 0 {
 		return nil, errInstructionAuditInvalidJSON
 	}
-	if len(body) > maxInstructionAuditBodyBytes {
+	if len(body) > limits.MaxBodyBytes {
 		return nil, errInstructionAuditBodyTooLarge
 	}
 	if !utf8.Valid(body) {
 		return nil, errInstructionAuditInvalidJSON
 	}
-	decoder := json.NewDecoder(bytes.NewReader(body))
-	decoder.UseNumber()
-	state := strictJSONDecodeState{deadline: time.Now().Add(maxInstructionAuditParseTime)}
-	value, err := decodeStrictJSONValue(decoder, 0, &state)
+	parser := strictInstructionJSONParser{
+		body: body, limits: limits, deadline: limits.now().Add(limits.ParseTimeout),
+		nextClockCheck: instructionAuditClockInterval,
+	}
+	root, err := parser.parseRoot()
 	if err != nil {
 		return nil, err
 	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return nil, errInstructionAuditInvalidJSON
-	}
-	root, ok := value.(map[string]any)
-	if !ok {
+	parser.skipWhitespace()
+	if parser.position != len(body) {
 		return nil, errInstructionAuditInvalidJSON
 	}
 	return root, nil
 }
 
-type strictJSONDecodeState struct {
-	values   int
-	deadline time.Time
+type instructionInvalidJSONValue struct{}
+
+type strictInstructionJSONParser struct {
+	body           []byte
+	position       int
+	values         int
+	limits         instructionAuditParserLimits
+	deadline       time.Time
+	nextClockCheck int
 }
 
-func decodeStrictJSONValue(decoder *json.Decoder, depth int, state *strictJSONDecodeState) (any, error) {
-	if depth > maxInstructionAuditDepth {
-		return nil, fmt.Errorf("%w: nesting too deep", errInstructionAuditInvalidJSON)
+func (parser *strictInstructionJSONParser) parseRoot() (map[string]any, error) {
+	if err := parser.beginValue(0); err != nil {
+		return nil, err
 	}
-	state.values++
-	if state.values > maxInstructionAuditJSONValues {
-		return nil, errInstructionAuditComplexityExceeded
-	}
-	if state.values%256 == 0 && time.Now().After(state.deadline) {
-		return nil, errInstructionAuditParseTimeout
-	}
-	token, err := decoder.Token()
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", errInstructionAuditInvalidJSON, err)
-	}
-	if time.Now().After(state.deadline) {
-		return nil, errInstructionAuditParseTimeout
-	}
-	delim, isDelim := token.(json.Delim)
-	if !isDelim {
-		return token, nil
-	}
-	switch delim {
-	case '{':
-		object := make(map[string]any)
-		for decoder.More() {
-			if len(object) >= maxInstructionAuditContainer {
-				return nil, errInstructionAuditComplexityExceeded
-			}
-			keyToken, keyErr := decoder.Token()
-			if keyErr != nil {
-				return nil, fmt.Errorf("%w: %v", errInstructionAuditInvalidJSON, keyErr)
-			}
-			key, ok := keyToken.(string)
-			if !ok {
-				return nil, errInstructionAuditInvalidJSON
-			}
-			if _, duplicate := object[key]; duplicate {
-				return nil, fmt.Errorf("%w: duplicate key", errInstructionAuditInvalidJSON)
-			}
-			value, valueErr := decodeStrictJSONValue(decoder, depth+1, state)
-			if valueErr != nil {
-				return nil, valueErr
-			}
-			object[key] = value
-		}
-		closing, closeErr := decoder.Token()
-		if closeErr != nil || closing != json.Delim('}') {
-			return nil, errInstructionAuditInvalidJSON
-		}
-		return object, nil
-	case '[':
-		array := make([]any, 0)
-		for decoder.More() {
-			if len(array) >= maxInstructionAuditContainer {
-				return nil, errInstructionAuditComplexityExceeded
-			}
-			value, valueErr := decodeStrictJSONValue(decoder, depth+1, state)
-			if valueErr != nil {
-				return nil, valueErr
-			}
-			array = append(array, value)
-		}
-		closing, closeErr := decoder.Token()
-		if closeErr != nil || closing != json.Delim(']') {
-			return nil, errInstructionAuditInvalidJSON
-		}
-		return array, nil
-	default:
+	parser.skipWhitespace()
+	if !parser.consumeByte('{') {
 		return nil, errInstructionAuditInvalidJSON
 	}
+	result := make(map[string]any, 3)
+	seen := make(map[string]struct{})
+	count := 0
+	parser.skipWhitespace()
+	if parser.consumeByte('}') {
+		return result, nil
+	}
+	for {
+		count++
+		if count > parser.limits.MaxContainerItems {
+			return nil, errInstructionAuditComplexityExceeded
+		}
+		key, err := parser.parseObjectKey(seen)
+		if err != nil {
+			return nil, err
+		}
+		parser.skipWhitespace()
+		if !parser.consumeByte(':') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+		switch key {
+		case "instructions", "model":
+			result[key], err = parser.parseCapturedStringOrInvalid(1, parser.limits.MaxTextBytes)
+		case "input":
+			result[key], err = parser.parseInput(1)
+		default:
+			err = parser.skipValue(1)
+		}
+		if err != nil {
+			return nil, err
+		}
+		parser.skipWhitespace()
+		if parser.consumeByte('}') {
+			return result, nil
+		}
+		if !parser.consumeByte(',') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+	}
+}
+
+func (parser *strictInstructionJSONParser) parseInput(depth int) (any, error) {
+	parser.skipWhitespace()
+	if parser.peekByte() != '[' {
+		if err := parser.skipValue(depth); err != nil {
+			return nil, err
+		}
+		return instructionInvalidJSONValue{}, nil
+	}
+	if err := parser.beginValue(depth); err != nil {
+		return nil, err
+	}
+	parser.position++
+	result := make([]any, 0, 2)
+	count := 0
+	parser.skipWhitespace()
+	if parser.consumeByte(']') {
+		return result, nil
+	}
+	for {
+		if count >= parser.limits.MaxContainerItems {
+			return nil, errInstructionAuditComplexityExceeded
+		}
+		if count == 1 {
+			item, err := parser.parseInputItem(depth + 1)
+			if err != nil {
+				return nil, err
+			}
+			result = append(result, item)
+		} else {
+			if err := parser.skipValue(depth + 1); err != nil {
+				return nil, err
+			}
+			if count == 0 {
+				result = append(result, nil)
+			}
+		}
+		count++
+		parser.skipWhitespace()
+		if parser.consumeByte(']') {
+			return result, nil
+		}
+		if !parser.consumeByte(',') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+	}
+}
+
+func (parser *strictInstructionJSONParser) parseInputItem(depth int) (any, error) {
+	parser.skipWhitespace()
+	if parser.peekByte() != '{' {
+		if err := parser.skipValue(depth); err != nil {
+			return nil, err
+		}
+		return instructionInvalidJSONValue{}, nil
+	}
+	if err := parser.beginValue(depth); err != nil {
+		return nil, err
+	}
+	parser.position++
+	result := make(map[string]any, 1)
+	seen := make(map[string]struct{})
+	count := 0
+	parser.skipWhitespace()
+	if parser.consumeByte('}') {
+		return result, nil
+	}
+	for {
+		count++
+		if count > parser.limits.MaxContainerItems {
+			return nil, errInstructionAuditComplexityExceeded
+		}
+		key, err := parser.parseObjectKey(seen)
+		if err != nil {
+			return nil, err
+		}
+		parser.skipWhitespace()
+		if !parser.consumeByte(':') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+		if key == "content" {
+			result[key], err = parser.parseInputContent(depth + 1)
+		} else {
+			err = parser.skipValue(depth + 1)
+		}
+		if err != nil {
+			return nil, err
+		}
+		parser.skipWhitespace()
+		if parser.consumeByte('}') {
+			return result, nil
+		}
+		if !parser.consumeByte(',') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+	}
+}
+
+func (parser *strictInstructionJSONParser) parseInputContent(depth int) (any, error) {
+	parser.skipWhitespace()
+	if parser.peekByte() != '[' {
+		if err := parser.skipValue(depth); err != nil {
+			return nil, err
+		}
+		return instructionInvalidJSONValue{}, nil
+	}
+	if err := parser.beginValue(depth); err != nil {
+		return nil, err
+	}
+	parser.position++
+	blocks := make([]any, 0)
+	count := 0
+	tooMany := false
+	parser.skipWhitespace()
+	if parser.consumeByte(']') {
+		return blocks, nil
+	}
+	for {
+		if count >= parser.limits.MaxContainerItems {
+			return nil, errInstructionAuditComplexityExceeded
+		}
+		block, err := parser.parseInputContentBlock(depth + 1)
+		if err != nil {
+			return nil, err
+		}
+		if count < parser.limits.MaxInputItems {
+			blocks = append(blocks, block)
+		} else {
+			tooMany = true
+		}
+		count++
+		parser.skipWhitespace()
+		if parser.consumeByte(']') {
+			if tooMany {
+				return instructionInvalidJSONValue{}, nil
+			}
+			return blocks, nil
+		}
+		if !parser.consumeByte(',') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+	}
+}
+
+func (parser *strictInstructionJSONParser) parseInputContentBlock(depth int) (any, error) {
+	parser.skipWhitespace()
+	if parser.peekByte() != '{' {
+		if err := parser.skipValue(depth); err != nil {
+			return nil, err
+		}
+		return instructionInvalidJSONValue{}, nil
+	}
+	if err := parser.beginValue(depth); err != nil {
+		return nil, err
+	}
+	parser.position++
+	result := make(map[string]any, 2)
+	seen := make(map[string]struct{})
+	count := 0
+	parser.skipWhitespace()
+	if parser.consumeByte('}') {
+		return result, nil
+	}
+	for {
+		count++
+		if count > parser.limits.MaxContainerItems {
+			return nil, errInstructionAuditComplexityExceeded
+		}
+		key, err := parser.parseObjectKey(seen)
+		if err != nil {
+			return nil, err
+		}
+		parser.skipWhitespace()
+		if !parser.consumeByte(':') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+		if key == "type" || key == "text" {
+			result[key], err = parser.parseCapturedStringOrInvalid(depth+1, parser.limits.MaxTextBytes)
+		} else {
+			err = parser.skipValue(depth + 1)
+		}
+		if err != nil {
+			return nil, err
+		}
+		parser.skipWhitespace()
+		if parser.consumeByte('}') {
+			return result, nil
+		}
+		if !parser.consumeByte(',') {
+			return nil, errInstructionAuditInvalidJSON
+		}
+	}
+}
+
+func (parser *strictInstructionJSONParser) parseCapturedStringOrInvalid(depth, maxBytes int) (any, error) {
+	parser.skipWhitespace()
+	if parser.peekByte() != '"' {
+		if err := parser.skipValue(depth); err != nil {
+			return nil, err
+		}
+		return instructionInvalidJSONValue{}, nil
+	}
+	if err := parser.beginValue(depth); err != nil {
+		return nil, err
+	}
+	start, end, err := parser.scanString()
+	if err != nil {
+		return nil, err
+	}
+	value, err := parser.decodeString(start, end, maxBytes)
+	if errors.Is(err, errInstructionAuditComplexityExceeded) {
+		return instructionInvalidJSONValue{}, nil
+	}
+	return value, err
+}
+
+func (parser *strictInstructionJSONParser) skipValue(depth int) error {
+	if err := parser.beginValue(depth); err != nil {
+		return err
+	}
+	parser.skipWhitespace()
+	switch parser.peekByte() {
+	case '"':
+		_, _, err := parser.scanString()
+		return err
+	case '{':
+		parser.position++
+		seen := make(map[string]struct{})
+		count := 0
+		parser.skipWhitespace()
+		if parser.consumeByte('}') {
+			return nil
+		}
+		for {
+			count++
+			if count > parser.limits.MaxContainerItems {
+				return errInstructionAuditComplexityExceeded
+			}
+			if _, err := parser.parseObjectKey(seen); err != nil {
+				return err
+			}
+			parser.skipWhitespace()
+			if !parser.consumeByte(':') {
+				return errInstructionAuditInvalidJSON
+			}
+			if err := parser.skipValue(depth + 1); err != nil {
+				return err
+			}
+			parser.skipWhitespace()
+			if parser.consumeByte('}') {
+				return nil
+			}
+			if !parser.consumeByte(',') {
+				return errInstructionAuditInvalidJSON
+			}
+		}
+	case '[':
+		parser.position++
+		count := 0
+		parser.skipWhitespace()
+		if parser.consumeByte(']') {
+			return nil
+		}
+		for {
+			count++
+			if count > parser.limits.MaxContainerItems {
+				return errInstructionAuditComplexityExceeded
+			}
+			if err := parser.skipValue(depth + 1); err != nil {
+				return err
+			}
+			parser.skipWhitespace()
+			if parser.consumeByte(']') {
+				return nil
+			}
+			if !parser.consumeByte(',') {
+				return errInstructionAuditInvalidJSON
+			}
+		}
+	case 't':
+		return parser.consumeLiteral("true")
+	case 'f':
+		return parser.consumeLiteral("false")
+	case 'n':
+		return parser.consumeLiteral("null")
+	default:
+		return parser.consumeNumber()
+	}
+}
+
+func (parser *strictInstructionJSONParser) parseObjectKey(seen map[string]struct{}) (string, error) {
+	parser.skipWhitespace()
+	if parser.peekByte() != '"' {
+		return "", errInstructionAuditInvalidJSON
+	}
+	start, end, err := parser.scanString()
+	if err != nil {
+		return "", err
+	}
+	key, err := parser.decodeString(start, end, parser.limits.MaxKeyBytes)
+	if err != nil {
+		return "", err
+	}
+	if _, duplicate := seen[key]; duplicate {
+		return "", fmt.Errorf("%w: duplicate key", errInstructionAuditInvalidJSON)
+	}
+	seen[key] = struct{}{}
+	return key, nil
+}
+
+func (parser *strictInstructionJSONParser) scanString() (int, int, error) {
+	if !parser.consumeByte('"') {
+		return 0, 0, errInstructionAuditInvalidJSON
+	}
+	start := parser.position - 1
+	for parser.position < len(parser.body) {
+		if err := parser.checkDeadline(); err != nil {
+			return 0, 0, err
+		}
+		value := parser.body[parser.position]
+		parser.position++
+		switch value {
+		case '"':
+			return start, parser.position, nil
+		case '\\':
+			if parser.position >= len(parser.body) {
+				return 0, 0, errInstructionAuditInvalidJSON
+			}
+			escaped := parser.body[parser.position]
+			parser.position++
+			switch escaped {
+			case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
+			case 'u':
+				codePoint, err := parser.consumeUnicodeEscape()
+				if err != nil {
+					return 0, 0, err
+				}
+				if codePoint >= 0xD800 && codePoint <= 0xDBFF {
+					if parser.position+2 > len(parser.body) || parser.body[parser.position] != '\\' || parser.body[parser.position+1] != 'u' {
+						return 0, 0, errInstructionAuditInvalidJSON
+					}
+					parser.position += 2
+					low, lowErr := parser.consumeUnicodeEscape()
+					if lowErr != nil || low < 0xDC00 || low > 0xDFFF {
+						return 0, 0, errInstructionAuditInvalidJSON
+					}
+				} else if codePoint >= 0xDC00 && codePoint <= 0xDFFF {
+					return 0, 0, errInstructionAuditInvalidJSON
+				}
+			default:
+				return 0, 0, errInstructionAuditInvalidJSON
+			}
+		default:
+			if value < 0x20 {
+				return 0, 0, errInstructionAuditInvalidJSON
+			}
+		}
+	}
+	return 0, 0, errInstructionAuditInvalidJSON
+}
+
+func (parser *strictInstructionJSONParser) consumeUnicodeEscape() (int, error) {
+	if parser.position+4 > len(parser.body) {
+		return 0, errInstructionAuditInvalidJSON
+	}
+	value := 0
+	for range 4 {
+		digit := hexDigitValue(parser.body[parser.position])
+		if digit < 0 {
+			return 0, errInstructionAuditInvalidJSON
+		}
+		value = value*16 + digit
+		parser.position++
+	}
+	return value, nil
+}
+
+func hexDigitValue(value byte) int {
+	switch {
+	case value >= '0' && value <= '9':
+		return int(value - '0')
+	case value >= 'a' && value <= 'f':
+		return int(value-'a') + 10
+	case value >= 'A' && value <= 'F':
+		return int(value-'A') + 10
+	default:
+		return -1
+	}
+}
+
+func (parser *strictInstructionJSONParser) decodeString(start, end, maxBytes int) (string, error) {
+	if end-start > maxBytes*6+2 {
+		return "", errInstructionAuditComplexityExceeded
+	}
+	value, err := strconv.Unquote(string(parser.body[start:end]))
+	if err != nil {
+		return "", errInstructionAuditInvalidJSON
+	}
+	if len(value) > maxBytes {
+		return "", errInstructionAuditComplexityExceeded
+	}
+	return value, nil
+}
+
+func (parser *strictInstructionJSONParser) consumeLiteral(literal string) error {
+	if parser.position+len(literal) > len(parser.body) || string(parser.body[parser.position:parser.position+len(literal)]) != literal {
+		return errInstructionAuditInvalidJSON
+	}
+	parser.position += len(literal)
+	if !parser.atValueBoundary() {
+		return errInstructionAuditInvalidJSON
+	}
+	return nil
+}
+
+func (parser *strictInstructionJSONParser) consumeNumber() error {
+	start := parser.position
+	if parser.consumeByte('-') && parser.position >= len(parser.body) {
+		return errInstructionAuditInvalidJSON
+	}
+	if parser.consumeByte('0') {
+		if parser.position < len(parser.body) && parser.body[parser.position] >= '0' && parser.body[parser.position] <= '9' {
+			return errInstructionAuditInvalidJSON
+		}
+	} else {
+		if parser.position >= len(parser.body) || parser.body[parser.position] < '1' || parser.body[parser.position] > '9' {
+			return errInstructionAuditInvalidJSON
+		}
+		for parser.position < len(parser.body) && parser.body[parser.position] >= '0' && parser.body[parser.position] <= '9' {
+			parser.position++
+		}
+	}
+	if parser.consumeByte('.') {
+		fractionStart := parser.position
+		for parser.position < len(parser.body) && parser.body[parser.position] >= '0' && parser.body[parser.position] <= '9' {
+			parser.position++
+		}
+		if parser.position == fractionStart {
+			return errInstructionAuditInvalidJSON
+		}
+	}
+	if parser.position < len(parser.body) && (parser.body[parser.position] == 'e' || parser.body[parser.position] == 'E') {
+		parser.position++
+		if parser.position < len(parser.body) && (parser.body[parser.position] == '+' || parser.body[parser.position] == '-') {
+			parser.position++
+		}
+		exponentStart := parser.position
+		for parser.position < len(parser.body) && parser.body[parser.position] >= '0' && parser.body[parser.position] <= '9' {
+			parser.position++
+		}
+		if parser.position == exponentStart {
+			return errInstructionAuditInvalidJSON
+		}
+	}
+	if parser.position == start || !parser.atValueBoundary() {
+		return errInstructionAuditInvalidJSON
+	}
+	return parser.checkDeadline()
+}
+
+func (parser *strictInstructionJSONParser) beginValue(depth int) error {
+	if depth > parser.limits.MaxDepth {
+		return fmt.Errorf("%w: nesting too deep", errInstructionAuditInvalidJSON)
+	}
+	parser.values++
+	if parser.values > parser.limits.MaxJSONValues {
+		return errInstructionAuditComplexityExceeded
+	}
+	return parser.checkDeadline()
+}
+
+func (parser *strictInstructionJSONParser) skipWhitespace() {
+	for parser.position < len(parser.body) {
+		switch parser.body[parser.position] {
+		case ' ', '\t', '\r', '\n':
+			parser.position++
+		default:
+			return
+		}
+	}
+}
+
+func (parser *strictInstructionJSONParser) peekByte() byte {
+	if parser.position >= len(parser.body) {
+		return 0
+	}
+	return parser.body[parser.position]
+}
+
+func (parser *strictInstructionJSONParser) consumeByte(expected byte) bool {
+	if parser.position >= len(parser.body) || parser.body[parser.position] != expected {
+		return false
+	}
+	parser.position++
+	return true
+}
+
+func (parser *strictInstructionJSONParser) atValueBoundary() bool {
+	if parser.position >= len(parser.body) {
+		return true
+	}
+	switch parser.body[parser.position] {
+	case ' ', '\t', '\r', '\n', ',', '}', ']':
+		return true
+	default:
+		return false
+	}
+}
+
+func (parser *strictInstructionJSONParser) checkDeadline() error {
+	if parser.position < parser.nextClockCheck && parser.values%256 != 0 {
+		return nil
+	}
+	parser.nextClockCheck = parser.position + instructionAuditClockInterval
+	if parser.limits.now().After(parser.deadline) {
+		return errInstructionAuditParseTimeout
+	}
+	return nil
 }

@@ -1158,16 +1158,18 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Category:    "risk_control",
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
-			"request_id", "triggered_at", "model", "group_name", "admin_qq"),
+			"event_id", "request_id", "triggered_at", "model", "group_name", "final_reason", "admin_qq"),
 	},
 	NotificationEmailEventInstructionAuditOpsNotice: {
 		Event:       NotificationEmailEventInstructionAuditOpsNotice,
 		Label:       "Instruction audit operations notice",
-		Description: "Sent to operations recipients when instruction audit rejects a request.",
+		Description: "Sent to operations recipients when instruction audit blocks or policy-allows a request.",
 		Category:    "risk_control",
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
-			"request_id", "triggered_at", "user_id", "user_email", "api_key_id", "group_id", "group_name", "client_type", "model"),
+			"event_id", "request_id", "triggered_at", "user_id", "user_email", "api_key_id", "group_id", "group_name",
+			"client_type", "model", "initial_reason", "final_reason", "final_outcome", "policy_action", "config_version",
+			"instructions_present", "instructions_result", "instructions_sha256", "input1_present", "input1_result", "input1_sha256"),
 	},
 	NotificationEmailEventOpsAlert: {
 		Event:       NotificationEmailEventOpsAlert,
@@ -1473,7 +1475,8 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>Hello {{recipient_name}},</p>
 <p>Your request was suspected of attempting to bypass safety restrictions and was rejected.</p>
 <table style="width:100%;border-collapse:collapse;">
-  <tr><td>Request ID</td><td>{{request_id}}</td></tr><tr><td>Time</td><td>{{triggered_at}}</td></tr>
+	  <tr><td>Event ID</td><td>{{event_id}}</td></tr><tr><td>Request ID</td><td>{{request_id}}</td></tr>
+	  <tr><td>Time</td><td>{{triggered_at}}</td></tr><tr><td>Reason</td><td>{{final_reason}}</td></tr>
   <tr><td>Model</td><td>{{model}}</td></tr><tr><td>Group</td><td>{{group_name}}</td></tr>
 </table>
 <p>If this was not your request, rotate the affected API key. For false positives, contact the administrator (QQ {{admin_qq}}).</p>`),
@@ -1484,7 +1487,8 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>{{recipient_name}}，您好：</p>
 <p>您的请求疑似尝试绕过安全限制，已被拒绝。</p>
 <table style="width:100%;border-collapse:collapse;">
-  <tr><td>请求 ID</td><td>{{request_id}}</td></tr><tr><td>时间</td><td>{{triggered_at}}</td></tr>
+	  <tr><td>事件编号</td><td>{{event_id}}</td></tr><tr><td>请求 ID</td><td>{{request_id}}</td></tr>
+	  <tr><td>时间</td><td>{{triggered_at}}</td></tr><tr><td>拒绝原因</td><td>{{final_reason}}</td></tr>
   <tr><td>模型</td><td>{{model}}</td></tr><tr><td>分组</td><td>{{group_name}}</td></tr>
 </table>
 <p>如非本人操作，请及时更换相关 API 密钥；如有误判，请联系本站管理员 QQ {{admin_qq}}。</p>`),
@@ -1492,26 +1496,34 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 	},
 	NotificationEmailEventInstructionAuditOpsNotice: {
 		notificationEmailDefaultLocale: {
-			Subject: "[{{site_name}}] Instruction audit rejection",
-			HTML: notificationEmailCard("#2563eb", "Instruction audit rejection", `
-<p>A request was rejected by instruction audit.</p>
-<table style="width:100%;border-collapse:collapse;">
-  <tr><td>Request ID</td><td>{{request_id}}</td></tr><tr><td>Time</td><td>{{triggered_at}}</td></tr>
-  <tr><td>User</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
-  <tr><td>Group</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>Client</td><td>{{client_type}}</td></tr>
-  <tr><td>Model</td><td>{{model}}</td></tr>
-</table>`),
+			Subject: "[{{site_name}}] Instruction audit event {{event_id}}",
+			HTML: notificationEmailCard("#2563eb", "Instruction audit event", `
+	<p>Instruction audit recorded a blocked or policy-allowed request.</p>
+	<table style="width:100%;border-collapse:collapse;">
+	  <tr><td>Event ID</td><td>{{event_id}}</td></tr><tr><td>Request ID</td><td>{{request_id}}</td></tr>
+	  <tr><td>Time</td><td>{{triggered_at}}</td></tr><tr><td>Outcome</td><td>{{final_outcome}}</td></tr>
+	  <tr><td>Initial reason</td><td>{{initial_reason}}</td></tr><tr><td>Final reason</td><td>{{final_reason}}</td></tr>
+	  <tr><td>Policy action</td><td>{{policy_action}}</td></tr><tr><td>Config version</td><td>{{config_version}}</td></tr>
+	  <tr><td>User</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
+	  <tr><td>Group</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>Client</td><td>{{client_type}}</td></tr>
+	  <tr><td>Model</td><td>{{model}}</td></tr><tr><td>instructions</td><td>{{instructions_present}} / {{instructions_result}} / {{instructions_sha256}}</td></tr>
+	  <tr><td>input[1]</td><td>{{input1_present}} / {{input1_result}} / {{input1_sha256}}</td></tr>
+	</table>`),
 		},
 		notificationEmailLocaleChinese: {
-			Subject: "[{{site_name}}] 指令审核拦截通知",
-			HTML: notificationEmailCard("#2563eb", "指令审核拦截通知", `
-<p>指令审核拒绝了一次请求。</p>
-<table style="width:100%;border-collapse:collapse;">
-  <tr><td>请求 ID</td><td>{{request_id}}</td></tr><tr><td>时间</td><td>{{triggered_at}}</td></tr>
-  <tr><td>用户</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
-  <tr><td>分组</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>客户端</td><td>{{client_type}}</td></tr>
-  <tr><td>模型</td><td>{{model}}</td></tr>
-</table>`),
+			Subject: "[{{site_name}}] 指令审核事件 {{event_id}}",
+			HTML: notificationEmailCard("#2563eb", "指令审核事件", `
+	<p>指令审核记录了一次拦截或策略放行请求。</p>
+	<table style="width:100%;border-collapse:collapse;">
+	  <tr><td>事件编号</td><td>{{event_id}}</td></tr><tr><td>请求 ID</td><td>{{request_id}}</td></tr>
+	  <tr><td>时间</td><td>{{triggered_at}}</td></tr><tr><td>最终结果</td><td>{{final_outcome}}</td></tr>
+	  <tr><td>初始原因</td><td>{{initial_reason}}</td></tr><tr><td>最终原因</td><td>{{final_reason}}</td></tr>
+	  <tr><td>策略动作</td><td>{{policy_action}}</td></tr><tr><td>配置版本</td><td>{{config_version}}</td></tr>
+	  <tr><td>用户</td><td>{{user_email}} (#{{user_id}})</td></tr><tr><td>API Key ID</td><td>{{api_key_id}}</td></tr>
+	  <tr><td>分组</td><td>{{group_name}} (#{{group_id}})</td></tr><tr><td>客户端</td><td>{{client_type}}</td></tr>
+	  <tr><td>模型</td><td>{{model}}</td></tr><tr><td>instructions</td><td>{{instructions_present}} / {{instructions_result}} / {{instructions_sha256}}</td></tr>
+	  <tr><td>input[1]</td><td>{{input1_present}} / {{input1_result}} / {{input1_sha256}}</td></tr>
+	</table>`),
 		},
 	},
 	NotificationEmailEventOpsAlert: {

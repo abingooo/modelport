@@ -34,3 +34,20 @@ func TestInstructionEvidenceCipherRoundTripAndAADIsolation(t *testing.T) {
 	_, err = cipher.Decrypt("input1", digest, encrypted)
 	require.Error(t, err)
 }
+
+func TestInstructionHashRawCipherUsesDedicatedPurposeAndDigestAAD(t *testing.T) {
+	cipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("42", 32), EncryptionKeyConfigured: true},
+	})
+	require.NoError(t, err)
+	digest := sha256Hex("standard instruction")
+	encrypted, err := cipher.EncryptHashRaw(digest, "standard instruction")
+	require.NoError(t, err)
+	plaintext, err := cipher.DecryptHashRaw(digest, encrypted)
+	require.NoError(t, err)
+	require.Equal(t, "standard instruction", plaintext)
+	_, err = cipher.DecryptHashRaw(sha256Hex("other"), encrypted)
+	require.Error(t, err)
+	_, err = cipher.Decrypt("instructions", digest, encrypted)
+	require.Error(t, err)
+}

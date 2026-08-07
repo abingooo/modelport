@@ -17,10 +17,11 @@ describe('instruction audit evidence review', () => {
 
   it('records copy intent before writing sensitive evidence to the clipboard', () => {
     const dialog = read('../InstructionEvidenceReviewDialog.vue')
-    const record = dialog.indexOf('await instructionAuditAPI.recordEvidenceCopy')
+    const record = dialog.indexOf('instructionAuditAPI.recordEvidenceCopy')
     const clipboard = dialog.indexOf('await copyToClipboard', record)
     expect(record).toBeGreaterThan(-1)
     expect(clipboard).toBeGreaterThan(record)
+    expect(dialog.slice(Math.max(0, record - 80), record)).toContain('stepUp.run')
     expect(dialog).toContain('field.plaintext')
     expect(dialog).toContain('field.sha256')
     expect(dialog).toContain('field.digest_consistent')

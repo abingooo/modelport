@@ -29,6 +29,8 @@ type SecurityNotificationEnqueueInput struct {
 	UserTemplate string
 	OpsTemplate  string
 	Variables    map[string]string
+	SkipUser     bool
+	SkipOps      bool
 }
 
 type SecurityNotificationAudienceInput struct {
@@ -160,6 +162,9 @@ func (s *SecurityNotificationService) Enqueue(ctx context.Context, input Securit
 	}
 	var enqueueErrors []error
 	for _, item := range inputs {
+		if (item.Audience == "user" && input.SkipUser) || (item.Audience == "ops" && input.SkipOps) {
+			continue
+		}
 		if err := s.repository.Enqueue(ctx, item); err != nil {
 			enqueueErrors = append(enqueueErrors, fmt.Errorf("%s notification: %w", item.Audience, err))
 		}

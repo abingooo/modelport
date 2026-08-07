@@ -79,6 +79,28 @@
         </div>
       </div>
 
+      <InstructionAuditStatistics
+        :statistics="statistics"
+        :loading="statisticsLoading"
+        :error="statisticsError"
+      />
+
+      <section v-if="overview" aria-labelledby="instruction-audit-runtime-health-title">
+        <div class="mb-3">
+          <h2 id="instruction-audit-runtime-health-title" class="text-base font-semibold text-gray-950 dark:text-white">
+            {{ t('admin.instructionAudit.runtimeHealth.title') }}
+          </h2>
+          <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.runtimeHealth.hint') }}</p>
+        </div>
+        <dl class="grid gap-3" style="grid-template-columns: repeat(auto-fit, minmax(min(100%, 10.5rem), 1fr));">
+          <div v-for="metric in runtimeHealthStats" :key="metric.key" class="min-h-24 min-w-0 rounded-md border border-gray-200 bg-white px-4 py-3 dark:border-dark-700 dark:bg-dark-800">
+            <dt class="break-words text-xs font-medium text-gray-500 dark:text-gray-400">{{ metric.label }}</dt>
+            <dd class="mt-2 break-words text-xl font-semibold tabular-nums text-gray-950 dark:text-white">{{ metric.value }}</dd>
+            <p v-if="metric.hint" class="mt-1 break-words text-[11px] text-gray-400 dark:text-gray-500">{{ metric.hint }}</p>
+          </div>
+        </dl>
+      </section>
+
       <div class="flex max-w-full gap-1 overflow-x-auto rounded-lg bg-gray-100 p-1 dark:bg-dark-800">
         <button
           v-for="tab in tabs"
@@ -95,7 +117,26 @@
         </button>
       </div>
 
-      <template v-if="activeTab === 'rules'">
+      <InstructionAuditRuntimeConfig
+        v-if="activeTab === 'config'"
+        :config="runtimeConfig"
+        :loading="loading"
+        :saving="runtimeSaving"
+        :error="runtimeError"
+        @save="saveRuntimeConfig"
+      />
+
+      <InstructionAuditReasonPolicies
+        v-else-if="activeTab === 'policies'"
+        :policies="reasonPolicies"
+        :loading="loading"
+        :error="policiesError"
+        :saving-reason="savingReason"
+        :config-version="overview?.config_version || runtimeConfig?.config_version || 0"
+        @save="saveReasonPolicy"
+      />
+
+      <template v-else-if="activeTab === 'rules'">
         <section class="card overflow-hidden">
           <div class="flex flex-col gap-3 border-b border-gray-100 px-5 py-4 dark:border-dark-700 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -116,6 +157,7 @@
                     {{ rule.enabled ? t('common.enabled') : t('common.disabled') }}
                   </span>
                   <span class="text-xs text-gray-400">v{{ rule.version }}</span>
+                  <span v-if="rule.system_managed" class="rounded bg-cyan-50 px-2 py-1 text-xs font-medium text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300">{{ t('admin.instructionAudit.systemManaged') }}</span>
                 </div>
                 <p v-if="rule.description" class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ rule.description }}</p>
                 <div class="mt-2 flex flex-wrap gap-1.5">
@@ -134,11 +176,11 @@
                 </div>
               </div>
               <div class="flex shrink-0 items-center gap-1 self-start lg:self-auto">
-                <button type="button" class="btn btn-ghost btn-sm" @click="openRuleSetDialog(rule)">
+                <button v-if="!rule.system_managed" type="button" class="btn btn-ghost btn-sm" @click="openRuleSetDialog(rule)">
                   <Icon name="edit" size="sm" />
                   {{ t('common.edit') }}
                 </button>
-                <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('admin.instructionAudit.deleteRuleSet')" :aria-label="t('admin.instructionAudit.deleteRuleSet')" @click="ruleSetToDelete = rule">
+                <button v-if="!rule.system_managed" type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('admin.instructionAudit.deleteRuleSet')" :aria-label="t('admin.instructionAudit.deleteRuleSet')" @click="ruleSetToDelete = rule">
                   <Icon name="trash" size="sm" />
                 </button>
               </div>
@@ -256,6 +298,9 @@
                 <td class="table-td"><span :class="statusPill(hash.status)">{{ hashStatusLabel(hash.status) }}</span></td>
                 <td class="table-td text-xs text-gray-500 dark:text-gray-400">{{ formatDate(hash.created_at) }}</td>
                 <td class="table-td text-right">
+                  <button type="button" class="btn btn-ghost btn-sm" :title="t('admin.instructionAudit.hashDetail.title')" :aria-label="t('admin.instructionAudit.hashDetail.title')" @click="hashDetailID = hash.id">
+                    <Icon name="eye" size="sm" />
+                  </button>
                   <button type="button" class="btn btn-ghost btn-sm" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openHashDialog(hash)">
                     <Icon name="edit" size="sm" />
                   </button>
@@ -334,7 +379,20 @@
             </label>
           </div>
 
-          <div v-if="advancedFiltersOpen" class="grid gap-3 lg:grid-cols-2 xl:grid-cols-5">
+          <div v-if="advancedFiltersOpen" class="grid gap-3 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.requestSubject') }}</legend>
+              <div class="space-y-2 p-2">
+                <label class="block">
+                  <span class="text-[11px] text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.userId') }}</span>
+                  <input v-model.number="eventFilters.userId" type="number" min="1" class="input mt-1 h-8 py-1 text-xs" />
+                </label>
+                <label class="block">
+                  <span class="text-[11px] text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.model') }}</span>
+                  <input v-model.trim="eventFilters.model" class="input mt-1 h-8 py-1 text-xs" />
+                </label>
+              </div>
+            </fieldset>
             <fieldset class="filter-fieldset">
               <legend class="filter-legend">{{ t('admin.instructionAudit.group') }}</legend>
               <div class="filter-options">
@@ -360,6 +418,15 @@
                 <label v-for="reason in reasonOptions" :key="reason" class="filter-option">
                   <input v-model="eventFilters.reasons" type="checkbox" :value="reason" />
                   <span>{{ reasonLabel(reason) }}</span>
+                </label>
+              </div>
+            </fieldset>
+            <fieldset class="filter-fieldset">
+              <legend class="filter-legend">{{ t('admin.instructionAudit.finalOutcome') }}</legend>
+              <div class="filter-options">
+                <label v-for="outcome in outcomeOptions" :key="outcome" class="filter-option">
+                  <input v-model="eventFilters.finalOutcomes" type="checkbox" :value="outcome" />
+                  <span>{{ outcomeLabel(outcome) }}</span>
                 </label>
               </div>
             </fieldset>
@@ -446,8 +513,9 @@
                 </div>
                 <div>
                   <p class="text-[11px] font-semibold uppercase text-gray-400">{{ t('admin.instructionAudit.decisionAndNotification') }}</p>
-                  <button type="button" class="mt-1 text-left text-xs font-medium text-red-600 hover:underline dark:text-red-400" @click="addArrayFilter('reasons', event.reason)">{{ reasonLabel(event.reason) }}</button>
-                  <p class="mt-1 text-[11px] text-gray-400">v{{ event.config_version }} · {{ event.latency_ms }}ms · {{ evidenceStatusLabel(event.evidence_status) }}</p>
+                  <button type="button" class="mt-1" :class="outcomePill(event.final_outcome)" @click="addArrayFilter('finalOutcomes', event.final_outcome)">{{ outcomeLabel(event.final_outcome) }}</button>
+                  <button type="button" class="mt-1 block text-left text-xs font-medium text-gray-700 hover:underline dark:text-gray-300" @click="addArrayFilter('reasons', event.final_reason || event.reason)">{{ reasonLabel(event.final_reason || event.reason) }}</button>
+                  <p class="mt-1 text-[11px] text-gray-400">{{ formatBytes(event.body_bytes) }} · v{{ event.config_version }} · {{ eventAuditLatency(event) }}ms · {{ evidenceStatusLabel(event.evidence_status) }}</p>
                   <div class="mt-2 flex flex-wrap gap-1">
                     <button type="button" @click="addArrayFilter('userNotifications', event.user_notification_status)"><span :class="notificationPill(event.user_notification_status)">{{ t('admin.instructionAudit.userNotification') }} · {{ notificationLabel(event.user_notification_status) }}</span></button>
                     <button type="button" @click="addArrayFilter('opsNotifications', event.ops_notification_status)"><span :class="notificationPill(event.ops_notification_status)">{{ t('admin.instructionAudit.opsNotification') }} · {{ notificationLabel(event.ops_notification_status) }}</span></button>
@@ -508,8 +576,9 @@
                   </div>
                 </td>
                 <td class="table-td">
-                  <button type="button" class="text-left text-xs font-medium text-red-600 hover:underline dark:text-red-400" @click="addArrayFilter('reasons', event.reason)">{{ reasonLabel(event.reason) }}</button>
-                  <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">v{{ event.config_version }} · {{ event.latency_ms }}ms</p>
+                  <button type="button" :class="outcomePill(event.final_outcome)" @click="addArrayFilter('finalOutcomes', event.final_outcome)">{{ outcomeLabel(event.final_outcome) }}</button>
+                  <button type="button" class="mt-1 block text-left text-xs font-medium text-gray-700 hover:underline dark:text-gray-300" @click="addArrayFilter('reasons', event.final_reason || event.reason)">{{ reasonLabel(event.final_reason || event.reason) }}</button>
+                  <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">{{ formatBytes(event.body_bytes) }} · v{{ event.config_version }} · {{ eventAuditLatency(event) }}ms<span v-if="event.ai_latency_ms != null"> · AI {{ event.ai_latency_ms }}ms</span></p>
                   <div class="mt-2 flex flex-wrap gap-1">
                     <button type="button" @click="addArrayFilter('userNotifications', event.user_notification_status)"><span :class="notificationPill(event.user_notification_status)">{{ t('admin.instructionAudit.userNotification') }} · {{ notificationLabel(event.user_notification_status) }}</span></button>
                     <button type="button" @click="addArrayFilter('opsNotifications', event.ops_notification_status)"><span :class="notificationPill(event.ops_notification_status)">{{ t('admin.instructionAudit.opsNotification') }} · {{ notificationLabel(event.ops_notification_status) }}</span></button>
@@ -572,6 +641,7 @@
             <option value="active">{{ t('common.enabled') }}</option>
             <option value="disabled">{{ t('common.disabled') }}</option>
             <option value="expired">{{ t('admin.instructionAudit.expired') }}</option>
+            <option value="revoked" disabled>{{ t('admin.instructionAudit.hashStatuses.revoked') }}</option>
           </select>
         </div>
         <div>
@@ -736,8 +806,19 @@
     <InstructionEvidenceReviewDialog
       :show="Boolean(evidenceReviewEvent)"
       :event="evidenceReviewEvent"
+      :translation-enabled="runtimeConfig?.translation_enabled || false"
+      :external-translation-enabled="runtimeConfig?.external_translation_enabled || false"
       @close="evidenceReviewEvent = null"
       @candidate="createCandidateFromReview"
+    />
+
+    <InstructionHashDetailDialog
+      :show="Boolean(hashDetailID)"
+      :hash-id="hashDetailID"
+      :translation-enabled="runtimeConfig?.translation_enabled || false"
+      :external-translation-enabled="runtimeConfig?.external_translation_enabled || false"
+      @close="hashDetailID = null"
+      @changed="refreshAll"
     />
 
     <BaseDialog :show="cleanupDialog.show" :title="t('admin.instructionAudit.clearLogs')" width="wide" @close="closeLogCleanupDialog">
@@ -817,6 +898,7 @@
       @confirm="deleteBinding"
       @cancel="bindingToDelete = null"
     />
+    <TotpStepUpDialog :controller="instructionStepUp" />
   </AppLayout>
 </template>
 
@@ -828,21 +910,29 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import OpenAIFastPolicyUserSelector from '@/views/admin/settings/OpenAIFastPolicyUserSelector.vue'
 import InstructionEvidenceReviewDialog from './InstructionEvidenceReviewDialog.vue'
+import InstructionAuditStatistics from './components/InstructionAuditStatistics.vue'
+import InstructionAuditRuntimeConfig from './components/InstructionAuditRuntimeConfig.vue'
+import InstructionAuditReasonPolicies from './components/InstructionAuditReasonPolicies.vue'
+import InstructionHashDetailDialog from './components/InstructionHashDetailDialog.vue'
 import { useClipboard } from '@/composables/useClipboard'
+import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from './api'
+import { instructionStatisticsFilters } from './filters'
 import { resolveInstructionHashDigest } from './hash'
 import type {
   InstructionClientType,
   InstructionDetectedClientType,
   InstructionDeletePreview,
   InstructionEventDeleteFilter,
+  InstructionEventFilters,
   InstructionEventPage,
   InstructionEvent,
   InstructionFieldResult,
@@ -852,24 +942,40 @@ import type {
   InstructionHashStatus,
   InstructionObservedSource,
   InstructionOverview,
+  InstructionReasonPolicy,
+  InstructionRuntimeConfig,
+  InstructionStatistics,
+  InstructionFinalOutcome,
   InstructionRuleSet,
   InstructionRuleSetUser,
   SaveInstructionHashRequest,
+  UpdateInstructionReasonPolicyRequest,
+  UpdateInstructionRuntimeConfigRequest,
 } from './types'
 
-type Tab = 'rules' | 'hashes' | 'candidates' | 'events'
+type Tab = 'config' | 'policies' | 'rules' | 'hashes' | 'candidates' | 'events'
 type CleanupPreset = '1h' | '24h' | '7d' | 'custom'
 type EventDigestSource = 'instructions' | 'input1'
 
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
+const instructionStepUp = useStepUp()
 const route = useRoute()
 const router = useRouter()
-const activeTab = ref<Tab>('rules')
+const activeTab = ref<Tab>('events')
 const loading = ref(false)
 const saving = ref(false)
+const runtimeSaving = ref(false)
+const statisticsLoading = ref(false)
+const savingReason = ref('')
 const overview = ref<InstructionOverview | null>(null)
+const runtimeConfig = ref<InstructionRuntimeConfig | null>(null)
+const reasonPolicies = ref<InstructionReasonPolicy[]>([])
+const statistics = ref<InstructionStatistics | null>(null)
+const runtimeError = ref('')
+const policiesError = ref('')
+const statisticsError = ref('')
 const hashes = ref<InstructionHashEntry[]>([])
 const ruleSets = ref<InstructionRuleSet[]>([])
 const bindings = ref<InstructionGroupBinding[]>([])
@@ -884,12 +990,14 @@ const deletingEvents = ref(false)
 const batchDeleteRequested = ref(false)
 const eventPage = reactive<InstructionEventPage>({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
 const evidenceReviewEvent = ref<InstructionEvent | null>(null)
+const hashDetailID = ref<number | null>(null)
 const retentionDays = ref(30)
 const advancedFiltersOpen = ref(false)
 const eventFilters = reactive({
   eventId: null as number | null,
-  q: '', range: '24h' as '1h' | '24h' | '7d' | 'custom', from: '', to: '',
+  q: '', userId: null as number | null, model: '', range: '24h' as '1h' | '24h' | '7d' | 'custom', from: '', to: '',
   groupIds: [] as number[], reasons: [] as string[],
+  finalOutcomes: [] as InstructionFinalOutcome[],
   clientTypes: [] as InstructionDetectedClientType[],
   instructionsResults: [] as string[], input1Results: [] as string[],
   userNotifications: [] as string[], opsNotifications: [] as string[],
@@ -924,7 +1032,8 @@ const cleanupPresets = computed<Array<{ value: CleanupPreset, label: string }>>(
   { value: '7d', label: t('admin.instructionAudit.lastWeek') },
   { value: 'custom', label: t('admin.instructionAudit.customRange') },
 ])
-const reasonOptions = ['hash_mismatch', 'fields_missing', 'field_invalid', 'invalid_json', 'request_too_large', 'structure_too_complex', 'parse_timeout', 'config_unavailable']
+const reasonOptions = ['hash_mismatch', 'fields_missing', 'field_invalid', 'invalid_json', 'request_too_large', 'structure_too_complex', 'parse_timeout', 'config_unavailable', 'group_not_allowed', 'client_not_allowed', 'ai_rejected', 'ai_uncertain', 'ai_error']
+const outcomeOptions: InstructionFinalOutcome[] = ['blocked', 'policy_allow', 'ai_pass', 'hash_pass', 'exception_pass']
 const fieldResultOptions = ['missing', 'invalid', 'mismatch', 'match', 'not_checked']
 const notificationOptions = ['pending', 'processing', 'retry', 'sent', 'failed', 'suppressed', 'no_recipient']
 const detectedClientTypes: readonly InstructionDetectedClientType[] = ['codex_vscode', 'codex_cli', 'codex_desktop', 'opencode', 'modelport_internal', 'other', 'unknown']
@@ -943,6 +1052,8 @@ const clientScopeModes = computed(() => [
 ])
 
 const tabs = computed(() => [
+  { value: 'config' as const, label: t('admin.instructionAudit.runtime.tab') },
+  { value: 'policies' as const, label: t('admin.instructionAudit.policies.tab'), count: reasonPolicies.value.length },
   { value: 'rules' as const, label: t('admin.instructionAudit.rulesAndBindings'), count: bindings.value.length },
   { value: 'hashes' as const, label: t('admin.instructionAudit.hashLibrary'), count: hashes.value.filter((item) => item.status !== 'candidate').length },
   { value: 'candidates' as const, label: t('admin.instructionAudit.candidateHashes'), count: hashes.value.filter((item) => item.status === 'candidate').length },
@@ -958,13 +1069,47 @@ const overviewStats = computed(() => [
   { label: t('admin.instructionAudit.pendingEmails'), value: overview.value?.pending_email_count ?? 0 },
 ])
 
-type EventArrayFilterKey = 'groupIds' | 'clientTypes' | 'reasons' | 'instructionsResults' | 'input1Results' | 'userNotifications' | 'opsNotifications'
+const runtimeHealthStats = computed(() => {
+  const value = overview.value
+  if (!value) return []
+  return [
+    { key: 'persisted', label: t('admin.instructionAudit.runtimeHealth.persisted'), value: value.persisted_outcome_count },
+    { key: 'aggregated', label: t('admin.instructionAudit.runtimeHealth.aggregated'), value: value.aggregated_outcome_count },
+    { key: 'expired', label: t('admin.instructionAudit.runtimeHealth.expiredAggregates'), value: value.expired_aggregate_event_count },
+    { key: 'loss', label: t('admin.instructionAudit.runtimeHealth.statisticsLoss'), value: value.statistics_loss_count },
+    {
+      key: 'audit-latency', label: t('admin.instructionAudit.runtimeHealth.auditLatency'),
+      value: `${value.audit_latency_p95_ms} / ${value.audit_latency_p99_ms} ms`,
+      hint: t('admin.instructionAudit.runtimeHealth.samples', { count: value.audit_latency_sample_count }),
+    },
+    {
+      key: 'ai-latency', label: t('admin.instructionAudit.runtimeHealth.aiLatency'),
+      value: `${value.ai_latency_p95_ms} / ${value.ai_latency_p99_ms} ms`,
+      hint: t('admin.instructionAudit.runtimeHealth.samples', { count: value.ai_latency_sample_count }),
+    },
+    {
+      key: 'translation-backlog', label: t('admin.instructionAudit.runtimeHealth.translationBacklog'),
+      value: value.translation_pending_count + value.translation_processing_count,
+      hint: t('admin.instructionAudit.runtimeHealth.activeWorkers', { count: value.translation_active_workers }),
+    },
+    {
+      key: 'translation-failures', label: t('admin.instructionAudit.runtimeHealth.translationFailures'),
+      value: value.translation_failed_count,
+      hint: t('admin.instructionAudit.runtimeHealth.workerFailures', { count: value.translation_worker_fail_total }),
+    },
+  ]
+})
+
+type EventArrayFilterKey = 'groupIds' | 'clientTypes' | 'reasons' | 'finalOutcomes' | 'instructionsResults' | 'input1Results' | 'userNotifications' | 'opsNotifications'
 
 const activeFilterCount = computed(() =>
   (eventFilters.eventId ? 1 : 0)
+  + (eventFilters.userId ? 1 : 0)
+  + (eventFilters.model ? 1 : 0)
   + eventFilters.groupIds.length
   + eventFilters.clientTypes.length
   + eventFilters.reasons.length
+  + eventFilters.finalOutcomes.length
   + eventFilters.instructionsResults.length
   + eventFilters.input1Results.length
   + eventFilters.userNotifications.length
@@ -975,12 +1120,15 @@ const activeFilterCount = computed(() =>
 const filterChips = computed(() => {
   const chips: Array<{ key: string; label: string; remove: () => void }> = []
   if (eventFilters.eventId) chips.push({ key: 'event-id', label: t('admin.instructionAudit.eventNumber', { id: eventFilters.eventId }), remove: clearEventIDFilter })
+  if (eventFilters.userId) chips.push({ key: 'user-id', label: `${t('admin.instructionAudit.userId')}: ${eventFilters.userId}`, remove: () => { eventFilters.userId = null; void applyEventFilters() } })
+  if (eventFilters.model) chips.push({ key: 'model', label: `${t('admin.instructionAudit.model')}: ${eventFilters.model}`, remove: () => { eventFilters.model = ''; void applyEventFilters() } })
   for (const id of eventFilters.groupIds) {
     const group = groupOptions.value.find((item) => item.id === id)
     chips.push({ key: `group-${id}`, label: `${t('admin.instructionAudit.group')}: ${group?.name || `#${id}`}`, remove: () => removeArrayFilter('groupIds', id) })
   }
   for (const clientType of eventFilters.clientTypes) chips.push({ key: `client-${clientType}`, label: `${t('admin.instructionAudit.client')}: ${clientTypeLabel(clientType)}`, remove: () => removeArrayFilter('clientTypes', clientType) })
   for (const reason of eventFilters.reasons) chips.push({ key: `reason-${reason}`, label: reasonLabel(reason), remove: () => removeArrayFilter('reasons', reason) })
+  for (const outcome of eventFilters.finalOutcomes) chips.push({ key: `outcome-${outcome}`, label: outcomeLabel(outcome), remove: () => removeArrayFilter('finalOutcomes', outcome) })
   for (const result of eventFilters.instructionsResults) chips.push({ key: `instructions-${result}`, label: `instructions: ${fieldResultLabel(result)}`, remove: () => removeArrayFilter('instructionsResults', result) })
   for (const result of eventFilters.input1Results) chips.push({ key: `input1-${result}`, label: `input[1]: ${fieldResultLabel(result)}`, remove: () => removeArrayFilter('input1Results', result) })
   for (const status of eventFilters.userNotifications) chips.push({ key: `user-${status}`, label: `${t('admin.instructionAudit.userNotification')}: ${notificationLabel(status)}`, remove: () => removeArrayFilter('userNotifications', status) })
@@ -1101,51 +1249,124 @@ function emptyHashForm(): SaveInstructionHashRequest {
 
 async function refreshAll() {
   loading.value = true
+  runtimeError.value = ''
+  policiesError.value = ''
   try {
-    const [nextOverview, nextHashes, nextRules, nextBindings, nextGroups] = await Promise.all([
+    const results = await Promise.allSettled([
       instructionAuditAPI.getOverview(),
+      instructionAuditAPI.getRuntimeConfig(),
+      instructionAuditAPI.listReasonPolicies(),
       instructionAuditAPI.listHashes(),
       instructionAuditAPI.listRuleSets(),
       instructionAuditAPI.listGroupBindings(),
       instructionAuditAPI.listGroups(),
     ])
-    overview.value = nextOverview
-    retentionDays.value = nextOverview.evidence_retention_days || 30
-    hashes.value = nextHashes
-    ruleSets.value = nextRules
-    bindings.value = nextBindings
-    groupOptions.value = nextGroups
-    await loadEvents(eventPage.page)
+    const [overviewResult, configResult, policiesResult, hashesResult, rulesResult, bindingsResult, groupsResult] = results
+    if (overviewResult.status === 'fulfilled') {
+      overview.value = overviewResult.value
+      retentionDays.value = overviewResult.value.evidence_retention_days || 30
+    }
+    if (configResult.status === 'fulfilled') runtimeConfig.value = configResult.value
+    else runtimeError.value = errorMessage(configResult.reason)
+    if (policiesResult.status === 'fulfilled') reasonPolicies.value = policiesResult.value
+    else policiesError.value = errorMessage(policiesResult.reason)
+    if (hashesResult.status === 'fulfilled') hashes.value = hashesResult.value
+    if (rulesResult.status === 'fulfilled') ruleSets.value = rulesResult.value
+    if (bindingsResult.status === 'fulfilled') bindings.value = bindingsResult.value
+    if (groupsResult.status === 'fulfilled') groupOptions.value = groupsResult.value
+    const coreFailure = [overviewResult, hashesResult, rulesResult, bindingsResult, groupsResult].find((result) => result.status === 'rejected')
+    if (coreFailure?.status === 'rejected') appStore.showError(errorMessage(coreFailure.reason))
+    await Promise.all([loadEvents(eventPage.page), loadStatistics()])
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    appStore.showError(errorMessage(error))
   } finally {
     loading.value = false
   }
 }
 
+async function saveRuntimeConfig(payload: UpdateInstructionRuntimeConfigRequest) {
+  if (runtimeSaving.value) return
+  runtimeSaving.value = true
+  try {
+    runtimeConfig.value = await instructionStepUp.run(() => instructionAuditAPI.updateRuntimeConfig(payload))
+    appStore.showSuccess(t('common.saved'))
+    await refreshAll()
+  } catch (error) {
+    reportError(error)
+  } finally {
+    runtimeSaving.value = false
+  }
+}
+
+async function saveReasonPolicy(reason: string, payload: UpdateInstructionReasonPolicyRequest) {
+  if (savingReason.value) return
+  savingReason.value = reason
+  try {
+    await instructionStepUp.run(() => instructionAuditAPI.updateReasonPolicy(reason, payload))
+    appStore.showSuccess(t('common.saved'))
+    const [nextPolicies, nextOverview, nextRuntime] = await Promise.all([
+      instructionAuditAPI.listReasonPolicies(),
+      instructionAuditAPI.getOverview(),
+      instructionAuditAPI.getRuntimeConfig(),
+    ])
+    reasonPolicies.value = nextPolicies
+    overview.value = nextOverview
+    runtimeConfig.value = nextRuntime
+  } catch (error) {
+    reportError(error)
+  } finally {
+    savingReason.value = ''
+  }
+}
+
 async function loadEvents(page = 1) {
-  const timeParams = eventTimeParams()
   const result = await instructionAuditAPI.listEvents({
+    ...currentEventFilters(),
     page,
     page_size: eventPage.page_size,
-    event_id: eventFilters.eventId || undefined,
-    q: eventFilters.q || undefined,
-    from: timeParams.from,
-    to: timeParams.to,
-    group_ids: joinFilter(eventFilters.groupIds),
-    client_types: joinFilter(eventFilters.clientTypes),
-    reasons: joinFilter(eventFilters.reasons),
-    instructions_results: joinFilter(eventFilters.instructionsResults),
-    input1_results: joinFilter(eventFilters.input1Results),
-    user_notifications: joinFilter(eventFilters.userNotifications),
-    ops_notifications: joinFilter(eventFilters.opsNotifications),
   })
   Object.assign(eventPage, result)
   await syncEventFilterURL()
 }
 
 async function applyEventFilters() {
-  await loadEvents(1)
+  try {
+    await Promise.all([loadEvents(1), loadStatistics()])
+  } catch (error) {
+    appStore.showError(errorMessage(error))
+  }
+}
+
+async function loadStatistics() {
+  statisticsLoading.value = true
+  statisticsError.value = ''
+  try {
+    statistics.value = await instructionAuditAPI.getStatistics(instructionStatisticsFilters(currentEventFilters()))
+  } catch (error) {
+    statisticsError.value = errorMessage(error)
+  } finally {
+    statisticsLoading.value = false
+  }
+}
+
+function currentEventFilters(): InstructionEventFilters {
+  const timeParams = eventTimeParams()
+  return {
+    event_id: eventFilters.eventId || undefined,
+    q: eventFilters.q || undefined,
+    user_id: eventFilters.userId || undefined,
+    model: eventFilters.model || undefined,
+    from: timeParams.from,
+    to: timeParams.to,
+    group_ids: joinFilter(eventFilters.groupIds),
+    client_types: joinFilter(eventFilters.clientTypes),
+    reasons: joinFilter(eventFilters.reasons),
+    final_outcomes: joinFilter(eventFilters.finalOutcomes),
+    instructions_results: joinFilter(eventFilters.instructionsResults),
+    input1_results: joinFilter(eventFilters.input1Results),
+    user_notifications: joinFilter(eventFilters.userNotifications),
+    ops_notifications: joinFilter(eventFilters.opsNotifications),
+  }
 }
 
 function eventTimeParams(): { from?: string; to?: string } {
@@ -1169,6 +1390,8 @@ async function syncEventFilterURL() {
     query.range = eventFilters.range
     if (eventFilters.eventId) query.event_id = String(eventFilters.eventId)
     if (eventFilters.q) query.q = eventFilters.q
+    if (eventFilters.userId) query.user_id = String(eventFilters.userId)
+    if (eventFilters.model) query.model = eventFilters.model
     if (eventFilters.range === 'custom') {
       if (eventFilters.from) query.from = eventFilters.from
       if (eventFilters.to) query.to = eventFilters.to
@@ -1176,6 +1399,7 @@ async function syncEventFilterURL() {
     if (eventFilters.groupIds.length) query.group_ids = eventFilters.groupIds.join(',')
     if (eventFilters.clientTypes.length) query.client_types = eventFilters.clientTypes.join(',')
     if (eventFilters.reasons.length) query.reasons = eventFilters.reasons.join(',')
+    if (eventFilters.finalOutcomes.length) query.final_outcomes = eventFilters.finalOutcomes.join(',')
     if (eventFilters.instructionsResults.length) query.instructions_results = eventFilters.instructionsResults.join(',')
     if (eventFilters.input1Results.length) query.input1_results = eventFilters.input1Results.join(',')
     if (eventFilters.userNotifications.length) query.user_notifications = eventFilters.userNotifications.join(',')
@@ -1188,17 +1412,21 @@ async function syncEventFilterURL() {
 
 function hydrateEventFiltersFromURL() {
   const tab = String(route.query.tab || '')
-  if (['rules', 'hashes', 'candidates', 'events'].includes(tab)) activeTab.value = tab as Tab
+  if (['config', 'policies', 'rules', 'hashes', 'candidates', 'events'].includes(tab)) activeTab.value = tab as Tab
   const range = String(route.query.range || '24h')
   if (['1h', '24h', '7d', 'custom'].includes(range)) eventFilters.range = range as typeof eventFilters.range
   const eventID = Number(route.query.event_id)
   eventFilters.eventId = Number.isInteger(eventID) && eventID > 0 ? eventID : null
   eventFilters.q = String(route.query.q || '')
+  const userID = Number(route.query.user_id)
+  eventFilters.userId = Number.isInteger(userID) && userID > 0 ? userID : null
+  eventFilters.model = String(route.query.model || '')
   eventFilters.from = String(route.query.from || '')
   eventFilters.to = String(route.query.to || '')
   eventFilters.groupIds = splitURLFilter(route.query.group_ids).map(Number).filter((id) => Number.isInteger(id) && id > 0)
   eventFilters.clientTypes = splitURLFilter(route.query.client_types).filter(isInstructionDetectedClientType)
   eventFilters.reasons = splitURLFilter(route.query.reasons)
+  eventFilters.finalOutcomes = splitURLFilter(route.query.final_outcomes).filter(isInstructionFinalOutcome)
   eventFilters.instructionsResults = splitURLFilter(route.query.instructions_results)
   eventFilters.input1Results = splitURLFilter(route.query.input1_results)
   eventFilters.userNotifications = splitURLFilter(route.query.user_notifications)
@@ -1259,7 +1487,8 @@ function removeArrayFilter(key: EventArrayFilterKey, value: string | number) {
 
 function resetEventFilters() {
   Object.assign(eventFilters, {
-    eventId: null, q: '', range: '24h', from: '', to: '', groupIds: [], clientTypes: [], reasons: [],
+    eventId: null, q: '', userId: null, model: '', range: '24h', from: '', to: '', groupIds: [], clientTypes: [], reasons: [],
+    finalOutcomes: [],
     instructionsResults: [], input1Results: [], userNotifications: [], opsNotifications: [],
   })
   advancedFiltersOpen.value = false
@@ -1292,7 +1521,7 @@ function requestBatchDeleteEvents() {
 }
 
 async function reloadEventsAfterDelete() {
-  await loadEvents(eventPage.page)
+  await Promise.all([loadEvents(eventPage.page), loadStatistics()])
   if (!eventPage.items.length && eventPage.page > 1) await loadEvents(Math.max(1, eventPage.pages))
 }
 
@@ -1300,13 +1529,13 @@ async function deleteSingleEvent() {
   if (!eventToDelete.value || deletingEvents.value) return
   deletingEvents.value = true
   try {
-    const result = await instructionAuditAPI.deleteEvent(eventToDelete.value.id)
+    const result = await instructionStepUp.run(() => instructionAuditAPI.deleteEvent(eventToDelete.value!.id))
     selectedEventIds.value = selectedEventIds.value.filter((id) => id !== eventToDelete.value?.id)
     eventToDelete.value = null
     appStore.showSuccess(t('admin.instructionAudit.eventsDeleted', { count: result.deleted_events }))
     await reloadEventsAfterDelete()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     deletingEvents.value = false
   }
@@ -1317,12 +1546,12 @@ async function deleteSelectedEvents() {
   batchDeleteRequested.value = false
   deletingEvents.value = true
   try {
-    const result = await instructionAuditAPI.batchDeleteEvents([...selectedEventIds.value])
+    const result = await instructionStepUp.run(() => instructionAuditAPI.batchDeleteEvents([...selectedEventIds.value]))
     selectedEventIds.value = []
     appStore.showSuccess(t('admin.instructionAudit.eventsDeleted', { count: result.deleted_events }))
     await reloadEventsAfterDelete()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     deletingEvents.value = false
   }
@@ -1372,11 +1601,14 @@ function buildCleanupFilter(): InstructionEventDeleteFilter | null {
   return {
     event_id: eventFilters.eventId || undefined,
     q: eventFilters.q || undefined,
+    user_id: eventFilters.userId || undefined,
+    model: eventFilters.model || undefined,
     from: new Date(cleanupDialog.from).toISOString(),
     to: new Date(cleanupDialog.to).toISOString(),
     group_ids: [...eventFilters.groupIds],
     client_types: [...eventFilters.clientTypes],
     reasons: [...eventFilters.reasons],
+    outcomes: [...eventFilters.finalOutcomes],
     instructions_results: [...eventFilters.instructionsResults],
     input1_results: [...eventFilters.input1Results],
     user_notifications: [...eventFilters.userNotifications],
@@ -1389,10 +1621,10 @@ async function previewLogCleanup() {
   if (!filter) return
   cleanupDialog.previewing = true
   try {
-    cleanupDialog.preview = await instructionAuditAPI.previewDeleteEvents(filter)
+    cleanupDialog.preview = await instructionStepUp.run(() => instructionAuditAPI.previewDeleteEvents(filter))
     cleanupDialog.filter = filter
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     cleanupDialog.previewing = false
   }
@@ -1402,15 +1634,15 @@ async function confirmLogCleanup() {
   if (!cleanupDialog.preview || !cleanupDialog.filter || cleanupDialog.deleting) return
   cleanupDialog.deleting = true
   try {
-    const result = await instructionAuditAPI.deleteEventsByFilter(cleanupDialog.filter, cleanupDialog.preview)
+    const result = await instructionStepUp.run(() => instructionAuditAPI.deleteEventsByFilter(cleanupDialog.filter!, cleanupDialog.preview!))
     selectedEventIds.value = []
     appStore.showSuccess(t('admin.instructionAudit.eventsDeleted', { count: result.deleted_events }))
     cleanupDialog.show = false
     cleanupDialog.preview = null
     cleanupDialog.filter = null
-    await loadEvents(1)
+    await Promise.all([loadEvents(1), loadStatistics()])
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     cleanupDialog.deleting = false
   }
@@ -1445,13 +1677,14 @@ function closeAddToRuleSetDialog() {
 
 async function confirmAddToRuleSet() {
   if (!canQuickAdd.value || !addToRuleSetDialog.event) return
+  const eventID = addToRuleSetDialog.event.id
   addToRuleSetDialog.saving = true
   try {
-    const result = await instructionAuditAPI.addEventToRuleSet(
-      addToRuleSetDialog.event.id,
+    const result = await instructionStepUp.run(() => instructionAuditAPI.addEventToRuleSet(
+      eventID,
       addToRuleSetDialog.ruleSetId,
       [...addToRuleSetDialog.sources],
-    )
+    ))
     appStore.showSuccess(t('admin.instructionAudit.quickAddSuccess', {
       attached: result.attached_hashes,
       created: result.created_hashes,
@@ -1461,7 +1694,7 @@ async function confirmAddToRuleSet() {
     closeAddToRuleSetDialog()
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     addToRuleSetDialog.saving = false
   }
@@ -1515,11 +1748,12 @@ async function saveHash() {
     const payload: SaveInstructionHashRequest = {
       ...hashDialog.form,
       digest,
+      raw_content: hashDialog.id || hashDialog.mode !== 'plaintext' ? undefined : hashDialog.plaintext,
       valid_from: fromDateTimeLocal(hashDialog.validFrom),
       valid_until: fromDateTimeLocal(hashDialog.validUntil),
     }
     if (hashDialog.id) {
-      await instructionAuditAPI.updateHash(hashDialog.id, {
+      await instructionStepUp.run(() => instructionAuditAPI.updateHash(hashDialog.id!, {
         name: payload.name,
         note: payload.note,
         observed_source: payload.observed_source,
@@ -1530,14 +1764,14 @@ async function saveHash() {
         valid_until: payload.valid_until,
         clear_valid_from: !hashDialog.validFrom,
         clear_valid_until: !hashDialog.validUntil,
-      })
+      }))
     }
-    else await instructionAuditAPI.createHash(payload)
+    else await instructionStepUp.run(() => instructionAuditAPI.createHash(payload))
     closeHashDialog()
     appStore.showSuccess(t('common.saved'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     hashDialog.plaintext = ''
     saving.value = false
@@ -1548,12 +1782,12 @@ async function deleteHash() {
   if (!hashToDelete.value || saving.value) return
   saving.value = true
   try {
-    await instructionAuditAPI.deleteHash(hashToDelete.value.id)
+    await instructionStepUp.run(() => instructionAuditAPI.deleteHash(hashToDelete.value!.id))
     hashToDelete.value = null
     appStore.showSuccess(t('common.deleted'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     saving.value = false
   }
@@ -1575,19 +1809,19 @@ async function saveRuleSet() {
   if (!ruleDialog.name.trim()) return
   saving.value = true
   try {
-    await instructionAuditAPI.saveRuleSet(ruleDialog.id, {
+    await instructionStepUp.run(() => instructionAuditAPI.saveRuleSet(ruleDialog.id, {
       name: ruleDialog.name,
       description: ruleDialog.description,
       enabled: ruleDialog.enabled,
       allow_empty_fields: ruleDialog.allowEmptyFields,
       hash_ids: ruleDialog.hashIds,
       allowed_user_ids: ruleDialog.allowedUserIds,
-    })
+    }))
     ruleDialog.show = false
     appStore.showSuccess(t('common.saved'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     saving.value = false
   }
@@ -1597,12 +1831,12 @@ async function deleteRuleSet() {
   if (!ruleSetToDelete.value || saving.value) return
   saving.value = true
   try {
-    await instructionAuditAPI.deleteRuleSet(ruleSetToDelete.value.id)
+    await instructionStepUp.run(() => instructionAuditAPI.deleteRuleSet(ruleSetToDelete.value!.id))
     ruleSetToDelete.value = null
     appStore.showSuccess(t('common.deleted'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     saving.value = false
   }
@@ -1638,17 +1872,17 @@ async function saveBinding() {
     const clientTypes: InstructionClientType[] = bindingDialog.clientScope === 'all'
       ? ['all']
       : [...bindingDialog.clientTypes]
-    await instructionAuditAPI.saveGroupBindings({
+    await instructionStepUp.run(() => instructionAuditAPI.saveGroupBindings({
       group_ids: bindingDialog.groupIds,
       rule_set_id: bindingDialog.ruleSetId,
       client_types: clientTypes,
       enabled: bindingDialog.enabled,
-    })
+    }))
     bindingDialog.show = false
     appStore.showSuccess(t('common.saved'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     saving.value = false
   }
@@ -1657,16 +1891,16 @@ async function saveBinding() {
 async function setBindingEnabled(binding: InstructionGroupBinding, enabled: boolean) {
   saving.value = true
   try {
-    await instructionAuditAPI.saveGroupBindings({
+    await instructionStepUp.run(() => instructionAuditAPI.saveGroupBindings({
       group_ids: [binding.group_id],
       rule_set_id: binding.rule_set_id,
       client_types: binding.client_types?.length ? binding.client_types : ['all'],
       enabled,
-    })
+    }))
     appStore.showSuccess(t('common.saved'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     saving.value = false
   }
@@ -1679,12 +1913,12 @@ function requestDeleteBinding(binding: InstructionGroupBinding) {
 async function deleteBinding() {
   if (!bindingToDelete.value) return
   try {
-    await instructionAuditAPI.deleteGroupBinding(bindingToDelete.value.id)
+    await instructionStepUp.run(() => instructionAuditAPI.deleteGroupBinding(bindingToDelete.value!.id))
     bindingToDelete.value = null
     appStore.showSuccess(t('common.deleted'))
     await refreshAll()
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   }
 }
 
@@ -1692,10 +1926,10 @@ async function saveEvidenceRetention() {
   if (!Number.isInteger(retentionDays.value) || retentionDays.value < 1 || retentionDays.value > 3650) return
   saving.value = true
   try {
-    overview.value = await instructionAuditAPI.updateEvidenceRetention(retentionDays.value)
+    overview.value = await instructionStepUp.run(() => instructionAuditAPI.updateEvidenceRetention(retentionDays.value))
     appStore.showSuccess(t('common.saved'))
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   } finally {
     saving.value = false
   }
@@ -1708,13 +1942,13 @@ function openEvidenceReview(event: InstructionEvent) {
 async function createCandidateFromReview(source: 'instructions' | 'input1') {
   if (!evidenceReviewEvent.value) return
   try {
-    await instructionAuditAPI.createCandidate(evidenceReviewEvent.value.id, source)
+    await instructionStepUp.run(() => instructionAuditAPI.createCandidate(evidenceReviewEvent.value!.id, source))
     appStore.showSuccess(t('admin.instructionAudit.candidateAdded'))
     evidenceReviewEvent.value = null
     await refreshAll()
     activeTab.value = 'candidates'
   } catch (error) {
-    appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+    reportError(error)
   }
 }
 
@@ -1725,6 +1959,10 @@ function compactDigest(value: string): string {
 function formatDate(value?: string | null): string {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+function eventAuditLatency(event: InstructionEvent): number {
+  return event.audit_latency_ms ?? event.latency_ms ?? 0
 }
 
 function toDateTimeLocal(value?: string | null): string {
@@ -1748,6 +1986,10 @@ function isInstructionDetectedClientType(value: string): value is InstructionDet
   return (detectedClientTypes as readonly string[]).includes(value)
 }
 
+function isInstructionFinalOutcome(value: string): value is InstructionFinalOutcome {
+  return (outcomeOptions as readonly string[]).includes(value)
+}
+
 function clientTypeLabel(clientType: string): string {
   if (clientType === 'all') return t('admin.instructionAudit.allClients')
   return clientOptions.value.find((client) => client.value === clientType)?.label || clientType
@@ -1769,6 +2011,7 @@ function hashStatusLabel(status: InstructionHashStatus): string {
   if (status === 'active') return t('common.enabled')
   if (status === 'disabled') return t('common.disabled')
   if (status === 'expired') return t('admin.instructionAudit.expired')
+  if (status === 'revoked') return t('admin.instructionAudit.hashStatuses.revoked')
   return t('admin.instructionAudit.candidate')
 }
 
@@ -1795,6 +2038,34 @@ function fieldResultLabel(result: string): string {
 
 function reasonLabel(reason: string): string {
   return t(`admin.instructionAudit.reasons.${reason}`)
+}
+
+function outcomeLabel(outcome: string): string {
+  return t(`admin.instructionAudit.outcomes.${outcome}`, outcome)
+}
+
+function outcomePill(outcome: string): string {
+  const base = 'inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium'
+  if (outcome === 'blocked') return `${base} bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300`
+  if (outcome === 'policy_allow') return `${base} bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300`
+  if (outcome === 'ai_pass') return `${base} bg-cyan-50 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300`
+  if (outcome === 'hash_pass') return `${base} bg-primary-50 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300`
+  return `${base} bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300`
+}
+
+function formatBytes(value?: number | null): string {
+  if (value == null) return '-'
+  if (value < 1024) return `${value}B`
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)}KiB`
+  return `${(value / 1024 / 1024).toFixed(1)}MiB`
+}
+
+function errorMessage(error: unknown): string {
+  return extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error'))
+}
+
+function reportError(error: unknown) {
+  if (!isStepUpCancelled(error)) appStore.showError(errorMessage(error))
 }
 
 function evidenceStatusLabel(status: string): string {

@@ -35,7 +35,7 @@ func readLenientJSONRequestBodyWithPrealloc(req *http.Request, cfg *config.Confi
 }
 
 func readLenientJSONRequestBodyWithAuditSource(req *http.Request, cfg *config.Config) ([]byte, []byte, error) {
-	decoded, err := pkghttputil.ReadRequestBodyWithPrealloc(req)
+	decoded, err := pkghttputil.ReadRequestBodyWithPreallocLimit(req, gatewayMaxBodySize(cfg))
 	if err != nil {
 		return nil, nil, err
 	}

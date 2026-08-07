@@ -3,8 +3,10 @@ package securityaudit
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"testing"
@@ -138,14 +140,103 @@ func TestInstructionFieldsStrictlyEmpty(t *testing.T) {
 func TestInspectInstructionPayloadRejectsStrictJSONViolations(t *testing.T) {
 	for _, body := range [][]byte{
 		[]byte(`{"instructions":"one","instructions":"two"}`),
+		[]byte(`{"instructions":"trusted","metadata":{"duplicate":1,"duplicate":2}}`),
 		[]byte("{\"instructions\":\"bad\xff\"}"),
 		[]byte("{\"instructions\":\"raw\x00byte\"}"),
+		[]byte(`{"instructions":"\uD800"}`),
 		[]byte(`{"instructions":`),
 	} {
 		result := inspectInstructionPayload(body, nil)
 		require.False(t, result.Allow)
 		require.Equal(t, "invalid_json", result.Reason)
 	}
+}
+
+func TestStrictInstructionParserRetainsOnlyAuditTargets(t *testing.T) {
+	body := []byte(`{"model":"gpt-test","instructions":"trusted","metadata":{"large":"ignored"},"input":[{}, {"content":[{"type":"input_text","text":"fallback","dynamic_id":"ignored"}]}]}`)
+	root, err := decodeStrictJSONObject(body)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-test", root["model"])
+	require.Equal(t, "trusted", root["instructions"])
+	require.NotContains(t, root, "metadata")
+	input := root["input"].([]any)
+	item := input[1].(map[string]any)
+	block := item["content"].([]any)[0].(map[string]any)
+	require.Equal(t, map[string]any{"type": "input_text", "text": "fallback"}, block)
+}
+
+func TestStrictInstructionParserBodyBoundaries(t *testing.T) {
+	allowed := []instructionPolicyHash{allowedDigest("trusted")}
+	prefix := []byte(`{"instructions":"trusted","metadata":"`)
+	suffix := []byte(`"}`)
+	for _, sizeMiB := range []int{1, 16, 32, 42, 64} {
+		t.Run(fmt.Sprintf("%dMiB", sizeMiB), func(t *testing.T) {
+			targetBytes := sizeMiB << 20
+			body := make([]byte, targetBytes)
+			copied := copy(body, prefix)
+			for index := copied; index < targetBytes-len(suffix); index++ {
+				body[index] = 'a'
+			}
+			copy(body[targetBytes-len(suffix):], suffix)
+			limits := defaultInstructionAuditParserLimits()
+			limits.ParseTimeout = 5 * time.Second
+			result := inspectInstructionPayloadWithLimits(body, allowed, limits)
+			require.True(t, result.Allow)
+			require.Equal(t, "instructions_match", result.Reason)
+		})
+	}
+	tooLarge := make([]byte, 65<<20)
+	result := inspectInstructionPayload(tooLarge, nil)
+	require.Equal(t, "request_too_large", result.Reason)
+}
+
+func TestStrictInstructionParserHonorsConfiguredTimeout(t *testing.T) {
+	limits := defaultInstructionAuditParserLimits()
+	limits.ParseTimeout = time.Millisecond
+	clockCalls := 0
+	startedAt := time.Unix(100, 0)
+	limits.now = func() time.Time {
+		clockCalls++
+		if clockCalls > 1 {
+			return startedAt.Add(2 * time.Millisecond)
+		}
+		return startedAt
+	}
+	body := []byte(`{"instructions":"trusted","metadata":"` + strings.Repeat("a", instructionAuditClockInterval*2) + `"}`)
+	result := inspectInstructionPayloadWithLimits(body, nil, limits)
+	require.Equal(t, "parse_timeout", result.Reason)
+}
+
+func TestInstructionParserBudgetBoundsConcurrentLargeBodies(t *testing.T) {
+	const bodyBytes = 1 << 20
+	prefix := []byte(`{"instructions":"trusted","metadata":"`)
+	suffix := []byte(`"}`)
+	body := make([]byte, bodyBytes)
+	copied := copy(body, prefix)
+	for index := copied; index < len(body)-len(suffix); index++ {
+		body[index] = 'a'
+	}
+	copy(body[len(body)-len(suffix):], suffix)
+
+	service := NewInstructionService(nil, nil, nil)
+	service.configureInstructionParserBudget(int64(len(body)))
+	budget := service.parserBudget.Load()
+	require.NotNil(t, budget)
+	require.NoError(t, budget.semaphore.Acquire(context.Background(), int64(len(body))))
+
+	runtime := InstructionRuntimeConfig{
+		MaxBodyBytes:         2 << 20,
+		ParseTimeoutMS:       10,
+		MaxInflightBodyBytes: int64(len(body)),
+	}
+	_, err := service.parseInstructionRoot(context.Background(), body, runtime)
+	require.ErrorIs(t, err, errInstructionAuditParseTimeout)
+
+	budget.semaphore.Release(int64(len(body)))
+	runtime.ParseTimeoutMS = 5000
+	root, err := service.parseInstructionRoot(context.Background(), body, runtime)
+	require.NoError(t, err)
+	require.Equal(t, "trusted", root["instructions"])
 }
 
 func TestInspectInstructionPayloadRejectsCompressedAndOversizedFields(t *testing.T) {

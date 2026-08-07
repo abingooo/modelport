@@ -128,6 +128,15 @@ server {
 }
 ```
 
+ModelPort 0.1.170.13 instruction audit defaults to a 64 MiB decoded request
+body limit and can be configured from 1 MiB to 128 MiB. Keep the edge limit
+above the configured application limit so the application can produce a
+`request_too_large` audit outcome; for example, use `100m` at Nginx with the
+64 MiB application default. The effective limit is always the smallest limit
+enforced by the CDN, Nginx, gateway, instruction-audit parser, and upstream.
+Compressed request bodies are constrained by their decoded size in the
+application, so the Nginx limit is not a substitute for the application limit.
+
 If Nginx gzip is enabled in the `http` block, keep `text/event-stream` out of
 `gzip_types` and do not use `gzip_types *` for Sub2API. The
 `proxy_buffering off` setting above prevents proxy buffering, but it does not

@@ -155,6 +155,47 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_usage_logs_api_key_latest_ip
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestApplyMigrationsFS_InstructionAuditIndexesDropInvalidIndexesBeforeRetry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(instructionAuditV13EventIndexesMigration).
+		WillReturnError(sql.ErrNoRows)
+	for _, indexName := range instructionAuditV13EventIndexes {
+		mock.ExpectQuery("SELECT EXISTS \\(").
+			WithArgs(indexName).
+			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+		mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS " + indexName).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	for _, indexName := range instructionAuditV13EventIndexes {
+		mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS " + indexName).
+			WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs(instructionAuditV13EventIndexesMigration, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fSys := fstest.MapFS{
+		instructionAuditV13EventIndexesMigration: &fstest.MapFile{Data: []byte(`
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_instruction_audit_events_outcome_created ON instruction_audit_events(final_outcome, created_at DESC, id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_instruction_audit_events_final_reason_created ON instruction_audit_events(final_reason, created_at DESC, id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_instruction_audit_events_group_outcome_created ON instruction_audit_events(group_id, final_outcome, created_at DESC, id DESC);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_instruction_audit_events_pass_cleanup ON instruction_audit_events(id, created_at) WHERE final_outcome IN ('hash_pass', 'exception_pass');
+`)},
+	}
+
+	err = applyMigrationsFS(context.Background(), db, fSys)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
 func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_FailsFastOnDuplicatePrecheck(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

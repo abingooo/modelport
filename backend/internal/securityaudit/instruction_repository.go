@@ -21,6 +21,8 @@ import (
 type InstructionRepository struct{ db *sql.DB }
 
 var errInstructionAuditAllowedUserNotFound = errors.New("instruction audit allowed user not found")
+var errInstructionAuditConfigConflict = errors.New("instruction audit config version conflict")
+var errInstructionAuditHashRevoked = errors.New("instruction audit hash is revoked")
 
 func NewInstructionRepository(db *sql.DB) *InstructionRepository {
 	return &InstructionRepository{db: db}
@@ -161,14 +163,95 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 	for scope, acc := range clientAccumulators {
 		clientPolicies[scope] = buildInstructionPolicy(acc)
 	}
+	reasonPolicies, err := loadInstructionReasonPolicies(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	runtimeConfig, err := loadInstructionRuntimeConfig(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &instructionSnapshot{
 		Enabled: enabled, ConfigVersion: version, AuditedGroups: auditedGroups,
 		Policies: policies, AuditedClientScopes: auditedClientScopes,
-		ClientPolicies: clientPolicies, LoadedAt: time.Now().UTC(),
+		ClientPolicies: clientPolicies, ReasonPolicies: reasonPolicies,
+		Runtime: runtimeConfig, LoadedAt: time.Now().UTC(),
 	}, nil
+}
+
+func loadInstructionReasonPolicies(ctx context.Context, queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}) (map[string]InstructionReasonPolicy, error) {
+	rows, err := queryer.QueryContext(ctx, `
+		SELECT reason, action, ai_review_enabled, alert_enabled, allow_until,
+			config_version, updated_by, updated_at
+		FROM instruction_audit_reason_policies ORDER BY reason`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	policies := make(map[string]InstructionReasonPolicy)
+	for rows.Next() {
+		var policy InstructionReasonPolicy
+		var allowUntil sql.NullTime
+		var updatedBy sql.NullInt64
+		if err := rows.Scan(
+			&policy.Reason, &policy.Action, &policy.AIReviewEnabled, &policy.AlertEnabled,
+			&allowUntil, &policy.ConfigVersion, &updatedBy, &policy.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if allowUntil.Valid {
+			value := allowUntil.Time.UTC()
+			policy.AllowUntil = &value
+		}
+		if updatedBy.Valid {
+			policy.UpdatedBy = &updatedBy.Int64
+		}
+		policies[policy.Reason] = policy
+	}
+	return policies, rows.Err()
+}
+
+func loadInstructionRuntimeConfig(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}) (InstructionRuntimeConfig, error) {
+	var config InstructionRuntimeConfig
+	var updatedBy sql.NullInt64
+	err := queryer.QueryRowContext(ctx, `
+		SELECT max_body_bytes, parse_timeout_ms, max_inflight_body_bytes,
+			pass_event_retention_days, aggregate_retention_days, raw_content_retention_days,
+			ai_enabled, ai_base_url, ai_model, ai_token_ciphertext, ai_timeout_ms,
+			ai_max_concurrency, ai_min_confidence, ai_per_user_rpm, ai_per_user_daily_limit,
+			ai_global_daily_limit, ai_prompt_version,
+			translation_enabled, external_translation_enabled, translation_base_url,
+			translation_model, translation_token_ciphertext, translation_timeout_ms,
+			translation_max_concurrency, translation_chunk_bytes, translation_max_bytes,
+			translation_result_ttl_seconds, updated_by, updated_at
+		FROM instruction_audit_runtime_config WHERE id = 1`).Scan(
+		&config.MaxBodyBytes, &config.ParseTimeoutMS, &config.MaxInflightBodyBytes,
+		&config.PassEventRetentionDays, &config.AggregateRetentionDays, &config.RawContentRetentionDays,
+		&config.AIEnabled, &config.AIBaseURL, &config.AIModel, &config.AITokenCiphertext,
+		&config.AITimeoutMS, &config.AIMaxConcurrency, &config.AIMinConfidence, &config.AIPerUserRPM,
+		&config.AIPerUserDailyLimit, &config.AIGlobalDailyLimit, &config.AIPromptVersion,
+		&config.TranslationEnabled, &config.ExternalTranslationEnabled,
+		&config.TranslationBaseURL, &config.TranslationModel,
+		&config.TranslationTokenCiphertext, &config.TranslationTimeoutMS,
+		&config.TranslationMaxConcurrency, &config.TranslationChunkBytes, &config.TranslationMaxBytes,
+		&config.TranslationResultTTLSeconds, &updatedBy, &config.UpdatedAt,
+	)
+	if err != nil {
+		return InstructionRuntimeConfig{}, err
+	}
+	config.AIHasToken = strings.TrimSpace(config.AITokenCiphertext) != ""
+	config.TranslationHasToken = strings.TrimSpace(config.TranslationTokenCiphertext) != ""
+	if updatedBy.Valid {
+		config.UpdatedBy = &updatedBy.Int64
+	}
+	return config, nil
 }
 
 func newInstructionPolicyAccumulator() *instructionPolicyAccumulator {
@@ -211,6 +294,139 @@ func (r *InstructionRepository) GetConfigVersion(ctx context.Context) (int64, er
 	var version int64
 	err := r.db.QueryRowContext(ctx, `SELECT config_version FROM instruction_audit_state WHERE id = 1`).Scan(&version)
 	return version, err
+}
+
+func (r *InstructionRepository) ListReasonPolicies(ctx context.Context) ([]InstructionReasonPolicy, error) {
+	policies, err := loadInstructionReasonPolicies(ctx, r.db)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]InstructionReasonPolicy, 0, len(policies))
+	for _, policy := range policies {
+		result = append(result, policy)
+	}
+	sort.Slice(result, func(left, right int) bool { return result[left].Reason < result[right].Reason })
+	return result, nil
+}
+
+func (r *InstructionRepository) UpdateReasonPolicy(
+	ctx context.Context,
+	reason string,
+	request UpdateInstructionReasonPolicyRequest,
+	actorID int64,
+) (*InstructionReasonPolicy, int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentVersion int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT config_version FROM instruction_audit_state WHERE id = 1 FOR UPDATE`).Scan(&currentVersion); err != nil {
+		return nil, 0, err
+	}
+	if request.ExpectedVersion > 0 && request.ExpectedVersion != currentVersion {
+		return nil, currentVersion, errInstructionAuditConfigConflict
+	}
+	version, err := bumpInstructionConfigTx(ctx, tx)
+	if err != nil {
+		return nil, 0, err
+	}
+	var policy InstructionReasonPolicy
+	var allowUntil sql.NullTime
+	var updatedBy sql.NullInt64
+	err = tx.QueryRowContext(ctx, `
+		UPDATE instruction_audit_reason_policies
+		SET action = $2, ai_review_enabled = $3, alert_enabled = $4,
+			allow_until = $5, config_version = $6, updated_by = NULLIF($7, 0), updated_at = NOW()
+		WHERE reason = $1
+		RETURNING reason, action, ai_review_enabled, alert_enabled, allow_until,
+			config_version, updated_by, updated_at`,
+		reason, request.Action, request.AIReviewEnabled, request.AlertEnabled,
+		request.AllowUntil, version, actorID,
+	).Scan(
+		&policy.Reason, &policy.Action, &policy.AIReviewEnabled, &policy.AlertEnabled,
+		&allowUntil, &policy.ConfigVersion, &updatedBy, &policy.UpdatedAt,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if allowUntil.Valid {
+		value := allowUntil.Time.UTC()
+		policy.AllowUntil = &value
+	}
+	if updatedBy.Valid {
+		policy.UpdatedBy = &updatedBy.Int64
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return &policy, version, nil
+}
+
+func (r *InstructionRepository) GetRuntimeConfig(ctx context.Context) (InstructionRuntimeConfig, error) {
+	return loadInstructionRuntimeConfig(ctx, r.db)
+}
+
+func (r *InstructionRepository) UpdateRuntimeConfig(
+	ctx context.Context,
+	config InstructionRuntimeConfig,
+	expectedVersion int64,
+	actorID int64,
+) (InstructionRuntimeConfig, int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return InstructionRuntimeConfig{}, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var currentVersion int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT config_version FROM instruction_audit_state WHERE id = 1 FOR UPDATE`).Scan(&currentVersion); err != nil {
+		return InstructionRuntimeConfig{}, 0, err
+	}
+	if expectedVersion > 0 && expectedVersion != currentVersion {
+		return InstructionRuntimeConfig{}, currentVersion, errInstructionAuditConfigConflict
+	}
+	version, err := bumpInstructionConfigTx(ctx, tx)
+	if err != nil {
+		return InstructionRuntimeConfig{}, 0, err
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE instruction_audit_runtime_config
+		SET max_body_bytes = $1, parse_timeout_ms = $2, max_inflight_body_bytes = $3,
+			pass_event_retention_days = $4, aggregate_retention_days = $5, raw_content_retention_days = $6,
+			ai_enabled = $7, ai_base_url = $8, ai_model = $9, ai_token_ciphertext = $10,
+			ai_timeout_ms = $11, ai_max_concurrency = $12, ai_min_confidence = $13, ai_per_user_rpm = $14,
+			ai_per_user_daily_limit = $15, ai_global_daily_limit = $16, ai_prompt_version = $17,
+			translation_enabled = $18, external_translation_enabled = $19,
+			translation_base_url = $20, translation_model = $21,
+			translation_token_ciphertext = $22, translation_timeout_ms = $23,
+			translation_max_concurrency = $24, translation_chunk_bytes = $25,
+			translation_max_bytes = $26, translation_result_ttl_seconds = $27,
+			updated_by = NULLIF($28, 0), updated_at = NOW()
+		WHERE id = 1`,
+		config.MaxBodyBytes, config.ParseTimeoutMS, config.MaxInflightBodyBytes,
+		config.PassEventRetentionDays, config.AggregateRetentionDays, config.RawContentRetentionDays,
+		config.AIEnabled, config.AIBaseURL, config.AIModel, config.AITokenCiphertext,
+		config.AITimeoutMS, config.AIMaxConcurrency, config.AIMinConfidence, config.AIPerUserRPM,
+		config.AIPerUserDailyLimit, config.AIGlobalDailyLimit, config.AIPromptVersion,
+		config.TranslationEnabled, config.ExternalTranslationEnabled,
+		config.TranslationBaseURL, config.TranslationModel,
+		config.TranslationTokenCiphertext, config.TranslationTimeoutMS,
+		config.TranslationMaxConcurrency, config.TranslationChunkBytes, config.TranslationMaxBytes,
+		config.TranslationResultTTLSeconds, actorID,
+	)
+	if err != nil {
+		return InstructionRuntimeConfig{}, 0, err
+	}
+	updated, err := loadInstructionRuntimeConfig(ctx, tx)
+	if err != nil {
+		return InstructionRuntimeConfig{}, 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return InstructionRuntimeConfig{}, 0, err
+	}
+	return updated, version, nil
 }
 
 type instructionEnabledUpdateResult struct {
@@ -315,20 +531,24 @@ func bumpInstructionConfigTx(ctx context.Context, tx *sql.Tx) (int64, error) {
 	return version, err
 }
 
-const instructionHashColumns = `id, digest, name, note, observed_source, client_name, client_version, status, valid_from, valid_until, created_by, created_at, updated_at`
-const instructionHashColumnsAliased = `h.id, h.digest, h.name, h.note, h.observed_source, h.client_name, h.client_version, h.status, h.valid_from, h.valid_until, h.created_by, h.created_at, h.updated_at`
+const instructionHashColumnsAliased = `h.id, h.digest, h.name, h.note, h.observed_source, h.client_name, h.client_version, h.status, COALESCE(hr.hash_algorithm, 'sha256'), COALESCE(hr.normalization_version, 'identity_utf8_v1'), h.observed_source, COALESCE(hr.raw_content_status, 'raw_content_unavailable'), COALESCE(hr.content_bytes, 0), COALESCE(hr.encryption_key_version, ''), hr.raw_expires_at, h.valid_from, h.valid_until, h.created_by, h.created_at, h.updated_at`
 
 type instructionScanner interface{ Scan(...any) error }
 
 func scanInstructionHash(scanner instructionScanner) (InstructionHashEntry, error) {
 	var item InstructionHashEntry
-	var validFrom, validUntil sql.NullTime
+	var rawExpiresAt, validFrom, validUntil sql.NullTime
 	var createdBy sql.NullInt64
 	err := scanner.Scan(
 		&item.ID, &item.Digest, &item.Name, &item.Note, &item.ObservedSource,
-		&item.ClientName, &item.ClientVersion, &item.Status, &validFrom, &validUntil,
+		&item.ClientName, &item.ClientVersion, &item.Status,
+		&item.HashAlgorithm, &item.Normalization, &item.FieldName, &item.RawStatus,
+		&item.ContentBytes, &item.KeyVersion, &rawExpiresAt, &validFrom, &validUntil,
 		&createdBy, &item.CreatedAt, &item.UpdatedAt,
 	)
+	if rawExpiresAt.Valid {
+		item.RawExpiresAt = &rawExpiresAt.Time
+	}
 	if validFrom.Valid {
 		item.ValidFrom = &validFrom.Time
 	}
@@ -339,15 +559,17 @@ func scanInstructionHash(scanner instructionScanner) (InstructionHashEntry, erro
 		item.CreatedBy = &createdBy.Int64
 	}
 	item.Digest = strings.TrimSpace(item.Digest)
+	item.Sources = []InstructionHashSource{}
 	return item, err
 }
 
 func (r *InstructionRepository) ListHashes(ctx context.Context, status string) ([]InstructionHashEntry, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT `+instructionHashColumns+`
-		FROM instruction_audit_hashes
-		WHERE ($1 = '' OR status = $1)
-		ORDER BY CASE status WHEN 'candidate' THEN 0 WHEN 'active' THEN 1 WHEN 'disabled' THEN 2 ELSE 3 END, created_at DESC, id DESC`, status)
+		SELECT `+instructionHashColumnsAliased+`
+		FROM instruction_audit_hashes h
+		LEFT JOIN instruction_audit_hash_raw_contents hr ON hr.hash_id = h.id
+		WHERE ($1 = '' OR h.status = $1)
+		ORDER BY CASE h.status WHEN 'candidate' THEN 0 WHEN 'active' THEN 1 WHEN 'disabled' THEN 2 ELSE 3 END, h.created_at DESC, h.id DESC`, status)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +586,11 @@ func (r *InstructionRepository) ListHashes(ctx context.Context, status string) (
 }
 
 func (r *InstructionRepository) GetHash(ctx context.Context, id int64) (*InstructionHashEntry, error) {
-	item, err := scanInstructionHash(r.db.QueryRowContext(ctx, `SELECT `+instructionHashColumns+` FROM instruction_audit_hashes WHERE id = $1`, id))
+	item, err := scanInstructionHash(r.db.QueryRowContext(ctx, `
+		SELECT `+instructionHashColumnsAliased+`
+		FROM instruction_audit_hashes h
+		LEFT JOIN instruction_audit_hash_raw_contents hr ON hr.hash_id = h.id
+		WHERE h.id = $1`, id))
 	if err != nil {
 		return nil, err
 	}
@@ -372,27 +598,159 @@ func (r *InstructionRepository) GetHash(ctx context.Context, id int64) (*Instruc
 }
 
 func (r *InstructionRepository) FindHashByDigest(ctx context.Context, digest string) (*InstructionHashEntry, error) {
-	item, err := scanInstructionHash(r.db.QueryRowContext(ctx, `SELECT `+instructionHashColumns+` FROM instruction_audit_hashes WHERE digest = $1`, digest))
+	item, err := scanInstructionHash(r.db.QueryRowContext(ctx, `
+		SELECT `+instructionHashColumnsAliased+`
+		FROM instruction_audit_hashes h
+		LEFT JOIN instruction_audit_hash_raw_contents hr ON hr.hash_id = h.id
+		WHERE h.digest = $1`, digest))
 	if err != nil {
 		return nil, err
 	}
 	return &item, nil
 }
 
+func (r *InstructionRepository) ListHashSources(ctx context.Context, hashID int64) ([]InstructionHashSource, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, source_type, field_name, event_id, ai_review_id, reviewer_model,
+			prompt_version, confidence, review_reason, created_by, created_at
+		FROM instruction_audit_hash_sources
+		WHERE hash_id = $1 ORDER BY created_at DESC, id DESC`, hashID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]InstructionHashSource, 0)
+	for rows.Next() {
+		var item InstructionHashSource
+		var eventID, aiReviewID, createdBy sql.NullInt64
+		var confidence sql.NullFloat64
+		if err := rows.Scan(
+			&item.ID, &item.SourceType, &item.FieldName, &eventID, &aiReviewID,
+			&item.ReviewerModel, &item.PromptVersion, &confidence, &item.ReviewReason,
+			&createdBy, &item.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		if eventID.Valid {
+			item.EventID = &eventID.Int64
+		}
+		if aiReviewID.Valid {
+			item.AIReviewID = &aiReviewID.Int64
+		}
+		if confidence.Valid {
+			item.Confidence = &confidence.Float64
+		}
+		if createdBy.Valid {
+			item.CreatedBy = &createdBy.Int64
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *InstructionRepository) GetHashRaw(ctx context.Context, hashID int64) (*instructionHashRawStorage, error) {
+	var item instructionHashRawStorage
+	var expiresAt sql.NullTime
+	err := r.db.QueryRowContext(ctx, `
+		SELECT hash_id, ciphertext, raw_content_status, content_bytes, hash_algorithm,
+			normalization_version, encryption_key_version, raw_expires_at
+		FROM instruction_audit_hash_raw_contents WHERE hash_id = $1`, hashID).Scan(
+		&item.HashID, &item.Ciphertext, &item.Status, &item.ContentBytes,
+		&item.HashAlgorithm, &item.Normalization, &item.KeyVersion, &expiresAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if expiresAt.Valid {
+		value := expiresAt.Time.UTC()
+		item.ExpiresAt = &value
+	}
+	return &item, nil
+}
+
+func (r *InstructionRepository) ExpireHashRawContents(ctx context.Context) (int64, error) {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE instruction_audit_hash_raw_contents
+		SET ciphertext = NULL, raw_content_status = 'expired', encryption_key_version = '', updated_at = NOW()
+		WHERE raw_content_status = 'stored' AND raw_expires_at <= NOW()`)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *InstructionRepository) RecordSensitiveAccess(ctx context.Context, access InstructionSensitiveAccess) error {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO instruction_audit_sensitive_access_logs
+			(resource_type, resource_id, actor_id, action, request_id, client_ip,
+			 user_agent, succeeded, error_code)
+		VALUES ($1, $2, NULLIF($3, 0), $4, LEFT($5, 128), LEFT($6, 64),
+			LEFT($7, 512), $8, LEFT($9, 64))`,
+		access.ResourceType, access.ResourceID, access.ActorID, access.Action,
+		access.RequestID, access.ClientIP, access.UserAgent, access.Succeeded, access.ErrorCode)
+	return err
+}
+
 func (r *InstructionRepository) CreateHash(ctx context.Context, req CreateInstructionHashRequest, actorID int64) (*InstructionHashEntry, error) {
+	return r.CreateHashWithRaw(ctx, req, actorID, nil, InstructionHashSource{
+		SourceType: "manual", FieldName: req.ObservedSource, CreatedBy: nullableInstructionActor(actorID),
+	})
+}
+
+func (r *InstructionRepository) CreateHashWithRaw(
+	ctx context.Context,
+	req CreateInstructionHashRequest,
+	actorID int64,
+	raw *instructionHashRawStorage,
+	source InstructionHashSource,
+) (*InstructionHashEntry, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	item, err := scanInstructionHash(tx.QueryRowContext(ctx, `
+	var hashID int64
+	err = tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_hashes
 			(digest, name, note, observed_source, client_name, client_version, status, valid_from, valid_until, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0))
-		RETURNING `+instructionHashColumns,
+		RETURNING id`,
 		req.Digest, req.Name, req.Note, req.ObservedSource, req.ClientName, req.ClientVersion,
-		req.Status, req.ValidFrom, req.ValidUntil, actorID))
+		req.Status, req.ValidFrom, req.ValidUntil, actorID).Scan(&hashID)
 	if err != nil {
+		return nil, err
+	}
+	if raw == nil {
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO instruction_audit_hash_raw_contents (hash_id, raw_content_status)
+			VALUES ($1, 'raw_content_unavailable') ON CONFLICT (hash_id) DO NOTHING`, hashID); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO instruction_audit_hash_raw_contents
+				(hash_id, ciphertext, raw_content_status, content_bytes, hash_algorithm,
+				 normalization_version, encryption_key_version, raw_expires_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			hashID, raw.Ciphertext, raw.Status, raw.ContentBytes, raw.HashAlgorithm,
+			raw.Normalization, raw.KeyVersion, raw.ExpiresAt); err != nil {
+			return nil, err
+		}
+	}
+	if strings.TrimSpace(source.SourceType) == "" {
+		source.SourceType = "manual"
+	}
+	if strings.TrimSpace(source.FieldName) == "" {
+		source.FieldName = req.ObservedSource
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO instruction_audit_hash_sources
+			(hash_id, source_type, field_name, event_id, ai_review_id, reviewer_model,
+			 prompt_version, confidence, review_reason, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NULLIF($10, 0))`,
+		hashID, source.SourceType, source.FieldName, source.EventID, source.AIReviewID,
+		source.ReviewerModel, source.PromptVersion, source.Confidence,
+		source.ReviewReason, actorID); err != nil {
 		return nil, err
 	}
 	if _, err = bumpInstructionConfigTx(ctx, tx); err != nil {
@@ -401,7 +759,14 @@ func (r *InstructionRepository) CreateHash(ctx context.Context, req CreateInstru
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &item, nil
+	return r.GetHash(ctx, hashID)
+}
+
+func nullableInstructionActor(actorID int64) *int64 {
+	if actorID <= 0 {
+		return nil
+	}
+	return &actorID
 }
 
 func (r *InstructionRepository) UpdateHash(ctx context.Context, item InstructionHashEntry) (*InstructionHashEntry, error) {
@@ -410,14 +775,15 @@ func (r *InstructionRepository) UpdateHash(ctx context.Context, item Instruction
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	updated, err := scanInstructionHash(tx.QueryRowContext(ctx, `
+	var updatedID int64
+	err = tx.QueryRowContext(ctx, `
 		UPDATE instruction_audit_hashes
 		SET name = $2, note = $3, observed_source = $4, client_name = $5, client_version = $6,
 			status = $7, valid_from = $8, valid_until = $9, updated_at = NOW()
 		WHERE id = $1
-		RETURNING `+instructionHashColumns,
+		RETURNING id`,
 		item.ID, item.Name, item.Note, item.ObservedSource, item.ClientName, item.ClientVersion,
-		item.Status, item.ValidFrom, item.ValidUntil))
+		item.Status, item.ValidFrom, item.ValidUntil).Scan(&updatedID)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +793,7 @@ func (r *InstructionRepository) UpdateHash(ctx context.Context, item Instruction
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
-	return &updated, nil
+	return r.GetHash(ctx, updatedID)
 }
 
 func (r *InstructionRepository) DeleteHash(ctx context.Context, id int64) (version, references int64, err error) {
@@ -460,7 +826,8 @@ func (r *InstructionRepository) DeleteHash(ctx context.Context, id int64) (versi
 
 func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]InstructionRuleSet, error) {
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, name, description, enabled, allow_empty_fields, version, created_at, updated_at
+			SELECT id, name, description, enabled, allow_empty_fields, system_managed, system_key,
+				version, created_at, updated_at
 			FROM instruction_audit_rule_sets ORDER BY enabled DESC, name, id`)
 	if err != nil {
 		return nil, err
@@ -471,7 +838,7 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 		var item InstructionRuleSet
 		if err := rows.Scan(
 			&item.ID, &item.Name, &item.Description, &item.Enabled, &item.AllowEmptyFields,
-			&item.Version, &item.CreatedAt, &item.UpdatedAt,
+			&item.SystemManaged, &item.SystemKey, &item.Version, &item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			_ = rows.Close()
 			return nil, err
@@ -491,6 +858,7 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 		SELECT rsh.rule_set_id, `+instructionHashColumnsAliased+`
 		FROM instruction_audit_rule_set_hashes rsh
 		JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
+		LEFT JOIN instruction_audit_hash_raw_contents hr ON hr.hash_id = h.id
 		ORDER BY rsh.rule_set_id, h.name, h.id`)
 	if err != nil {
 		return nil, err
@@ -498,14 +866,19 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 	for hashRows.Next() {
 		var ruleSetID int64
 		var hash InstructionHashEntry
-		var validFrom, validUntil sql.NullTime
+		var rawExpiresAt, validFrom, validUntil sql.NullTime
 		var createdBy sql.NullInt64
 		if err := hashRows.Scan(
 			&ruleSetID, &hash.ID, &hash.Digest, &hash.Name, &hash.Note, &hash.ObservedSource,
-			&hash.ClientName, &hash.ClientVersion, &hash.Status, &validFrom, &validUntil,
+			&hash.ClientName, &hash.ClientVersion, &hash.Status,
+			&hash.HashAlgorithm, &hash.Normalization, &hash.FieldName, &hash.RawStatus,
+			&hash.ContentBytes, &hash.KeyVersion, &rawExpiresAt, &validFrom, &validUntil,
 			&createdBy, &hash.CreatedAt, &hash.UpdatedAt,
 		); err != nil {
 			return nil, err
+		}
+		if rawExpiresAt.Valid {
+			hash.RawExpiresAt = &rawExpiresAt.Time
 		}
 		if validFrom.Valid {
 			hash.ValidFrom = &validFrom.Time
@@ -660,6 +1033,25 @@ func (r *InstructionRepository) AddHashesToRuleSet(
 	hashes []CreateInstructionHashRequest,
 	actorID int64,
 ) (*AddInstructionEventToRuleSetResult, error) {
+	materials := make([]instructionHashMaterial, 0, len(hashes))
+	for _, item := range hashes {
+		materials = append(materials, instructionHashMaterial{
+			Request: item,
+			Source: InstructionHashSource{
+				SourceType: "manual", FieldName: item.ObservedSource,
+				CreatedBy: nullableInstructionActor(actorID),
+			},
+		})
+	}
+	return r.AddHashMaterialsToRuleSet(ctx, ruleSetID, materials, actorID)
+}
+
+func (r *InstructionRepository) AddHashMaterialsToRuleSet(
+	ctx context.Context,
+	ruleSetID int64,
+	materials []instructionHashMaterial,
+	actorID int64,
+) (*AddInstructionEventToRuleSetResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -669,9 +1061,10 @@ func (r *InstructionRepository) AddHashesToRuleSet(
 	if err = tx.QueryRowContext(ctx, `SELECT id FROM instruction_audit_rule_sets WHERE id = $1 FOR UPDATE`, ruleSetID).Scan(&lockedRuleSetID); err != nil {
 		return nil, err
 	}
-	result := &AddInstructionEventToRuleSetResult{RuleSetID: ruleSetID, HashIDs: make([]int64, 0, len(hashes))}
-	seenDigests := make(map[string]struct{}, len(hashes))
-	for _, item := range hashes {
+	result := &AddInstructionEventToRuleSetResult{RuleSetID: ruleSetID, HashIDs: make([]int64, 0, len(materials))}
+	seenDigests := make(map[string]struct{}, len(materials))
+	for _, material := range materials {
+		item := material.Request
 		if _, exists := seenDigests[item.Digest]; exists {
 			continue
 		}
@@ -696,6 +1089,8 @@ func (r *InstructionRepository) AddHashesToRuleSet(
 			result.CreatedHashes++
 		} else if err != nil {
 			return nil, err
+		} else if status == "revoked" {
+			return nil, errInstructionAuditHashRevoked
 		} else if status != "active" || validFrom.Valid || validUntil.Valid {
 			if _, err = tx.ExecContext(ctx, `
 				UPDATE instruction_audit_hashes
@@ -704,6 +1099,12 @@ func (r *InstructionRepository) AddHashesToRuleSet(
 				return nil, err
 			}
 			result.ActivatedHashes++
+		}
+		if err = upsertInstructionHashRawTx(ctx, tx, hashID, material.Raw); err != nil {
+			return nil, err
+		}
+		if err = insertInstructionHashSourceTx(ctx, tx, hashID, material.Source, actorID, item.ObservedSource); err != nil {
+			return nil, err
 		}
 		insertResult, insertErr := tx.ExecContext(ctx, `
 			INSERT INTO instruction_audit_rule_set_hashes (rule_set_id, hash_id, created_by)
@@ -730,6 +1131,100 @@ func (r *InstructionRepository) AddHashesToRuleSet(
 		return nil, err
 	}
 	return result, nil
+}
+
+func (r *InstructionRepository) EnrichHashMaterial(
+	ctx context.Context,
+	hashID int64,
+	material instructionHashMaterial,
+	actorID int64,
+) (*InstructionHashEntry, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lockedID int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT id FROM instruction_audit_hashes WHERE id = $1 FOR UPDATE`, hashID).Scan(&lockedID); err != nil {
+		return nil, err
+	}
+	if err = upsertInstructionHashRawTx(ctx, tx, hashID, material.Raw); err != nil {
+		return nil, err
+	}
+	if err = insertInstructionHashSourceTx(ctx, tx, hashID, material.Source, actorID, material.Request.ObservedSource); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
+	return r.GetHash(ctx, hashID)
+}
+
+func upsertInstructionHashRawTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	hashID int64,
+	raw *instructionHashRawStorage,
+) error {
+	if raw == nil {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO instruction_audit_hash_raw_contents (hash_id, raw_content_status)
+			VALUES ($1, 'raw_content_unavailable') ON CONFLICT (hash_id) DO NOTHING`, hashID)
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO instruction_audit_hash_raw_contents
+			(hash_id, ciphertext, raw_content_status, content_bytes, hash_algorithm,
+			 normalization_version, encryption_key_version, raw_expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		ON CONFLICT (hash_id) DO UPDATE SET
+			ciphertext = EXCLUDED.ciphertext,
+			raw_content_status = EXCLUDED.raw_content_status,
+			content_bytes = EXCLUDED.content_bytes,
+			hash_algorithm = EXCLUDED.hash_algorithm,
+			normalization_version = EXCLUDED.normalization_version,
+			encryption_key_version = EXCLUDED.encryption_key_version,
+			raw_expires_at = EXCLUDED.raw_expires_at,
+			updated_at = NOW()
+		WHERE instruction_audit_hash_raw_contents.raw_content_status <> 'stored'
+		   OR instruction_audit_hash_raw_contents.raw_expires_at <= NOW()`,
+		hashID, raw.Ciphertext, raw.Status, raw.ContentBytes, raw.HashAlgorithm,
+		raw.Normalization, raw.KeyVersion, raw.ExpiresAt)
+	return err
+}
+
+func insertInstructionHashSourceTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	hashID int64,
+	source InstructionHashSource,
+	actorID int64,
+	defaultField string,
+) error {
+	if strings.TrimSpace(source.SourceType) == "" {
+		source.SourceType = "manual"
+	}
+	if strings.TrimSpace(source.FieldName) == "" {
+		source.FieldName = defaultField
+	}
+	if source.CreatedBy != nil {
+		actorID = *source.CreatedBy
+	}
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO instruction_audit_hash_sources
+			(hash_id, source_type, field_name, event_id, ai_review_id, reviewer_model,
+			 prompt_version, confidence, review_reason, created_by)
+		SELECT $1, $2::VARCHAR, $3::VARCHAR, $4, $5, $6, $7, $8, $9, NULLIF($10, 0)
+		WHERE NOT EXISTS (
+			SELECT 1 FROM instruction_audit_hash_sources
+			WHERE hash_id = $1 AND source_type = $2::VARCHAR AND field_name = $3::VARCHAR
+			  AND event_id IS NOT DISTINCT FROM $4::BIGINT
+			  AND ai_review_id IS NOT DISTINCT FROM $5::BIGINT
+		)`, hashID, source.SourceType, source.FieldName, source.EventID, source.AIReviewID,
+		source.ReviewerModel, source.PromptVersion, source.Confidence,
+		source.ReviewReason, actorID)
+	return err
 }
 
 func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]InstructionGroupBinding, error) {
@@ -879,7 +1374,7 @@ const instructionEventFilterSQL = `
 	  AND ($3::TIMESTAMPTZ IS NULL OR e.created_at >= $3)
 	  AND ($4::TIMESTAMPTZ IS NULL OR e.created_at < $4)
 	  AND (cardinality($5::BIGINT[]) = 0 OR e.group_id = ANY($5::BIGINT[]))
-	  AND (cardinality($6::TEXT[]) = 0 OR e.reason = ANY($6::TEXT[]))
+	  AND (cardinality($6::TEXT[]) = 0 OR e.final_reason = ANY($6::TEXT[]))
 	  AND (cardinality($7::TEXT[]) = 0 OR e.instructions_result = ANY($7::TEXT[]))
 	  AND (cardinality($8::TEXT[]) = 0 OR e.input1_result = ANY($8::TEXT[]))
 	  AND (cardinality($9::TEXT[]) = 0 OR COALESCE(un.status, 'no_recipient') = ANY($9::TEXT[]))
@@ -887,7 +1382,10 @@ const instructionEventFilterSQL = `
 	  AND ($11 = 0 OR e.user_id = $11)
 	  AND ($12 = '%%' OR e.model ILIKE $12)
 	  AND (cardinality($13::TEXT[]) = 0 OR e.client_type = ANY($13::TEXT[]))
-	  AND ($14 = 0 OR e.id = $14)`
+	  AND ($14 = 0 OR e.id = $14)
+	  AND (cardinality($15::TEXT[]) = 0 OR e.initial_reason = ANY($15::TEXT[]))
+	  AND (cardinality($16::TEXT[]) = 0 OR e.final_reason = ANY($16::TEXT[]))
+	  AND (cardinality($17::TEXT[]) = 0 OR e.final_outcome = ANY($17::TEXT[]))`
 
 func instructionEventFilterArgs(filter InstructionEventFilter) []any {
 	filter = canonicalInstructionEventFilter(filter)
@@ -897,6 +1395,7 @@ func instructionEventFilterArgs(filter InstructionEventFilter) []any {
 		pq.Array(filter.InstructionResults), pq.Array(filter.Input1Results),
 		pq.Array(filter.UserNotifications), pq.Array(filter.OpsNotifications), filter.UserID,
 		"%" + strings.TrimSpace(filter.Model) + "%", pq.Array(filter.ClientTypes), filter.EventID,
+		pq.Array(filter.InitialReasons), pq.Array(filter.FinalReasons), pq.Array(filter.Outcomes),
 	}
 }
 
@@ -920,7 +1419,8 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 			e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
-			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
+			e.decision, e.reason, e.initial_reason, e.final_reason, e.final_outcome, e.policy_action,
+			e.rule_set_ids, e.config_version, e.body_bytes, e.latency_ms, e.ai_latency_ms, e.ai_review_id,
 			e.evidence_status, e.evidence_expires_at,
 			COALESCE(un.status, 'no_recipient'), COALESCE(op.status, 'no_recipient'), e.created_at
 		FROM instruction_audit_events e
@@ -929,7 +1429,8 @@ func (r *InstructionRepository) ListEvents(ctx context.Context, page, pageSize i
 		LEFT JOIN security_notification_outbox op
 			ON op.source_type = 'instruction_audit' AND op.source_id = e.id AND op.audience = 'ops'
 		`+instructionEventFilterSQL+`
-		ORDER BY e.created_at DESC, e.id DESC LIMIT $15 OFFSET $16`, args...)
+		ORDER BY CASE WHEN e.final_outcome IN ('blocked', 'policy_allow', 'ai_pass') THEN 0 ELSE 1 END,
+			e.created_at DESC, e.id DESC LIMIT $18 OFFSET $19`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1045,8 +1546,8 @@ func (r *InstructionRepository) DeleteEventsByFilter(
 			LEFT JOIN security_notification_outbox op
 				ON op.source_type = 'instruction_audit' AND op.source_id = e.id AND op.audience = 'ops'
 			`+instructionEventFilterSQL+`
-			AND e.id <= $15
-			ORDER BY e.id LIMIT $16 FOR UPDATE OF e SKIP LOCKED`, args...)
+			AND e.id <= $18
+			ORDER BY e.id LIMIT $19 FOR UPDATE OF e SKIP LOCKED`, args...)
 		if err != nil {
 			_ = tx.Rollback()
 			return nil, err
@@ -1095,6 +1596,9 @@ func canonicalInstructionEventFilter(filter InstructionEventFilter) InstructionE
 	sort.Slice(filter.GroupIDs, func(i, j int) bool { return filter.GroupIDs[i] < filter.GroupIDs[j] })
 	filter.ClientTypes = canonicalInstructionStrings(filter.ClientTypes)
 	filter.Reasons = canonicalInstructionStrings(filter.Reasons)
+	filter.InitialReasons = canonicalInstructionStrings(filter.InitialReasons)
+	filter.FinalReasons = canonicalInstructionStrings(filter.FinalReasons)
+	filter.Outcomes = canonicalInstructionStrings(filter.Outcomes)
 	filter.InstructionResults = canonicalInstructionStrings(filter.InstructionResults)
 	filter.Input1Results = canonicalInstructionStrings(filter.Input1Results)
 	filter.UserNotifications = canonicalInstructionStrings(filter.UserNotifications)
@@ -1153,7 +1657,7 @@ func scanInstructionEventIDs(rows *sql.Rows) ([]int64, error) {
 
 func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) {
 	var item InstructionEvent
-	var userID, apiKeyID, groupID sql.NullInt64
+	var userID, apiKeyID, groupID, bodyBytes, aiLatencyMS, aiReviewID sql.NullInt64
 	var evidenceExpiresAt sql.NullTime
 	var ruleSetJSON []byte
 	err := scanner.Scan(
@@ -1162,7 +1666,9 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 		&item.Model, &item.Endpoint, &item.Stage,
 		&item.Instructions.Present, &item.Instructions.SHA256, &item.Instructions.Result,
 		&item.Input1.Present, &item.Input1.SHA256, &item.Input1.Result,
-		&item.Decision, &item.Reason, &ruleSetJSON, &item.ConfigVersion, &item.LatencyMS,
+		&item.Decision, &item.Reason, &item.InitialReason, &item.FinalReason,
+		&item.FinalOutcome, &item.PolicyAction, &ruleSetJSON, &item.ConfigVersion,
+		&bodyBytes, &item.LatencyMS, &aiLatencyMS, &aiReviewID,
 		&item.EvidenceStatus, &evidenceExpiresAt,
 		&item.UserNotificationStatus, &item.OpsNotificationStatus, &item.CreatedAt,
 	)
@@ -1175,6 +1681,16 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 	if groupID.Valid {
 		item.GroupID = &groupID.Int64
 	}
+	if bodyBytes.Valid {
+		item.BodyBytes = &bodyBytes.Int64
+	}
+	if aiLatencyMS.Valid {
+		value := int(aiLatencyMS.Int64)
+		item.AILatencyMS = &value
+	}
+	if aiReviewID.Valid {
+		item.AIReviewID = &aiReviewID.Int64
+	}
 	if evidenceExpiresAt.Valid {
 		item.EvidenceExpiresAt = &evidenceExpiresAt.Time
 	}
@@ -1184,6 +1700,7 @@ func scanInstructionEvent(scanner instructionScanner) (InstructionEvent, error) 
 	if item.RuleSetIDs == nil {
 		item.RuleSetIDs = []int64{}
 	}
+	item.AuditLatencyMS = item.LatencyMS
 	return item, err
 }
 
@@ -1194,7 +1711,8 @@ func (r *InstructionRepository) GetEvent(ctx context.Context, id int64) (*Instru
 			e.model, e.endpoint, e.stage,
 			e.instructions_present, e.instructions_sha256, e.instructions_result,
 			e.input1_present, e.input1_sha256, e.input1_result,
-			e.decision, e.reason, e.rule_set_ids, e.config_version, e.latency_ms,
+			e.decision, e.reason, e.initial_reason, e.final_reason, e.final_outcome, e.policy_action,
+			e.rule_set_ids, e.config_version, e.body_bytes, e.latency_ms, e.ai_latency_ms, e.ai_review_id,
 			e.evidence_status, e.evidence_expires_at,
 			COALESCE(un.status, 'no_recipient'), COALESCE(op.status, 'no_recipient'), e.created_at
 		FROM instruction_audit_events e
@@ -1209,7 +1727,7 @@ func (r *InstructionRepository) GetEvent(ctx context.Context, id int64) (*Instru
 	return &item, nil
 }
 
-func (r *InstructionRepository) RecordBlocked(
+func (r *InstructionRepository) RecordEvent(
 	ctx context.Context,
 	req Request,
 	decision *InstructionDecision,
@@ -1225,6 +1743,30 @@ func (r *InstructionRepository) RecordBlocked(
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	eventID, err := recordInstructionEventTx(
+		ctx, tx, req, decision, evidenceStatus, evidenceExpiresAt, evidence,
+	)
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return eventID, nil
+}
+
+func recordInstructionEventTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	req Request,
+	decision *InstructionDecision,
+	evidenceStatus string,
+	evidenceExpiresAt *time.Time,
+	evidence []InstructionEvidence,
+) (int64, error) {
+	if tx == nil || decision == nil {
+		return 0, errors.New("instruction audit event transaction is invalid")
+	}
 	ruleSetIDs := decision.RuleSetIDs
 	if ruleSetIDs == nil {
 		ruleSetIDs = []int64{}
@@ -1237,6 +1779,14 @@ func (r *InstructionRepository) RecordBlocked(
 	if latencyMS < 0 {
 		latencyMS = 0
 	}
+	var aiLatencyMS any
+	if decision.AIReviewID != nil || decision.AILatency > 0 {
+		value := int(decision.AILatency.Milliseconds())
+		if value < 0 {
+			value = 0
+		}
+		aiLatencyMS = value
+	}
 	clientType := strings.ToLower(strings.TrimSpace(req.InstructionClientType))
 	if !validInstructionDetectedClientType(clientType) {
 		clientType = ClassifyInstructionClient(req.UserAgent, req.TrustedInternalClient)
@@ -1248,16 +1798,22 @@ func (r *InstructionRepository) RecordBlocked(
 			(request_id, user_id, user_email_snapshot, api_key_id, group_id, group_name_snapshot,
 			 client_type, client_user_agent, model, endpoint, stage,
 			 instructions_present, instructions_sha256, instructions_result,
-			 input1_present, input1_sha256, input1_result, reason, rule_set_ids, config_version, latency_ms,
+			 input1_present, input1_sha256, input1_result,
+			 decision, reason, initial_reason, final_reason, final_outcome, policy_action,
+			 rule_set_ids, config_version, body_bytes, latency_ms, ai_latency_ms, ai_review_id,
 			 evidence_status, evidence_expires_at)
 		VALUES ($1, NULLIF($2, 0), $3, NULLIF($4, 0), NULLIF($5, 0), $6, $7, LEFT($8, 512), $9, $10, $11,
-			$12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+			$12, $13, $14, $15, $16, $17,
+			$18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+			$30, $31)
 		RETURNING id`,
 		req.RequestID, req.UserID, req.UserEmail, req.APIKeyID, instructionGroupID(req.GroupID), req.GroupName,
 		clientType, clientUserAgent, req.Model, req.Endpoint, req.Stage,
 		decision.Instructions.Present, decision.Instructions.SHA256, decision.Instructions.Result,
 		decision.Input1.Present, decision.Input1.SHA256, decision.Input1.Result,
-		decision.Reason, ruleSets, decision.ConfigVersion, latencyMS,
+		decision.FinalOutcome, decision.FinalReason, decision.InitialReason, decision.FinalReason,
+		decision.FinalOutcome, decision.PolicyAction, ruleSets, decision.ConfigVersion,
+		decision.BodyBytes, latencyMS, aiLatencyMS, decision.AIReviewID,
 		evidenceStatus, evidenceExpiresAt).Scan(&eventID)
 	if err != nil {
 		return 0, err
@@ -1272,10 +1828,32 @@ func (r *InstructionRepository) RecordBlocked(
 			return 0, err
 		}
 	}
-	if err = tx.Commit(); err != nil {
-		return 0, err
-	}
 	return eventID, nil
+}
+
+func (r *InstructionRepository) RecordBlocked(
+	ctx context.Context,
+	req Request,
+	decision *InstructionDecision,
+	evidenceStatus string,
+	evidenceExpiresAt *time.Time,
+	evidence []InstructionEvidence,
+) (int64, error) {
+	if decision != nil {
+		if decision.InitialReason == "" {
+			decision.InitialReason = decision.Reason
+		}
+		if decision.FinalReason == "" {
+			decision.FinalReason = decision.Reason
+		}
+		if decision.FinalOutcome == "" {
+			decision.FinalOutcome = InstructionOutcomeBlocked
+		}
+		if decision.PolicyAction == "" {
+			decision.PolicyAction = InstructionPolicyActionBlock
+		}
+	}
+	return r.RecordEvent(ctx, req, decision, evidenceStatus, evidenceExpiresAt, evidence)
 }
 
 func (r *InstructionRepository) GetEvidenceRetentionDays(ctx context.Context) (int, error) {

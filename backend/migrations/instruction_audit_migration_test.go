@@ -96,3 +96,94 @@ func TestInstructionAuditRuleExceptionsMigrationIsAdditive(t *testing.T) {
 	require.NotContains(t, sql, "drop table")
 	require.NotContains(t, sql, "truncate")
 }
+
+func TestInstructionAuditOutcomesMigrationPreservesBlockedHistory(t *testing.T) {
+	body, err := FS.ReadFile("204_instruction_audit_outcomes_and_policies.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists final_outcome")
+	require.Contains(t, sql, "initial_reason = coalesce(initial_reason, reason)")
+	require.Contains(t, sql, "create or replace function instruction_audit_event_v13_compat")
+	require.Contains(t, sql, "create table if not exists instruction_audit_reason_policies")
+	require.Contains(t, sql, "'policy_allow', 'ai_pass', 'hash_pass', 'exception_pass'")
+	require.Contains(t, sql, "reason not in ('config_unavailable', 'ai_error') or action = 'block'")
+	require.NotContains(t, sql, "delete from instruction_audit_events")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditRawAITranslationMigrationStoresOnlyCiphertext(t *testing.T) {
+	body, err := FS.ReadFile("205_instruction_audit_raw_ai_translation.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "max_body_bytes                  bigint not null default 67108864")
+	require.Contains(t, sql, "ai_enabled                      boolean not null default false")
+	require.Contains(t, sql, "translation_enabled             boolean not null default false")
+	require.Contains(t, sql, "create table if not exists instruction_audit_hash_raw_contents")
+	require.Contains(t, sql, "ciphertext              bytea")
+	require.Contains(t, sql, "raw_content_unavailable")
+	require.Contains(t, sql, "create table if not exists instruction_audit_ai_reviews")
+	require.Contains(t, sql, "create table if not exists instruction_audit_hash_sources")
+	require.Contains(t, sql, "create table if not exists instruction_audit_sensitive_access_logs")
+	require.Contains(t, sql, "create table if not exists instruction_audit_translation_jobs")
+	for _, forbidden := range []string{"raw_content text", "translation_text", "bearer_token", "api_key_value", "request_body"} {
+		require.NotContains(t, sql, forbidden)
+	}
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditOutcomeAggregationMigrationIsAdditive(t *testing.T) {
+	body, err := FS.ReadFile("206_instruction_audit_outcome_aggregation.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "create table if not exists instruction_audit_outcome_hourly")
+	require.Contains(t, sql, "create table if not exists instruction_audit_outcome_rollup_state")
+	require.Contains(t, sql, "last_event_id         bigint not null default 0")
+	require.Contains(t, sql, "event_count           bigint not null default 0")
+	require.Contains(t, sql, "event_times           timestamptz[] not null")
+	require.NotContains(t, sql, "delete from instruction_audit_events")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditEventIndexesAreConcurrent(t *testing.T) {
+	body, err := FS.ReadFile("207_instruction_audit_v13_event_indexes_notx.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Equal(t, 4, strings.Count(sql, "create index concurrently if not exists"))
+	require.Contains(t, sql, "idx_instruction_audit_events_pass_cleanup")
+	require.Contains(t, sql, "where final_outcome in ('hash_pass', 'exception_pass')")
+}
+
+func TestInstructionAuditTranslationExecutionMigrationStoresNoTranslationText(t *testing.T) {
+	body, err := FS.ReadFile("208_instruction_audit_translation_execution.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "claim_version")
+	require.Contains(t, sql, "processing_started_at")
+	require.Contains(t, sql, "redaction_count")
+	require.Contains(t, sql, "provider_latency_ms")
+	require.NotContains(t, sql, "translated_text")
+	require.NotContains(t, sql, "raw_content")
+}
+
+func TestInstructionAuditAggregateRetentionMigrationIsAdditive(t *testing.T) {
+	body, err := FS.ReadFile("209_instruction_audit_aggregate_retention.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists aggregate_retention_days")
+	require.Contains(t, sql, "default 365")
+	require.Contains(t, sql, "expired_aggregate_event_count")
+	require.Contains(t, sql, "last_aggregate_pruned_at")
+	require.NotContains(t, sql, "delete from")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditAggregateShardMigrationBoundsGrowingArrays(t *testing.T) {
+	body, err := FS.ReadFile("210_instruction_audit_aggregate_shards.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists shard_no")
+	require.Contains(t, sql, "final_outcome, final_reason, shard_no")
+	require.Contains(t, sql, "chk_instruction_audit_outcome_hourly_shard")
+	require.NotContains(t, sql, "delete from")
+	require.NotContains(t, sql, "truncate")
+}
