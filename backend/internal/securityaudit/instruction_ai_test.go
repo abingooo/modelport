@@ -61,6 +61,9 @@ func TestParseInstructionAIResponseRejectsAmbiguousOrLooseOutput(t *testing.T) {
 		`{"result":"uncertain","approved_source":null,"confidence":1.1,"reason":"unknown"}`,
 		`{"result":"reject","approved_source":null,"confidence":0.8,"reason":"unsafe","extra":true}`,
 		`{"result":"reject","approved_source":null,"confidence":0.8,"reason":"unsafe"} {}`,
+		`{"result":"reject","approved_source":null,"confidence":0.8}`,
+		`{"result":"reject","result":"pass","approved_source":null,"confidence":0.8,"reason":"unsafe"}`,
+		`{"result":"reject","approved_source":null,"confidence":0.8,"reason":"unsafe","reason":"duplicate"}`,
 	} {
 		_, err = parseInstructionAIResponse(content, "instructions")
 		require.ErrorIs(t, err, errInstructionAIInvalid, content)
@@ -146,6 +149,36 @@ func TestInstructionAIConcurrencyBudgetCapsReviewerCalls(t *testing.T) {
 	close(release)
 	wait.Wait()
 	require.EqualValues(t, concurrency, maximum.Load())
+}
+
+func TestInstructionAIConcurrencyBudgetResizeKeepsActiveLeases(t *testing.T) {
+	service := NewInstructionService(nil, nil, nil)
+	service.configureInstructionAIBudget(2)
+	budget := service.aiBudget.Load()
+	releaseFirst, err := service.acquireInstructionAI(context.Background(), 2)
+	require.NoError(t, err)
+	releaseSecond, err := service.acquireInstructionAI(context.Background(), 2)
+	require.NoError(t, err)
+
+	service.configureInstructionAIBudget(1)
+	require.Same(t, budget, service.aiBudget.Load())
+	require.EqualValues(t, 1, budget.budget.Capacity())
+
+	assertBlocked := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
+		_, acquireErr := service.acquireInstructionAI(ctx, 2)
+		require.ErrorIs(t, acquireErr, errInstructionAIUnavailable)
+	}
+	assertBlocked()
+	releaseFirst()
+	assertBlocked()
+	releaseSecond()
+
+	releaseThird, err := service.acquireInstructionAI(context.Background(), 2)
+	require.NoError(t, err)
+	releaseThird()
+	require.EqualValues(t, 1, budget.budget.Capacity())
 }
 
 func TestInstructionAIReviewerTimeoutFailsClosed(t *testing.T) {

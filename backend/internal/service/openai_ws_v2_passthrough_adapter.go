@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -25,6 +26,10 @@ type openAIWSClientFrameConn struct {
 	interTurnIdleTimeout time.Duration
 	interTurnStarted     chan struct{}
 	waitingForNextTurn   atomic.Bool
+	readLimitBytes       int64
+	bodyBudget           *pkghttputil.RequestBodyMemoryBudget
+	leaseMu              sync.Mutex
+	pendingBodyLease     *pkghttputil.RequestBodyMemoryLease
 	// The relay observes upstream payloads, while clients must keep seeing the
 	// model identifier they supplied for the current turn.
 	restoreResponseModel func([]byte) []byte
@@ -52,7 +57,24 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 		return coderws.MessageText, nil, errOpenAIWSConnClosed
 	}
 	msgType, payload, err := c.inner.ReadFrame(ctx)
+	if leaseProvider, ok := c.inner.(interface {
+		takeInstructionBodyLease() *pkghttputil.RequestBodyMemoryLease
+	}); ok {
+		lease := leaseProvider.takeInstructionBodyLease()
+		defer lease.Release()
+	}
 	if err != nil {
+		if _, oversized := extractOpenAIWSMaxBytesError(err); !oversized || len(payload) == 0 || c.filter == nil {
+			return msgType, payload, err
+		}
+		if _, blocked, filterErr := c.filter(msgType, payload); filterErr != nil {
+			return msgType, payload, filterErr
+		} else if blocked != nil {
+			if c.onBlock != nil {
+				c.onBlock(blocked)
+			}
+			return msgType, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
+		}
 		return msgType, payload, err
 	}
 	if c.filter == nil {
@@ -596,7 +618,7 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 	if c.controlCtx != nil {
 		controlCtx = c.controlCtx
 	}
-	msgType, payload, err := readOpenAIWSClientMessageWithTimeoutStart(
+	msgType, payload, lease, err := readOpenAIWSClientMessageWithTimeoutStartAndBudget(
 		controlCtx,
 		c.conn,
 		c.interTurnIdleTimeout,
@@ -604,8 +626,26 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 		"websocket idle timeout",
 		c.interTurnStarted,
 		func() bool { return c.waitingForNextTurn.Load() },
+		c.readLimitBytes,
+		c.bodyBudget,
 	)
+	c.leaseMu.Lock()
+	previousLease := c.pendingBodyLease
+	c.pendingBodyLease = lease
+	c.leaseMu.Unlock()
+	previousLease.Release()
 	return msgType, payload, err
+}
+
+func (c *openAIWSClientFrameConn) takeInstructionBodyLease() *pkghttputil.RequestBodyMemoryLease {
+	if c == nil {
+		return nil
+	}
+	c.leaseMu.Lock()
+	lease := c.pendingBodyLease
+	c.pendingBodyLease = nil
+	c.leaseMu.Unlock()
+	return lease
 }
 
 func (c *openAIWSClientFrameConn) markTurnStarted() {
@@ -908,6 +948,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		controlCtx:           ctx,
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
 		interTurnStarted:     make(chan struct{}, 1),
+		readLimitBytes:       hooksInstructionReadLimit(hooks),
+		bodyBudget:           hooksInstructionBodyBudget(hooks),
 		restoreResponseModel: func(payload []byte) []byte {
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			if !openAIWSEventMayContainModel(eventType) {

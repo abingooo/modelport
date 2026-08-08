@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
@@ -44,26 +45,42 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 	)
 
 	// Read request body
-	body, instructionAuditBody, err := readLenientJSONRequestBodyWithAuditSource(c.Request, h.cfg)
+	body, instructionAuditBody, bodyLease, err := readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(
+		c.Request,
+		instructionRequestBodyReadLimit(h.securityAuditCoordinator, gatewayMaxBodySize(h.cfg)),
+		instructionRequestBodyBudget(h.securityAuditCoordinator),
+	)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
+			instructionAuditExcluded := isOpenAIRemoteCompactPath(c)
+			preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+			decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http")
+			bodyLease.Release()
+			if decision != nil && !decision.AllowNextStage {
+				h.responsesSecurityAuditError(c, decision)
+				return
+			}
 			h.responsesErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
+		bodyLease.Release()
 		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
 
 	if len(body) == 0 {
+		bodyLease.Release()
 		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
 	instructionAuditExcluded := isOpenAIRemoteCompactPath(c)
 	preAuditModel := gjson.GetBytes(body, "model").String()
 	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http"); decision != nil && !decision.AllowNextStage {
+		bodyLease.Release()
 		h.responsesSecurityAuditError(c, decision)
 		return
 	}
+	bodyLease.Release()
 
 	setOpsRequestContext(c, "", false)
 

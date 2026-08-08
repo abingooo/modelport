@@ -13,13 +13,16 @@
       </div>
     </div>
 
-    <div v-if="loading && !draft" class="p-6" aria-busy="true">
-      <div class="h-64 animate-pulse rounded-md bg-gray-100 dark:bg-dark-700" />
-    </div>
-    <div v-else-if="error && !draft" role="alert" class="m-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-      {{ error }}
-    </div>
-    <form v-else-if="draft" class="divide-y divide-gray-100 dark:divide-dark-700" @submit.prevent="submit">
+    <InstructionAuditResourceState
+      :loading="loading"
+      :loaded="Boolean(config)"
+      :error="error"
+      :has-data="Boolean(draft)"
+      :empty-description="t('admin.instructionAudit.states.runtimeEmpty')"
+      :disabled="overview?.enabled === false"
+      :skeleton-rows="4"
+    >
+    <form v-if="draft" class="divide-y divide-gray-100 dark:divide-dark-700" @submit.prevent="submit">
       <section class="space-y-4 px-4 py-5 sm:px-6">
         <div>
           <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.runtime.parserTitle') }}</h3>
@@ -28,11 +31,31 @@
         <div class="grid gap-4" style="grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));">
           <NumberField v-model="maxBodyMiB" :label="t('admin.instructionAudit.runtime.maxBodyMiB')" :min="1" :max="128" />
           <NumberField v-model="draft.parse_timeout_ms" :label="t('admin.instructionAudit.runtime.parseTimeout')" :min="50" :max="5000" suffix="ms" />
-          <NumberField v-model="maxInflightMiB" :label="t('admin.instructionAudit.runtime.maxInflightMiB')" :min="maxBodyMiB" :max="2048" />
+          <NumberField v-model="maxInflightMiB" :label="t('admin.instructionAudit.runtime.maxInflightMiB')" :min="minimumInflightMiB" :max="2048" />
           <NumberField v-model="draft.pass_event_retention_days" :label="t('admin.instructionAudit.runtime.passRetention')" :min="1" :max="90" :suffix="t('admin.instructionAudit.days')" />
           <NumberField v-model="draft.aggregate_retention_days" :label="t('admin.instructionAudit.runtime.aggregateRetention')" :min="30" :max="3650" :suffix="t('admin.instructionAudit.days')" />
           <NumberField v-model="draft.raw_content_retention_days" :label="t('admin.instructionAudit.runtime.rawRetention')" :min="1" :max="3650" :suffix="t('admin.instructionAudit.days')" />
         </div>
+        <dl v-if="overview" class="grid gap-x-6 gap-y-2 border-t border-gray-100 pt-4 text-xs dark:border-dark-700 sm:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.runtime.configuredBodyLimit') }}</dt>
+            <dd class="mt-1 font-medium tabular-nums text-gray-900 dark:text-white">{{ formatBytes(overview.max_body_bytes) }}</dd>
+          </div>
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.runtime.httpEffectiveLimit') }}</dt>
+            <dd class="mt-1 font-medium tabular-nums text-gray-900 dark:text-white">{{ formatBytes(overview.effective_http_max_body_bytes) }}</dd>
+            <p class="mt-0.5 text-gray-400 dark:text-gray-500">{{ t('admin.instructionAudit.runtime.gatewayLimit', { value: formatBytes(overview.http_gateway_max_body_bytes) }) }}</p>
+          </div>
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.runtime.websocketEffectiveLimit') }}</dt>
+            <dd class="mt-1 font-medium tabular-nums text-gray-900 dark:text-white">{{ formatBytes(overview.effective_websocket_max_body_bytes) }}</dd>
+            <p class="mt-0.5 text-gray-400 dark:text-gray-500">{{ t('admin.instructionAudit.runtime.gatewayLimit', { value: formatBytes(overview.websocket_gateway_max_body_bytes) }) }}</p>
+          </div>
+          <div>
+            <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.runtime.externalLimit') }}</dt>
+            <dd class="mt-1 text-gray-600 dark:text-gray-300">{{ t('admin.instructionAudit.runtime.externalLimitHint') }}</dd>
+          </div>
+        </dl>
       </section>
 
       <section class="space-y-4 px-4 py-5 sm:px-6">
@@ -112,6 +135,7 @@
         </div>
       </div>
     </form>
+    </InstructionAuditResourceState>
   </section>
 </template>
 
@@ -120,10 +144,11 @@ import { computed, defineComponent, h, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import Toggle from '@/components/common/Toggle.vue'
-import type { InstructionRuntimeConfig, UpdateInstructionRuntimeConfigRequest } from '../types'
+import InstructionAuditResourceState from './InstructionAuditResourceState.vue'
+import type { InstructionOverview, InstructionRuntimeConfig, UpdateInstructionRuntimeConfigRequest } from '../types'
 
 const MIB = 1024 * 1024
-const props = defineProps<{ config: InstructionRuntimeConfig | null; loading: boolean; saving: boolean; error: string }>()
+const props = defineProps<{ config: InstructionRuntimeConfig | null; overview: InstructionOverview | null; loading: boolean; saving: boolean; error: string }>()
 const emit = defineEmits<{ (event: 'save', payload: UpdateInstructionRuntimeConfigRequest): void }>()
 const { t } = useI18n()
 const draft = ref<UpdateInstructionRuntimeConfigRequest | null>(null)
@@ -183,11 +208,12 @@ const maxInflightMiB = computed({
   get: () => Math.round((draft.value?.max_inflight_body_bytes || MIB) / MIB),
   set: (value: number) => { if (draft.value) draft.value.max_inflight_body_bytes = Math.round(value * MIB) },
 })
+const minimumInflightMiB = computed(() => maxBodyMiB.value * 3)
 const dirty = computed(() => Boolean(draft.value) && JSON.stringify(draft.value) !== baseline.value)
 const valid = computed(() => {
   const value = draft.value
   if (!value) return false
-  if (value.max_body_bytes < MIB || value.max_body_bytes > 128 * MIB || value.max_inflight_body_bytes < value.max_body_bytes || value.max_inflight_body_bytes > 2048 * MIB) return false
+  if (value.max_body_bytes < MIB || value.max_body_bytes > 128 * MIB || value.max_inflight_body_bytes < value.max_body_bytes * 3 || value.max_inflight_body_bytes > 2048 * MIB) return false
   if (value.parse_timeout_ms < 50 || value.parse_timeout_ms > 5000 || value.pass_event_retention_days < 1 || value.pass_event_retention_days > 90 || value.aggregate_retention_days < 30 || value.aggregate_retention_days > 3650 || value.raw_content_retention_days < 1 || value.raw_content_retention_days > 3650) return false
   if (value.ai_timeout_ms < 100 || value.ai_timeout_ms > 30000 || value.ai_max_concurrency < 1 || value.ai_max_concurrency > 64 || value.ai_min_confidence < 0.5 || value.ai_min_confidence > 1) return false
   if (value.ai_per_user_rpm < 1 || value.ai_per_user_rpm > 120 || value.ai_per_user_daily_limit < 1 || value.ai_per_user_daily_limit > 1000 || value.ai_global_daily_limit < 1 || value.ai_global_daily_limit > 100000) return false
@@ -274,5 +300,10 @@ function submit() {
 
 function formatDate(value: string): string {
   return value ? new Date(value).toLocaleString() : '-'
+}
+
+function formatBytes(value: number): string {
+  if (!value) return t('admin.instructionAudit.runtime.unknownLimit')
+  return `${Math.round((value / MIB) * 10) / 10} MiB`
 }
 </script>

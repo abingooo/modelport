@@ -95,6 +95,34 @@ func TestInspectInstructionPayloadPreservesExactText(t *testing.T) {
 	require.Equal(t, "Line\n模型港", result.Instructions.Plaintext)
 }
 
+func TestStrictInstructionParserAcceptsJSONEscapedSlash(t *testing.T) {
+	const trusted = "https://example.com/v1/responses"
+	allowed := []instructionPolicyHash{allowedDigest(trusted)}
+
+	result := inspectInstructionPayload([]byte(`{"instructions":"https:\/\/example.com\/v1\/responses"}`), allowed)
+	require.True(t, result.Allow)
+	require.Equal(t, "match", result.Instructions.Result)
+	require.Equal(t, trusted, result.Instructions.Plaintext)
+
+	result = inspectInstructionPayload([]byte(`{"instructions":"untrusted","input":[{}, {"content":[{"type":"input_text","text":"https:\/\/example.com\/v1\/responses"}]}]}`), allowed)
+	require.True(t, result.Allow)
+	require.Equal(t, "mismatch", result.Instructions.Result)
+	require.Equal(t, "match", result.Input1.Result)
+	require.Equal(t, trusted, result.Input1.Plaintext)
+}
+
+func TestStrictInstructionParserDecodesAllStandardJSONEscapes(t *testing.T) {
+	const trusted = "\"\\/\b\f\n\r\tA🚀"
+	result := inspectInstructionPayload(
+		[]byte(`{"instructions":"\"\\\/\b\f\n\r\t\u0041\uD83D\uDE80"}`),
+		[]instructionPolicyHash{allowedDigest(trusted)},
+	)
+
+	require.True(t, result.Allow)
+	require.Equal(t, "match", result.Instructions.Result)
+	require.Equal(t, trusted, result.Instructions.Plaintext)
+}
+
 func TestInspectInstructionPayloadFallsBackAfterInvalidInstructions(t *testing.T) {
 	allowed := []instructionPolicyHash{allowedDigest("trusted")}
 	for _, body := range []string{
@@ -140,6 +168,7 @@ func TestInstructionFieldsStrictlyEmpty(t *testing.T) {
 func TestInspectInstructionPayloadRejectsStrictJSONViolations(t *testing.T) {
 	for _, body := range [][]byte{
 		[]byte(`{"instructions":"one","instructions":"two"}`),
+		[]byte(`{"instructions":"one","instructi\u006fns":"two"}`),
 		[]byte(`{"instructions":"trusted","metadata":{"duplicate":1,"duplicate":2}}`),
 		[]byte("{\"instructions\":\"bad\xff\"}"),
 		[]byte("{\"instructions\":\"raw\x00byte\"}"),
@@ -150,6 +179,49 @@ func TestInspectInstructionPayloadRejectsStrictJSONViolations(t *testing.T) {
 		require.False(t, result.Allow)
 		require.Equal(t, "invalid_json", result.Reason)
 	}
+}
+
+func TestStrictInstructionParserTimeoutCoversLinearScans(t *testing.T) {
+	deadline := time.Unix(100, 0)
+	expiredNow := func() time.Time { return deadline.Add(time.Millisecond) }
+
+	t.Run("UTF-8 validation", func(t *testing.T) {
+		body := bytes.Repeat([]byte("a"), instructionAuditClockInterval+1)
+		err := validateInstructionAuditUTF8(body, deadline, expiredNow)
+		require.ErrorIs(t, err, errInstructionAuditParseTimeout)
+	})
+
+	t.Run("whitespace", func(t *testing.T) {
+		parser := strictInstructionJSONParser{
+			body:           bytes.Repeat([]byte(" "), instructionAuditClockInterval+1),
+			limits:         instructionAuditParserLimits{now: expiredNow},
+			deadline:       deadline,
+			nextClockCheck: instructionAuditClockInterval,
+		}
+		require.ErrorIs(t, parser.skipWhitespace(), errInstructionAuditParseTimeout)
+	})
+
+	t.Run("number", func(t *testing.T) {
+		parser := strictInstructionJSONParser{
+			body:           bytes.Repeat([]byte("1"), instructionAuditClockInterval+1),
+			limits:         instructionAuditParserLimits{now: expiredNow},
+			deadline:       deadline,
+			nextClockCheck: instructionAuditClockInterval,
+		}
+		require.ErrorIs(t, parser.consumeNumber(), errInstructionAuditParseTimeout)
+	})
+
+	t.Run("string decoding", func(t *testing.T) {
+		body := append([]byte{'"'}, bytes.Repeat([]byte("a"), instructionAuditClockInterval+1)...)
+		body = append(body, '"')
+		parser := strictInstructionJSONParser{
+			body:     body,
+			limits:   instructionAuditParserLimits{now: expiredNow},
+			deadline: deadline,
+		}
+		_, err := parser.decodeString(0, len(body), len(body))
+		require.ErrorIs(t, err, errInstructionAuditParseTimeout)
+	})
 }
 
 func TestStrictInstructionParserRetainsOnlyAuditTargets(t *testing.T) {
@@ -219,20 +291,21 @@ func TestInstructionParserBudgetBoundsConcurrentLargeBodies(t *testing.T) {
 	copy(body[len(body)-len(suffix):], suffix)
 
 	service := NewInstructionService(nil, nil, nil)
-	service.configureInstructionParserBudget(int64(len(body)))
-	budget := service.parserBudget.Load()
+	service.configureInstructionRequestBodyBudget(int64(len(body)))
+	budget := service.requestBodyBudget.Load()
 	require.NotNil(t, budget)
-	require.NoError(t, budget.semaphore.Acquire(context.Background(), int64(len(body))))
+	lease, err := budget.Acquire(context.Background(), int64(len(body)))
+	require.NoError(t, err)
 
 	runtime := InstructionRuntimeConfig{
 		MaxBodyBytes:         2 << 20,
 		ParseTimeoutMS:       10,
 		MaxInflightBodyBytes: int64(len(body)),
 	}
-	_, err := service.parseInstructionRoot(context.Background(), body, runtime)
+	_, err = service.parseInstructionRoot(context.Background(), body, runtime)
 	require.ErrorIs(t, err, errInstructionAuditParseTimeout)
 
-	budget.semaphore.Release(int64(len(body)))
+	lease.Release()
 	runtime.ParseTimeoutMS = 5000
 	root, err := service.parseInstructionRoot(context.Background(), body, runtime)
 	require.NoError(t, err)
@@ -273,6 +346,12 @@ func TestInspectInstructionPayloadRejectsOversizedAndOverlyComplexBodies(t *test
 	}
 	_, _ = body.WriteString(`]}`)
 	result = inspectInstructionPayload([]byte(body.String()), nil)
+	require.False(t, result.Allow)
+	require.Equal(t, "structure_too_complex", result.Reason)
+
+	deeplyNested := `{"metadata":` + strings.Repeat(`[`, maxInstructionAuditDepth+1) +
+		`0` + strings.Repeat(`]`, maxInstructionAuditDepth+1) + `}`
+	result = inspectInstructionPayload([]byte(deeplyNested), nil)
 	require.False(t, result.Allow)
 	require.Equal(t, "structure_too_complex", result.Reason)
 }

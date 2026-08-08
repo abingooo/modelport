@@ -28,6 +28,7 @@ var (
 	errInstructionTranslationUnavailable = errors.New("instruction audit translation unavailable")
 	errInstructionTranslationInvalid     = errors.New("instruction audit translation response invalid")
 	instructionTranslationLanguage       = regexp.MustCompile(`^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8}){0,3}$`)
+	instructionTranslationPlaceholder    = regexp.MustCompile(`\[\[MP_REDACTED_[0-9]+\]\]`)
 	instructionTranslationRedactors      = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)(?:api[_-]?key|access[_-]?token|authorization)[ \t]*[:=][ \t]*["']?[^"'\s,}]{8,}["']?`),
 		regexp.MustCompile(`(?i)\bBearer[ \t]+[A-Za-z0-9._~+/=-]{8,}`),
@@ -218,6 +219,10 @@ func (s *InstructionService) CreateTranslationJob(
 	actorID int64,
 	access InstructionSensitiveAccess,
 ) (*InstructionTranslationJob, error) {
+	if _, _, err := s.requireInstructionSensitiveAuthorization(ctx, actorID); err != nil {
+		return nil, err
+	}
+	access.ActorID = actorID
 	request.ResourceType = strings.ToLower(strings.TrimSpace(request.ResourceType))
 	request.FieldName = strings.ToLower(strings.TrimSpace(request.FieldName))
 	request.TargetLanguage = strings.TrimSpace(request.TargetLanguage)
@@ -259,6 +264,9 @@ func (s *InstructionService) GetTranslationJob(
 	jobID int64,
 	access InstructionSensitiveAccess,
 ) (*InstructionTranslationJob, error) {
+	if _, _, err := s.requireInstructionSensitiveAuthorization(ctx, access.ActorID); err != nil {
+		return nil, err
+	}
 	if jobID <= 0 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_translation_job", "翻译任务 ID 无效")
 	}
@@ -268,6 +276,12 @@ func (s *InstructionService) GetTranslationJob(
 	}
 	if err != nil {
 		return nil, err
+	}
+	if err = s.repository.ValidateInstructionTranslationGrant(ctx, job); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, instructionSensitiveRequired()
+		}
+		return nil, instructionSensitiveUnavailable()
 	}
 	if !time.Now().UTC().Before(job.ExpiresAt) {
 		_ = s.repository.MarkTranslationJobExpired(ctx, job.ID)
@@ -358,11 +372,18 @@ func instructionTranslationResultKey(jobID int64) string {
 func redactInstructionTranslationText(content string) (string, map[string]string) {
 	redactions := make(map[string]string)
 	redacted := content
+	nextPlaceholder := 1
 	for _, pattern := range instructionTranslationRedactors {
 		redacted = pattern.ReplaceAllStringFunc(redacted, func(match string) string {
-			placeholder := fmt.Sprintf("[[MP_REDACTED_%04d]]", len(redactions)+1)
-			redactions[placeholder] = match
-			return placeholder
+			for {
+				placeholder := fmt.Sprintf("[[MP_REDACTED_%04d]]", nextPlaceholder)
+				nextPlaceholder++
+				if strings.Contains(content, placeholder) {
+					continue
+				}
+				redactions[placeholder] = match
+				return placeholder
+			}
 		})
 	}
 	return redacted, redactions
@@ -370,9 +391,8 @@ func redactInstructionTranslationText(content string) (string, map[string]string
 
 func restoreInstructionTranslationText(content string, redactions map[string]string) string {
 	result := content
-	for index := 1; index <= len(redactions); index++ {
-		placeholder := fmt.Sprintf("[[MP_REDACTED_%04d]]", index)
-		result = strings.ReplaceAll(result, placeholder, redactions[placeholder])
+	for placeholder, original := range redactions {
+		result = strings.ReplaceAll(result, placeholder, original)
 	}
 	return result
 }
@@ -381,21 +401,38 @@ func splitInstructionTranslationUTF8(content string, maxBytes int) ([]string, er
 	if content == "" || !utf8.ValidString(content) || maxBytes < utf8.UTFMax {
 		return nil, errors.New("instruction translation chunk limit is invalid")
 	}
+	placeholders := instructionTranslationPlaceholder.FindAllStringIndex(content, -1)
 	chunks := make([]string, 0, len(content)/maxBytes+1)
-	start, currentBytes := 0, 0
-	for index, character := range content {
-		characterBytes := utf8.RuneLen(character)
-		if characterBytes < 0 {
-			return nil, errors.New("instruction translation content is invalid UTF-8")
+	placeholderIndex := 0
+	for start := 0; start < len(content); {
+		end := start + maxBytes
+		if end >= len(content) {
+			end = len(content)
+		} else {
+			for end > start && !utf8.RuneStart(content[end]) {
+				end--
+			}
 		}
-		if currentBytes > 0 && currentBytes+characterBytes > maxBytes {
-			chunks = append(chunks, content[start:index])
-			start, currentBytes = index, 0
+		for placeholderIndex < len(placeholders) && placeholders[placeholderIndex][1] <= start {
+			placeholderIndex++
 		}
-		currentBytes += characterBytes
-	}
-	if start < len(content) {
-		chunks = append(chunks, content[start:])
+		if placeholderIndex < len(placeholders) {
+			placeholder := placeholders[placeholderIndex]
+			if placeholder[0] < end && end < placeholder[1] {
+				if placeholder[0] > start {
+					end = placeholder[0]
+				} else if placeholder[1]-start <= maxBytes {
+					end = placeholder[1]
+				} else {
+					return nil, errors.New("instruction translation placeholder exceeds chunk limit")
+				}
+			}
+		}
+		if end <= start {
+			return nil, errors.New("instruction translation chunk limit cannot preserve content")
+		}
+		chunks = append(chunks, content[start:end])
+		start = end
 	}
 	if len(chunks) == 0 {
 		return nil, errors.New("instruction translation content is empty")

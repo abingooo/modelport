@@ -10,7 +10,7 @@ import (
 const instructionTranslationJobColumns = `
 	id, resource_type, resource_id, field_name, target_language, provider, status,
 	error_code, chunk_count, completed_chunks, attempts, max_attempts, claim_version,
-	result_bytes, redaction_count, provider_latency_ms, requested_by,
+	result_bytes, redaction_count, provider_latency_ms, requested_by, authorized_grant_id,
 	processing_started_at, expires_at, created_at, updated_at`
 
 func (r *InstructionRepository) CreateTranslationJob(
@@ -28,14 +28,18 @@ func (r *InstructionRepository) CreateTranslationJob(
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	grantID, authMethod, authorizationResult := instructionSensitiveAuditAuthorization(ctx)
+	if grantID == nil || authMethod != "jwt" || authorizationResult != "granted" {
+		return nil, errors.New("instruction audit sensitive authorization is required")
+	}
 	row := tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_translation_jobs
 			(resource_type, resource_id, field_name, target_language, provider,
-			 requested_by, expires_at, next_attempt_at)
-		VALUES ($1, $2, $3, $4, $5, NULLIF($6, 0), $7, NOW())
+			 requested_by, authorized_grant_id, expires_at, next_attempt_at)
+		VALUES ($1, $2, $3, $4, $5, NULLIF($6, 0), $7, $8, NOW())
 		RETURNING `+instructionTranslationJobColumns,
 		request.ResourceType, request.ResourceID, request.FieldName,
-		request.TargetLanguage, request.Provider, actorID, expiresAt.UTC())
+		request.TargetLanguage, request.Provider, actorID, grantID, expiresAt.UTC())
 	job, err := scanInstructionTranslationJob(row)
 	if err != nil {
 		return nil, err
@@ -49,10 +53,11 @@ func (r *InstructionRepository) CreateTranslationJob(
 	if _, err = tx.ExecContext(ctx, `
 		INSERT INTO instruction_audit_sensitive_access_logs
 			(resource_type, resource_id, actor_id, action, request_id, client_ip,
-			 user_agent, succeeded, error_code)
+			 user_agent, succeeded, error_code, grant_id, auth_method, authorization_result)
 		VALUES ('translation', $1, NULLIF($2, 0), 'translate', LEFT($3, 128),
-			LEFT($4, 64), LEFT($5, 512), TRUE, '')`,
-		job.ID, actorID, access.RequestID, access.ClientIP, access.UserAgent); err != nil {
+			LEFT($4, 64), LEFT($5, 512), TRUE, '', $6, LEFT($7, 24), LEFT($8, 24))`,
+		job.ID, actorID, access.RequestID, access.ClientIP, access.UserAgent,
+		grantID, authMethod, authorizationResult); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -68,6 +73,17 @@ func (r *InstructionRepository) GetTranslationJob(ctx context.Context, id int64)
 	return scanInstructionTranslationJob(r.db.QueryRowContext(ctx, `
 		SELECT `+instructionTranslationJobColumns+`
 		FROM instruction_audit_translation_jobs WHERE id = $1`, id))
+}
+
+func (r *InstructionRepository) ValidateInstructionTranslationGrant(
+	ctx context.Context,
+	job *InstructionTranslationJob,
+) error {
+	if job == nil || job.RequestedBy == nil || job.AuthorizedGrantID == nil {
+		return sql.ErrNoRows
+	}
+	_, err := r.GetActiveInstructionSensitiveGrantByID(ctx, *job.RequestedBy, *job.AuthorizedGrantID)
+	return err
 }
 
 func (r *InstructionRepository) ClaimTranslationJob(ctx context.Context, now time.Time) (*InstructionTranslationJob, bool, error) {
@@ -212,17 +228,21 @@ func requireInstructionTranslationLease(result sql.Result, err error) error {
 func scanInstructionTranslationJob(scanner instructionScanner) (*InstructionTranslationJob, error) {
 	var job InstructionTranslationJob
 	var requestedBy sql.NullInt64
+	var authorizedGrantID sql.NullInt64
 	var processingStartedAt sql.NullTime
 	err := scanner.Scan(
 		&job.ID, &job.ResourceType, &job.ResourceID, &job.FieldName,
 		&job.TargetLanguage, &job.Provider, &job.Status, &job.ErrorCode,
 		&job.ChunkCount, &job.CompletedChunks, &job.Attempts, &job.MaxAttempts,
 		&job.ClaimVersion, &job.ResultBytes, &job.RedactionCount,
-		&job.ProviderLatencyMS, &requestedBy, &processingStartedAt,
+		&job.ProviderLatencyMS, &requestedBy, &authorizedGrantID, &processingStartedAt,
 		&job.ExpiresAt, &job.CreatedAt, &job.UpdatedAt,
 	)
 	if requestedBy.Valid {
 		job.RequestedBy = &requestedBy.Int64
+	}
+	if authorizedGrantID.Valid {
+		job.AuthorizedGrantID = &authorizedGrantID.Int64
 	}
 	if processingStartedAt.Valid {
 		value := processingStartedAt.Time.UTC()

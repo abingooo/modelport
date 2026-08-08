@@ -3,16 +3,60 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+type requestBodyLimitInstructionEngine struct {
+	budget *pkghttputil.RequestBodyMemoryBudget
+	limit  int64
+}
+
+func (engine requestBodyLimitInstructionEngine) EvaluateInstruction(context.Context, securityaudit.Request) *securityaudit.InstructionDecision {
+	return &securityaudit.InstructionDecision{Allow: true}
+}
+
+func (engine requestBodyLimitInstructionEngine) RequestBodyMemoryBudget() *pkghttputil.RequestBodyMemoryBudget {
+	return engine.budget
+}
+
+func (engine requestBodyLimitInstructionEngine) RequestBodyReadLimit() int64 {
+	return engine.limit
+}
+
+type requestBodyLimitRepeatingReader byte
+
+func (reader requestBodyLimitRepeatingReader) Read(buffer []byte) (int, error) {
+	for index := range buffer {
+		buffer[index] = byte(reader)
+	}
+	return len(buffer), nil
+}
+
+func sizedResponsesRequestBody(totalBytes int64, stream bool) io.Reader {
+	prefix := fmt.Sprintf(`{"model":"gpt-test","stream":%t,"input":"`, stream)
+	suffix := `"}`
+	fillerBytes := totalBytes - int64(len(prefix)+len(suffix))
+	return io.MultiReader(
+		strings.NewReader(prefix),
+		io.LimitReader(requestBodyLimitRepeatingReader('a'), fillerBytes),
+		strings.NewReader(suffix),
+	)
+}
 
 func TestLenientResponsesReaderPreservesDecodedStrictAuditSource(t *testing.T) {
 	raw := []byte("{\"instructions\":\"line\nline\"}")
@@ -70,6 +114,134 @@ func TestLenientResponsesReaderPreservesDecodedBodyAboveInstructionLimit(t *test
 	})
 	require.NoError(t, err)
 	require.Len(t, auditSource, 65<<20)
+}
+
+func TestResponsesIngressBodySizeMatrix(t *testing.T) {
+	const maxBodyBytes = int64(64 << 20)
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(maxBodyBytes, requestBodyWorkingSetBufferEstimate)
+	require.NoError(t, err)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(workingSetBytes)
+
+	transports := []struct {
+		name   string
+		stream bool
+		accept string
+	}{
+		{name: "http", stream: false, accept: "application/json"},
+		{name: "sse", stream: true, accept: "text/event-stream"},
+	}
+	for _, transport := range transports {
+		for _, sizeMiB := range []int{1, 16, 32, 42, 64, 65} {
+			t.Run(fmt.Sprintf("%s/%dMiB", transport.name, sizeMiB), func(t *testing.T) {
+				targetBytes := int64(sizeMiB) << 20
+				request := httptest.NewRequest(
+					http.MethodPost,
+					"/v1/responses",
+					sizedResponsesRequestBody(targetBytes, transport.stream),
+				)
+				request.Header.Set("Accept", transport.accept)
+				request.Header.Set("Content-Type", "application/json")
+
+				normalized, auditSource, lease, readErr := readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(
+					request, maxBodyBytes, budget,
+				)
+				if lease != nil {
+					defer lease.Release()
+				}
+
+				if sizeMiB == 65 {
+					var maxErr *http.MaxBytesError
+					require.ErrorAs(t, readErr, &maxErr)
+					require.Equal(t, maxBodyBytes, maxErr.Limit)
+					require.Nil(t, normalized)
+					require.Len(t, auditSource, int(maxBodyBytes+1))
+					require.NotNil(t, lease)
+					require.Equal(t, byte('{'), auditSource[0])
+					return
+				}
+
+				require.NoError(t, readErr)
+				require.NotNil(t, lease)
+				require.Len(t, auditSource, int(targetBytes))
+				require.Len(t, normalized, int(targetBytes))
+				require.True(t, bytes.Equal(auditSource, normalized))
+				require.Equal(t, byte('{'), normalized[0])
+				require.Equal(t, byte('}'), normalized[len(normalized)-1])
+			})
+		}
+	}
+}
+
+func TestLenientResponsesReaderBudgetCoversNormalizationLifetime(t *testing.T) {
+	const maxBodyBytes = int64(1024)
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(maxBodyBytes, requestBodyWorkingSetBufferEstimate)
+	require.NoError(t, err)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(workingSetBytes)
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxBodySize: maxBodyBytes}}
+
+	first := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte("{\"instructions\":\"line\nline\"}")))
+	normalized, auditSource, lease, err := readLenientJSONRequestBodyWithAuditSourceAndBudget(first, cfg, budget)
+	require.NoError(t, err)
+	require.NotNil(t, lease)
+	require.Contains(t, string(normalized), `\u000a`)
+	require.Contains(t, string(auditSource), "line\nline")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	second := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"instructions":"second"}`))).WithContext(ctx)
+	_, _, secondLease, err := readLenientJSONRequestBodyWithAuditSourceAndBudget(second, cfg, budget)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Nil(t, secondLease)
+
+	lease.Release()
+	third := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"instructions":"third"}`)))
+	_, _, thirdLease, err := readLenientJSONRequestBodyWithAuditSourceAndBudget(third, cfg, budget)
+	require.NoError(t, err)
+	require.NotNil(t, thirdLease)
+	thirdLease.Release()
+}
+
+func TestInstructionAuditDefaultBudgetUsesEffectiveAuditReadLimit(t *testing.T) {
+	const (
+		gatewayLimit = int64(256 << 20)
+		auditLimit   = int64(64 << 20)
+		budgetBytes  = int64(256 << 20)
+	)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(budgetBytes)
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, requestBodyLimitInstructionEngine{
+		budget: budget,
+		limit:  auditLimit,
+	})
+	effectiveLimit := instructionRequestBodyReadLimit(coordinator, gatewayLimit)
+	require.Equal(t, auditLimit, effectiveLimit)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"instructions":"trusted"}`)))
+	_, _, readLease, err := readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(request, effectiveLimit, budget)
+	require.NoError(t, err)
+	require.NotNil(t, readLease)
+
+	parserLease, err := budget.Acquire(context.Background(), auditLimit)
+	require.NoError(t, err, "read double-buffer and parser buffer must fit the shared default budget")
+	parserLease.Release()
+	readLease.Release()
+}
+
+func TestLenientResponsesReaderReleasesBudgetAfterNormalizationError(t *testing.T) {
+	const maxBodyBytes = int64(16)
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(maxBodyBytes, requestBodyWorkingSetBufferEstimate)
+	require.NoError(t, err)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(workingSetBytes)
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxBodySize: maxBodyBytes}}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte("{\"x\":\"\x00\x00\x00\"}")))
+	_, _, lease, err := readLenientJSONRequestBodyWithAuditSourceAndBudget(request, cfg, budget)
+	var maxErr *http.MaxBytesError
+	require.True(t, errors.As(err, &maxErr))
+	require.Nil(t, lease)
+
+	reservation, err := budget.Acquire(context.Background(), workingSetBytes)
+	require.NoError(t, err)
+	reservation.Release()
 }
 
 func TestRequestBodyLimitTooLarge(t *testing.T) {

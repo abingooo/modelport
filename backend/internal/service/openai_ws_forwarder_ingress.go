@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -26,6 +27,11 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 }
 
 func openAIWSInstructionCandidateFrame(payload []byte) bool {
+	if !gjson.ValidBytes(payload) {
+		// Invalid or truncated JSON must still reach instruction audit so the
+		// request records invalid_json/request_too_large before transport close.
+		return true
+	}
 	firstType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 	if firstType == "" || firstType == "response.create" {
 		return true
@@ -428,30 +434,52 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return clientConn.Write(writeCtx, coderws.MessageText, message)
 	}
 
-	readClientMessage := func() ([]byte, error) {
+	readClientMessage := func() ([]byte, *pkghttputil.RequestBodyMemoryLease, error) {
 		idleTimeout := s.openAIWSIngressInterTurnIdleTimeout()
-		msgType, payload, readErr := ReadOpenAIWSClientMessage(
+		readLimitBytes := int64(0)
+		var bodyBudget *pkghttputil.RequestBodyMemoryBudget
+		if hooks != nil {
+			readLimitBytes = hooks.InstructionReadLimitBytes
+			bodyBudget = hooks.InstructionBodyBudget
+		}
+		msgType, payload, lease, readErr := ReadOpenAIWSClientMessageWithBudget(
 			ctx,
 			clientConn,
 			idleTimeout,
 			coderws.StatusNormalClosure,
 			"websocket idle timeout",
+			readLimitBytes,
+			bodyBudget,
 		)
 		if readErr != nil {
 			var closeErr *OpenAIWSClientCloseError
 			if errors.As(readErr, &closeErr) && closeErr.StatusCode() == coderws.StatusNormalClosure {
 				logOpenAIWSModeInfo("ingress_ws_inter_turn_idle_timeout account_id=%d timeout_seconds=%d", account.ID, int(idleTimeout.Seconds()))
 			}
-			return nil, readErr
+			return payload, lease, readErr
 		}
 		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
-			return nil, NewOpenAIWSClientCloseError(
+			return nil, lease, NewOpenAIWSClientCloseError(
 				coderws.StatusPolicyViolation,
 				fmt.Sprintf("unsupported websocket client message type: %s", msgType.String()),
 				nil,
 			)
 		}
-		return payload, nil
+		return payload, lease, nil
+	}
+
+	auditOversizedClientMessage := func(turn int, payload []byte) error {
+		if len(payload) == 0 || hooks == nil || hooks.BeforeInstructionRequest == nil {
+			return nil
+		}
+		originalModel := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+		if originalModel == "" {
+			originalModel = ingressSessionOriginalModel
+		}
+		if originalModel == "" {
+			originalModel = strings.TrimSpace(hooks.InitialRequestModel)
+		}
+		return hooks.BeforeInstructionRequest(turn, payload, originalModel)
 	}
 
 	firstPayload, err := parseClientPayload(1, firstClientMessage)
@@ -607,8 +635,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				ttl := s.openAIWSResponseStickyTTL()
 				logOpenAIWSBindResponseAccountWarn(groupID, account.ID, responseID, stateStore.BindResponseAccount(ctx, groupID, responseID, account.ID, ttl))
 			}
-			nextClientMessage, readErr := readClientMessage()
+			nextClientMessage, nextMessageLease, readErr := readClientMessage()
 			if readErr != nil {
+				if _, oversized := extractOpenAIWSMaxBytesError(readErr); oversized {
+					auditErr := auditOversizedClientMessage(turn+1, nextClientMessage)
+					nextMessageLease.Release()
+					if auditErr != nil {
+						return auditErr
+					}
+				} else {
+					nextMessageLease.Release()
+				}
 				if isOpenAIWSClientDisconnectError(readErr) {
 					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
 					logOpenAIWSModeInfo(
@@ -622,6 +659,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				return fmt.Errorf("read client websocket request: %w", readErr)
 			}
 			nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
+			nextMessageLease.Release()
 			if parseErr != nil {
 				return parseErr
 			}
@@ -1624,8 +1662,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			preferredConnID = connID
 		}
 
-		nextClientMessage, readErr := readClientMessage()
+		nextClientMessage, nextMessageLease, readErr := readClientMessage()
 		if readErr != nil {
+			if _, oversized := extractOpenAIWSMaxBytesError(readErr); oversized {
+				auditErr := auditOversizedClientMessage(turn+1, nextClientMessage)
+				nextMessageLease.Release()
+				if auditErr != nil {
+					return auditErr
+				}
+			} else {
+				nextMessageLease.Release()
+			}
 			if isOpenAIWSClientDisconnectError(readErr) {
 				closeStatus, closeReason := summarizeOpenAIWSReadCloseError(readErr)
 				logOpenAIWSModeInfo(
@@ -1641,6 +1688,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 
 		nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
+		nextMessageLease.Release()
 		if parseErr != nil {
 			return parseErr
 		}

@@ -50,6 +50,36 @@ func TestInstructionTranslationRedactionAndUTF8ChunkingAreReversible(t *testing.
 	require.Error(t, err)
 }
 
+func TestInstructionTranslationChunkingKeepsRedactionPlaceholdersAtomic(t *testing.T) {
+	original := "prefix-1234 Authorization: Bearer abcdefghijklmnop suffix"
+	redacted, replacements := redactInstructionTranslationText(original)
+	require.Len(t, replacements, 1)
+
+	chunks, err := splitInstructionTranslationUTF8(redacted, 24)
+	require.NoError(t, err)
+	require.Equal(t, redacted, strings.Join(chunks, ""))
+	for placeholder := range replacements {
+		containingChunks := 0
+		for _, chunk := range chunks {
+			if strings.Contains(chunk, placeholder) {
+				containingChunks++
+			}
+		}
+		require.Equal(t, 1, containingChunks)
+	}
+	require.Equal(t, original, restoreInstructionTranslationText(strings.Join(chunks, ""), replacements))
+}
+
+func TestInstructionTranslationRedactionAvoidsExistingPlaceholderCollisions(t *testing.T) {
+	original := "literal [[MP_REDACTED_0001]] Authorization: Bearer abcdefghijklmnop"
+	redacted, replacements := redactInstructionTranslationText(original)
+	require.Len(t, replacements, 1)
+	require.Contains(t, redacted, "literal [[MP_REDACTED_0001]]")
+	require.Contains(t, redacted, "[[MP_REDACTED_0002]]")
+	require.NotContains(t, redacted, "abcdefghijklmnop")
+	require.Equal(t, original, restoreInstructionTranslationText(redacted, replacements))
+}
+
 func TestOpenAIInstructionTranslatorUsesDedicatedStructuredRequest(t *testing.T) {
 	var captured map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -86,6 +116,7 @@ func newInstructionTranslationIntegrationService(
 	db := openInstructionAuditIntegrationDB(t)
 	repository := NewInstructionRepository(db)
 	adminID := insertInstructionAuditUser(t, db, "translation-admin@example.test", "admin")
+	insertInstructionSensitiveTestGrant(t, db, adminID, "emergency_cli")
 	redisServer := miniredis.RunT(t)
 	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
 	t.Cleanup(func() { require.NoError(t, redisClient.Close()) })
@@ -141,7 +172,7 @@ func TestInstructionTranslationJobStoresOnlyEncryptedTTLResult(t *testing.T) {
 		return content, nil
 	})
 	service, repository, redisClient, adminID := newInstructionTranslationIntegrationService(t, translator)
-	ctx := context.Background()
+	ctx := instructionSensitiveTestContext(t, repository.db, adminID)
 	original := "translation-user@example.test sk-translation-secret\n" + strings.Repeat("模型港口", 500)
 	hash, err := service.CreateHash(ctx, CreateInstructionHashRequest{
 		RawContent: original, Name: "translation source", ObservedSource: "instructions", Status: "active",
@@ -205,7 +236,7 @@ func TestInstructionTranslationJobPreservesPartialResult(t *testing.T) {
 		return content, nil
 	})
 	service, repository, _, adminID := newInstructionTranslationIntegrationService(t, translator)
-	ctx := context.Background()
+	ctx := instructionSensitiveTestContext(t, repository.db, adminID)
 	original := "Bearer partial-secret-token\n" + strings.Repeat("港", 900)
 	hash, err := service.CreateHash(ctx, CreateInstructionHashRequest{
 		RawContent: original, Name: "partial source", ObservedSource: "input1", Status: "active",
@@ -240,7 +271,7 @@ func TestInstructionTranslationJobRetriesTransientFailureThenSucceeds(t *testing
 		return "translated:" + content, nil
 	})
 	service, repository, _, adminID := newInstructionTranslationIntegrationService(t, translator)
-	ctx := context.Background()
+	ctx := instructionSensitiveTestContext(t, repository.db, adminID)
 	hash, err := service.CreateHash(ctx, CreateInstructionHashRequest{
 		RawContent: "retry translation", Name: "retry source", ObservedSource: "instructions", Status: "active",
 	}, adminID)
@@ -278,7 +309,7 @@ func TestInstructionTranslationJobSupportsEventEvidence(t *testing.T) {
 		return "translated:" + content, nil
 	})
 	service, repository, _, adminID := newInstructionTranslationIntegrationService(t, translator)
-	ctx := context.Background()
+	ctx := instructionSensitiveTestContext(t, repository.db, adminID)
 	original := "event evidence source"
 	decision := &InstructionDecision{
 		Allow: false, InitialReason: "hash_mismatch", FinalReason: "hash_mismatch",
@@ -316,8 +347,8 @@ func TestInstructionTranslationBackgroundWorkerCompletesQueuedJob(t *testing.T) 
 	translator := instructionTranslatorFunc(func(_ context.Context, _ InstructionRuntimeConfig, _, _, content string) (string, error) {
 		return content, nil
 	})
-	service, _, _, adminID := newInstructionTranslationIntegrationService(t, translator)
-	ctx := context.Background()
+	service, repository, _, adminID := newInstructionTranslationIntegrationService(t, translator)
+	ctx := instructionSensitiveTestContext(t, repository.db, adminID)
 	hash, err := service.CreateHash(ctx, CreateInstructionHashRequest{
 		RawContent: "background translation", Name: "background source",
 		ObservedSource: "instructions", Status: "active",

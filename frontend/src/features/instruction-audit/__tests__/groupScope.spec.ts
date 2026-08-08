@@ -49,6 +49,16 @@ describe('instruction audit group scope', () => {
     expect(view).toContain("addArrayFilter('clientTypes', event.client_type)")
   })
 
+  it('keeps AI system-managed rules and bindings outside ordinary CRUD controls', () => {
+    const view = read('../InstructionAuditView.vue')
+    const types = read('../types.ts')
+    expect(types).toContain('system_managed: boolean')
+    expect(view).toContain('ordinaryRuleSets')
+    expect(view).toContain('v-if="!rule.system_managed"')
+    expect(view).toContain('v-if="!binding.system_managed"')
+    expect(view).toContain('if (binding?.system_managed) return')
+  })
+
   it('places the global switch under feature switches risk control', () => {
     const settings = read('../../../views/admin/SettingsView.vue')
     const featuresStart = settings.indexOf('<!-- Tab: Features (功能开关) -->')

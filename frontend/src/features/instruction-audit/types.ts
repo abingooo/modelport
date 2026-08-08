@@ -14,6 +14,29 @@ export type InstructionDetectedClientType =
   | 'unknown'
 export type InstructionClientType = 'all' | InstructionDetectedClientType
 
+export interface InstructionSensitiveCapability {
+  user_id: number
+  has_access: boolean
+  can_manage: boolean
+  grant_id?: number | null
+  grant_source?: string
+  granted_at?: string
+}
+
+export interface InstructionSensitiveGrant {
+  id: number
+  user_id: number
+  email: string
+  username: string
+  user_status: string
+  totp_enabled: boolean
+  effective: boolean
+  granted_by?: number | null
+  grant_source: string
+  grant_reason: string
+  granted_at: string
+}
+
 export interface InstructionOverview {
   enabled: boolean
   config_version: number
@@ -31,6 +54,10 @@ export interface InstructionOverview {
   evidence_encryption_available: boolean
   evidence_retention_days: number
   max_body_bytes: number
+  http_gateway_max_body_bytes: number
+  websocket_gateway_max_body_bytes: number
+  effective_http_max_body_bytes: number
+  effective_websocket_max_body_bytes: number
   parse_timeout_ms: number
   max_inflight_body_bytes: number
   ai_enabled: boolean
@@ -163,6 +190,24 @@ export interface InstructionHashSource {
   created_at: string
 }
 
+export interface InstructionHashScope {
+  rule_set_id: number
+  rule_set_name: string
+  rule_set_enabled: boolean
+  system_managed: boolean
+  source_type: 'manual' | 'ai_review' | string
+  status: 'active' | 'disabled' | 'revoked' | string
+  valid_until?: string | null
+  binding_id?: number | null
+  group_id?: number | null
+  group_name: string
+  client_types: string[]
+  binding_enabled: boolean
+  updated_by?: number | null
+  created_at: string
+  updated_at: string
+}
+
 export interface InstructionHashEntry {
   id: number
   digest: string
@@ -180,6 +225,10 @@ export interface InstructionHashEntry {
   encryption_key_version?: string
   raw_expires_at?: string | null
   sources?: InstructionHashSource[]
+  scopes?: InstructionHashScope[]
+  scope_source?: 'manual' | 'ai_review' | string
+  scope_status?: 'active' | 'disabled' | 'revoked' | string
+  scope_valid_until?: string | null
   valid_from?: string | null
   valid_until?: string | null
   created_by?: number | null
@@ -216,6 +265,7 @@ export interface InstructionGroupBinding {
   group_status: string
   rule_set_id: number
   rule_set_name: string
+  system_managed: boolean
   client_types: InstructionClientType[]
   enabled: boolean
   effective: boolean
@@ -377,6 +427,7 @@ export interface InstructionGroupOption {
 export interface SaveInstructionHashRequest {
   digest: string
   raw_content?: string
+  source_type: 'manual' | 'import'
   name: string
   note: string
   observed_source: InstructionObservedSource

@@ -187,3 +187,84 @@ func TestInstructionAuditAggregateShardMigrationBoundsGrowingArrays(t *testing.T
 	require.NotContains(t, sql, "delete from")
 	require.NotContains(t, sql, "truncate")
 }
+
+func TestInstructionAuditLegacyAggregateRepartitionMigrationIsBounded(t *testing.T) {
+	body, err := FS.ReadFile("211_instruction_audit_repartition_legacy_aggregates.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "where shard_no = -1")
+	require.Contains(t, sql, "generate_series")
+	require.Contains(t, sql, "cardinality(event_times) <= 4096")
+	require.Contains(t, sql, "check (shard_no >= 0)")
+	require.Contains(t, sql, "sum(event_count)")
+	require.Contains(t, sql, "sum(latency_total_ms)")
+	require.Contains(t, sql, "sum(ai_latency_total_ms)")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditHashScopeLifecycleMigrationSeparatesGrantExpiry(t *testing.T) {
+	body, err := FS.ReadFile("212_instruction_audit_hash_scope_lifecycle.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists source_type")
+	require.Contains(t, sql, "add column if not exists valid_until")
+	require.Contains(t, sql, "add column if not exists status")
+	require.Contains(t, sql, "add column if not exists updated_by")
+	require.Contains(t, sql, "source_type in ('manual', 'ai_review')")
+	require.Contains(t, sql, "source_type <> 'ai_review' or valid_until is not null")
+	require.Contains(t, sql, "status in ('active', 'disabled', 'revoked')")
+	require.Contains(t, sql, "resource_type in ('event_evidence', 'hash_raw', 'translation', 'ai_hash', 'ai_scope')")
+	require.Contains(t, sql, "scope_rule_set_id")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditSensitiveAccessMigrationBootstrapsOneAdminAndLinksAuditRows(t *testing.T) {
+	body, err := FS.ReadFile("213_instruction_audit_sensitive_access_grants.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "create table if not exists instruction_audit_sensitive_access_grants")
+	require.Contains(t, sql, "uq_instruction_audit_sensitive_active_grant")
+	require.Contains(t, sql, "grant_source in ('setup_bootstrap', 'migration_bootstrap', 'manual', 'emergency_cli')")
+	require.Contains(t, sql, "add column if not exists grant_id")
+	require.Contains(t, sql, "add column if not exists auth_method")
+	require.Contains(t, sql, "add column if not exists authorization_result")
+	require.Contains(t, sql, "add column if not exists authorized_grant_id")
+	require.Contains(t, sql, "and not exists (select 1 from instruction_audit_sensitive_access_grants)")
+	require.Contains(t, sql, "order by u.created_at asc, u.id asc")
+	require.Contains(t, sql, "limit 1")
+	require.NotContains(t, sql, "raw_content")
+	require.NotContains(t, sql, "request_body")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditNotificationIntentMigrationDistinguishesEnqueueFailure(t *testing.T) {
+	body, err := FS.ReadFile("214_instruction_audit_notification_intents.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "enqueue_failed")
+	require.Contains(t, sql, "drop constraint if exists chk_security_notification_status")
+	require.NotContains(t, sql, "truncate")
+}
+
+func TestInstructionAuditBodyWorkingSetBudgetMigrationRaisesLegacyValues(t *testing.T) {
+	body, err := FS.ReadFile("215_instruction_audit_body_working_set_budget.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "greatest(max_inflight_body_bytes, max_body_bytes * 3)")
+	require.Contains(t, sql, "max_inflight_body_bytes between max_body_bytes * 3 and 2147483648")
+	require.Contains(t, sql, "drop constraint if exists chk_instruction_audit_runtime_inflight_limit")
+	require.NotContains(t, sql, "truncate")
+	require.NotContains(t, sql, "delete from")
+}
+
+func TestInstructionAuditOperationalCountersMigrationIsAdditiveAndNormalizesRawExpiry(t *testing.T) {
+	body, err := FS.ReadFile("216_instruction_audit_operational_counters.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "create table if not exists instruction_audit_operational_counters")
+	require.Contains(t, sql, "persist_failure_count")
+	require.Contains(t, sql, "statistics_loss_count")
+	require.Contains(t, sql, "set raw_content_status = 'raw_content_unavailable'")
+	require.NotContains(t, sql, "truncate")
+	require.NotContains(t, sql, "delete from")
+}

@@ -16,6 +16,20 @@
               <span class="h-1.5 w-1.5 rounded-full" :class="overview?.enabled ? 'bg-primary-500' : 'bg-gray-400'" />
               {{ overview?.enabled ? t('common.enabled') : t('common.disabled') }}
             </span>
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
+              :class="hasSensitiveAccess
+                ? 'bg-primary-50 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300'
+                : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'"
+              data-test="sensitive-access-status"
+            >
+              <Icon :name="hasSensitiveAccess ? 'check' : 'lock'" size="xs" :class="{ 'animate-pulse': sensitiveAccessLoading }" />
+              {{ sensitiveAccessLoading
+                ? t('admin.instructionAudit.sensitiveAccess.checking')
+                : hasSensitiveAccess
+                  ? t('admin.instructionAudit.sensitiveAccess.authorized')
+                  : t('admin.instructionAudit.sensitiveAccess.notAuthorized') }}
+            </span>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
             {{ t('admin.instructionAudit.description') }}
@@ -117,22 +131,33 @@
         </button>
       </div>
 
-      <InstructionAuditRuntimeConfig
-        v-if="activeTab === 'config'"
-        :config="runtimeConfig"
-        :loading="loading"
-        :saving="runtimeSaving"
-        :error="runtimeError"
-        @save="saveRuntimeConfig"
-      />
+      <template v-if="activeTab === 'config'">
+        <InstructionSensitiveAccessPanel
+          :capability="sensitiveCapability"
+          :capability-loading="sensitiveAccessLoading"
+          :capability-error="sensitiveAccessError"
+          @refresh-capability="loadSensitiveCapability"
+          @access-denied="handleSensitiveAccessDenied"
+        />
+        <InstructionAuditRuntimeConfig
+          :config="runtimeConfig"
+          :overview="overview"
+          :loading="loading"
+          :saving="runtimeSaving"
+          :error="runtimeError"
+          @save="saveRuntimeConfig"
+        />
+      </template>
 
       <InstructionAuditReasonPolicies
         v-else-if="activeTab === 'policies'"
         :policies="reasonPolicies"
         :loading="loading"
+        :loaded="policiesLoaded"
         :error="policiesError"
         :saving-reason="savingReason"
         :config-version="overview?.config_version || runtimeConfig?.config_version || 0"
+        :audit-enabled="overview?.enabled ?? null"
         @save="saveReasonPolicy"
       />
 
@@ -148,7 +173,15 @@
               {{ t('admin.instructionAudit.addRuleSet') }}
             </button>
           </div>
-          <div v-if="ruleSets.length" class="divide-y divide-gray-100 dark:divide-dark-700">
+          <InstructionAuditResourceState
+            :loading="loading"
+            :loaded="ruleSetsLoaded"
+            :error="ruleSetsError"
+            :has-data="ruleSets.length > 0"
+            :empty-description="t('admin.instructionAudit.emptyRuleSets')"
+            :disabled="overview?.enabled === false"
+          >
+          <div class="divide-y divide-gray-100 dark:divide-dark-700">
             <div v-for="rule in ruleSets" :key="rule.id" class="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
               <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2">
@@ -161,8 +194,13 @@
                 </div>
                 <p v-if="rule.description" class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ rule.description }}</p>
                 <div class="mt-2 flex flex-wrap gap-1.5">
-                  <span v-for="hash in rule.hashes" :key="hash.id" class="rounded bg-gray-100 px-2 py-1 text-xs text-gray-600 dark:bg-dark-700 dark:text-gray-300">
-                    {{ hash.name }}
+                  <span
+                    v-for="hash in rule.hashes"
+                    :key="hash.id"
+                    class="rounded px-2 py-1 text-xs"
+                    :class="hash.scope_source === 'ai_review' ? (hashScopeExpired(hash) ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300' : 'bg-cyan-50 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300') : 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'"
+                  >
+                    {{ hash.name }}<template v-if="hash.scope_source === 'ai_review'"> · {{ hashScopeExpired(hash) ? t('admin.instructionAudit.hashDetail.scopeExpired') : t('admin.instructionAudit.hashDetail.temporaryUntil', { time: formatDate(hash.scope_valid_until) }) }}</template>
                   </span>
                   <span v-if="rule.allow_empty_fields" class="rounded bg-primary-50 px-2 py-1 text-xs font-medium text-primary-700 dark:bg-primary-950/40 dark:text-primary-300">
                     {{ t('admin.instructionAudit.allowEmptyFields') }}
@@ -186,7 +224,7 @@
               </div>
             </div>
           </div>
-          <EmptyState v-else :description="t('admin.instructionAudit.emptyRuleSets')" />
+          </InstructionAuditResourceState>
         </section>
 
         <section class="card overflow-hidden">
@@ -195,12 +233,20 @@
               <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.bindings') }}</h2>
               <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.bindingCount', { count: bindings.length }) }}</p>
             </div>
-            <button type="button" class="btn btn-primary" :disabled="!ruleSets.length" @click="openBindingDialog()">
+            <button type="button" class="btn btn-primary" :disabled="!ordinaryRuleSets.length" @click="openBindingDialog()">
               <Icon name="plus" size="sm" />
               {{ t('admin.instructionAudit.addBinding') }}
             </button>
           </div>
-          <div v-if="bindings.length" class="overflow-x-auto">
+          <InstructionAuditResourceState
+            :loading="loading"
+            :loaded="bindingsLoaded"
+            :error="bindingsError"
+            :has-data="bindings.length > 0"
+            :empty-description="t('admin.instructionAudit.emptyBindings')"
+            :disabled="overview?.enabled === false"
+          >
+          <div class="max-w-full overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
               <thead class="bg-gray-50 dark:bg-dark-800/70">
                 <tr>
@@ -232,15 +278,16 @@
                   </td>
                   <td class="table-td">
                     <div class="flex items-center gap-3">
-                      <Toggle :model-value="binding.enabled" :disabled="saving" @update:model-value="setBindingEnabled(binding, $event)" />
+                      <Toggle :model-value="binding.enabled" :disabled="saving || binding.system_managed" @update:model-value="setBindingEnabled(binding, $event)" />
                       <span v-if="binding.enabled && !binding.effective" :class="statusPill('invalid')">{{ t('admin.instructionAudit.ineffectiveRule') }}</span>
+                      <span v-if="binding.system_managed" :class="statusPill('active')">{{ t('admin.instructionAudit.systemManaged') }}</span>
                     </div>
                   </td>
                   <td class="table-td text-right">
-                    <button type="button" class="btn btn-ghost btn-sm" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openBindingDialog(binding)">
+                    <button v-if="!binding.system_managed" type="button" class="btn btn-ghost btn-sm" :title="t('common.edit')" :aria-label="t('common.edit')" @click="openBindingDialog(binding)">
                       <Icon name="edit" size="sm" />
                     </button>
-                    <button type="button" class="btn btn-ghost btn-sm text-red-600 dark:text-red-400" :title="t('common.delete')" :aria-label="t('common.delete')" @click="requestDeleteBinding(binding)">
+                    <button v-if="!binding.system_managed" type="button" class="btn btn-ghost btn-sm text-red-600 dark:text-red-400" :title="t('common.delete')" :aria-label="t('common.delete')" @click="requestDeleteBinding(binding)">
                       <Icon name="trash" size="sm" />
                     </button>
                   </td>
@@ -248,7 +295,7 @@
               </tbody>
             </table>
           </div>
-          <EmptyState v-else :description="t('admin.instructionAudit.emptyBindings')" />
+          </InstructionAuditResourceState>
         </section>
       </template>
 
@@ -273,7 +320,15 @@
             </button>
           </div>
         </div>
-        <div v-if="visibleHashes.length" class="overflow-x-auto">
+        <InstructionAuditResourceState
+          :loading="loading"
+          :loaded="hashesLoaded"
+          :error="hashesError"
+          :has-data="visibleHashes.length > 0"
+          :empty-description="t('admin.instructionAudit.emptyHashes')"
+          :disabled="overview?.enabled === false"
+        >
+        <div class="max-w-full overflow-x-auto">
           <table class="min-w-full divide-y divide-gray-200 dark:divide-dark-700">
             <thead class="bg-gray-50 dark:bg-dark-800/70">
               <tr>
@@ -312,7 +367,7 @@
             </tbody>
           </table>
         </div>
-        <EmptyState v-else :description="t('admin.instructionAudit.emptyHashes')" />
+        </InstructionAuditResourceState>
       </section>
 
       <section v-else class="card overflow-hidden">
@@ -468,7 +523,15 @@
             </button>
           </div>
         </div>
-        <div v-if="eventPage.items.length">
+        <InstructionAuditResourceState
+          :loading="eventsLoading"
+          :loaded="eventsLoaded"
+          :error="eventsError"
+          :has-data="eventPage.items.length > 0"
+          :empty-description="t('admin.instructionAudit.emptyEvents')"
+          :disabled="overview?.enabled === false"
+        >
+        <div>
           <div class="divide-y divide-gray-100 bg-white dark:divide-dark-700 dark:bg-dark-800 xl:hidden">
             <article v-for="event in eventPage.items" :key="`compact-${event.id}`" class="space-y-4 p-4">
               <div class="flex items-start justify-between gap-3">
@@ -484,8 +547,8 @@
                   </div>
                 </div>
                 <div class="flex shrink-0 flex-wrap justify-end gap-1">
-                  <button type="button" class="btn btn-primary btn-sm" :disabled="!eventHasDigest(event) || !ruleSets.length" @click="openAddToRuleSetDialog(event)"><Icon name="plus" size="sm" />{{ t('admin.instructionAudit.quickAdd') }}</button>
-                  <button type="button" class="icon-btn" :title="t('admin.instructionAudit.reviewEvidence')" :aria-label="t('admin.instructionAudit.reviewEvidence')" @click="openEvidenceReview(event)"><Icon name="eye" size="sm" /></button>
+                  <button type="button" class="btn btn-primary btn-sm" :disabled="!eventHasDigest(event) || !ordinaryRuleSets.length" @click="openAddToRuleSetDialog(event)"><Icon name="plus" size="sm" />{{ t('admin.instructionAudit.quickAdd') }}</button>
+                  <button type="button" class="icon-btn" :disabled="sensitiveAccessLoading || !hasSensitiveAccess" :title="sensitiveEvidenceTitle" :aria-label="sensitiveEvidenceTitle" @click="openEvidenceReview(event)"><Icon :name="hasSensitiveAccess ? 'eye' : 'lock'" size="sm" /></button>
                   <router-link :to="opsLogLink(event)" class="icon-btn" :title="t('admin.instructionAudit.viewSystemLog')" :aria-label="t('admin.instructionAudit.viewSystemLog')"><Icon name="externalLink" size="sm" /></router-link>
                   <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" :aria-label="t('common.delete')" @click="eventToDelete = event"><Icon name="trash" size="sm" /></button>
                 </div>
@@ -586,11 +649,11 @@
                 </td>
                 <td class="table-td text-right">
                   <div class="flex flex-wrap justify-end gap-1">
-                    <button type="button" class="btn btn-primary btn-sm" :disabled="!eventHasDigest(event) || !ruleSets.length" @click="openAddToRuleSetDialog(event)">
+                    <button type="button" class="btn btn-primary btn-sm" :disabled="!eventHasDigest(event) || !ordinaryRuleSets.length" @click="openAddToRuleSetDialog(event)">
                       <Icon name="plus" size="sm" />
                       {{ t('admin.instructionAudit.quickAdd') }}
                     </button>
-                    <button type="button" class="icon-btn" :title="t('admin.instructionAudit.reviewEvidence')" :aria-label="t('admin.instructionAudit.reviewEvidence')" @click="openEvidenceReview(event)"><Icon name="eye" size="sm" /></button>
+                    <button type="button" class="icon-btn" :disabled="sensitiveAccessLoading || !hasSensitiveAccess" :title="sensitiveEvidenceTitle" :aria-label="sensitiveEvidenceTitle" @click="openEvidenceReview(event)"><Icon :name="hasSensitiveAccess ? 'eye' : 'lock'" size="sm" /></button>
                     <router-link :to="opsLogLink(event)" class="icon-btn" :title="t('admin.instructionAudit.viewSystemLog')" :aria-label="t('admin.instructionAudit.viewSystemLog')"><Icon name="externalLink" size="sm" /></router-link>
                     <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" :aria-label="t('common.delete')" @click="eventToDelete = event"><Icon name="trash" size="sm" /></button>
                   </div>
@@ -608,7 +671,7 @@
             @update:page-size="changeEventPageSize"
           />
         </div>
-        <EmptyState v-else :description="t('admin.instructionAudit.emptyEvents')" />
+        </InstructionAuditResourceState>
       </section>
     </div>
 
@@ -789,7 +852,7 @@
           <label class="input-label">{{ t('admin.instructionAudit.ruleSet') }}</label>
           <select v-model.number="bindingDialog.ruleSetId" class="input" :disabled="Boolean(bindingDialog.editingId)">
             <option :value="0">{{ t('admin.instructionAudit.selectRuleSet') }}</option>
-            <option v-for="rule in ruleSets" :key="rule.id" :value="rule.id">{{ rule.name }}</option>
+            <option v-for="rule in ordinaryRuleSets" :key="rule.id" :value="rule.id">{{ rule.name }}</option>
           </select>
         </div>
         <div class="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3 dark:border-dark-600">
@@ -808,8 +871,10 @@
       :event="evidenceReviewEvent"
       :translation-enabled="runtimeConfig?.translation_enabled || false"
       :external-translation-enabled="runtimeConfig?.external_translation_enabled || false"
+      :sensitive-access="hasSensitiveAccess"
       @close="evidenceReviewEvent = null"
       @candidate="createCandidateFromReview"
+      @access-denied="handleSensitiveAccessDenied"
     />
 
     <InstructionHashDetailDialog
@@ -817,8 +882,10 @@
       :hash-id="hashDetailID"
       :translation-enabled="runtimeConfig?.translation_enabled || false"
       :external-translation-enabled="runtimeConfig?.external_translation_enabled || false"
+      :sensitive-access="hasSensitiveAccess"
       @close="hashDetailID = null"
       @changed="refreshAll"
+      @access-denied="handleSensitiveAccessDenied"
     />
 
     <BaseDialog :show="cleanupDialog.show" :title="t('admin.instructionAudit.clearLogs')" width="wide" @close="closeLogCleanupDialog">
@@ -871,7 +938,7 @@
           <label class="input-label">{{ t('admin.instructionAudit.selectRuleSet') }}</label>
           <select v-model.number="addToRuleSetDialog.ruleSetId" class="input">
             <option :value="0">{{ t('admin.instructionAudit.selectRuleSet') }}</option>
-            <option v-for="rule in ruleSets" :key="rule.id" :value="rule.id">{{ rule.name }} · {{ rule.enabled ? t('common.enabled') : t('common.disabled') }}</option>
+            <option v-for="rule in ordinaryRuleSets" :key="rule.id" :value="rule.id">{{ rule.name }} · {{ rule.enabled ? t('common.enabled') : t('common.disabled') }}</option>
           </select>
         </div>
         <label class="flex cursor-pointer items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900/60 dark:bg-amber-950/30">
@@ -909,7 +976,6 @@ import { useRoute, useRouter } from 'vue-router'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import EmptyState from '@/components/common/EmptyState.vue'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Pagination from '@/components/common/Pagination.vue'
@@ -919,7 +985,9 @@ import InstructionEvidenceReviewDialog from './InstructionEvidenceReviewDialog.v
 import InstructionAuditStatistics from './components/InstructionAuditStatistics.vue'
 import InstructionAuditRuntimeConfig from './components/InstructionAuditRuntimeConfig.vue'
 import InstructionAuditReasonPolicies from './components/InstructionAuditReasonPolicies.vue'
+import InstructionAuditResourceState from './components/InstructionAuditResourceState.vue'
 import InstructionHashDetailDialog from './components/InstructionHashDetailDialog.vue'
+import InstructionSensitiveAccessPanel from './components/InstructionSensitiveAccessPanel.vue'
 import { useClipboard } from '@/composables/useClipboard'
 import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
@@ -948,6 +1016,7 @@ import type {
   InstructionFinalOutcome,
   InstructionRuleSet,
   InstructionRuleSetUser,
+  InstructionSensitiveCapability,
   SaveInstructionHashRequest,
   UpdateInstructionReasonPolicyRequest,
   UpdateInstructionRuntimeConfigRequest,
@@ -964,10 +1033,11 @@ const instructionStepUp = useStepUp()
 const route = useRoute()
 const router = useRouter()
 const activeTab = ref<Tab>('events')
-const loading = ref(false)
+const loading = ref(true)
 const saving = ref(false)
 const runtimeSaving = ref(false)
 const statisticsLoading = ref(false)
+const eventsLoading = ref(true)
 const savingReason = ref('')
 const overview = ref<InstructionOverview | null>(null)
 const runtimeConfig = ref<InstructionRuntimeConfig | null>(null)
@@ -976,8 +1046,22 @@ const statistics = ref<InstructionStatistics | null>(null)
 const runtimeError = ref('')
 const policiesError = ref('')
 const statisticsError = ref('')
+const hashesError = ref('')
+const ruleSetsError = ref('')
+const bindingsError = ref('')
+const eventsError = ref('')
+const sensitiveAccessLoading = ref(true)
+const sensitiveAccessError = ref('')
+const policiesLoaded = ref(false)
+const hashesLoaded = ref(false)
+const ruleSetsLoaded = ref(false)
+const bindingsLoaded = ref(false)
+const eventsLoaded = ref(false)
+const sensitiveCapability = ref<InstructionSensitiveCapability | null>(null)
+let sensitiveCapabilityRequestID = 0
 const hashes = ref<InstructionHashEntry[]>([])
 const ruleSets = ref<InstructionRuleSet[]>([])
+const ordinaryRuleSets = computed(() => ruleSets.value.filter((rule) => !rule.system_managed))
 const bindings = ref<InstructionGroupBinding[]>([])
 const groupOptions = ref<InstructionGroupOption[]>([])
 const hashStatusFilter = ref('')
@@ -1035,7 +1119,7 @@ const cleanupPresets = computed<Array<{ value: CleanupPreset, label: string }>>(
 const reasonOptions = ['hash_mismatch', 'fields_missing', 'field_invalid', 'invalid_json', 'request_too_large', 'structure_too_complex', 'parse_timeout', 'config_unavailable', 'group_not_allowed', 'client_not_allowed', 'ai_rejected', 'ai_uncertain', 'ai_error']
 const outcomeOptions: InstructionFinalOutcome[] = ['blocked', 'policy_allow', 'ai_pass', 'hash_pass', 'exception_pass']
 const fieldResultOptions = ['missing', 'invalid', 'mismatch', 'match', 'not_checked']
-const notificationOptions = ['pending', 'processing', 'retry', 'sent', 'failed', 'suppressed', 'no_recipient']
+const notificationOptions = ['pending', 'processing', 'retry', 'sent', 'failed', 'suppressed', 'no_recipient', 'enqueue_failed']
 const detectedClientTypes: readonly InstructionDetectedClientType[] = ['codex_vscode', 'codex_cli', 'codex_desktop', 'opencode', 'modelport_internal', 'other', 'unknown']
 const clientOptions = computed<Array<{ value: InstructionDetectedClientType, label: string, pattern: string }>>(() => [
   { value: 'codex_vscode', label: t('admin.instructionAudit.clients.codex_vscode'), pattern: 'codex_vscode/ · codex_vscode_copilot/' },
@@ -1169,11 +1253,20 @@ const canQuickAdd = computed(() =>
   && addToRuleSetDialog.confirmed
   && !addToRuleSetDialog.saving,
 )
+const hasSensitiveAccess = computed(() => Boolean(
+  sensitiveCapability.value?.has_access && sensitiveCapability.value?.can_manage,
+))
+const sensitiveEvidenceTitle = computed(() => {
+  if (sensitiveAccessLoading.value) return t('admin.instructionAudit.sensitiveAccess.checking')
+  return hasSensitiveAccess.value
+    ? t('admin.instructionAudit.reviewEvidence')
+    : t('admin.instructionAudit.sensitiveAccess.lockedHint')
+})
 
 const hashDialog = reactive({
   show: false,
   id: null as number | null,
-  mode: 'digest' as 'digest' | 'plaintext',
+  mode: 'plaintext' as 'digest' | 'plaintext',
   plaintext: '',
   validFrom: '',
   validUntil: '',
@@ -1214,8 +1307,8 @@ const filteredGroupOptions = computed(() => {
 })
 
 const hashInputModes = computed(() => [
-  { value: 'digest' as const, label: t('admin.instructionAudit.enterDigest') },
   { value: 'plaintext' as const, label: t('admin.instructionAudit.calculateLocally') },
+  { value: 'digest' as const, label: t('admin.instructionAudit.enterDigest') },
 ])
 
 const canSaveHash = computed(() => {
@@ -1244,14 +1337,18 @@ const FieldDigest = defineComponent({
 })
 
 function emptyHashForm(): SaveInstructionHashRequest {
-  return { digest: '', name: '', note: '', observed_source: '', client_name: '', client_version: '', status: 'candidate' }
+  return { digest: '', source_type: 'manual', name: '', note: '', observed_source: '', client_name: '', client_version: '', status: 'candidate' }
 }
 
 async function refreshAll() {
   loading.value = true
   runtimeError.value = ''
   policiesError.value = ''
+  hashesError.value = ''
+  ruleSetsError.value = ''
+  bindingsError.value = ''
   try {
+    const capabilityPromise = loadSensitiveCapability()
     const results = await Promise.allSettled([
       instructionAuditAPI.getOverview(),
       instructionAuditAPI.getRuntimeConfig(),
@@ -1268,20 +1365,68 @@ async function refreshAll() {
     }
     if (configResult.status === 'fulfilled') runtimeConfig.value = configResult.value
     else runtimeError.value = errorMessage(configResult.reason)
-    if (policiesResult.status === 'fulfilled') reasonPolicies.value = policiesResult.value
+    if (policiesResult.status === 'fulfilled') {
+      reasonPolicies.value = policiesResult.value
+      policiesLoaded.value = true
+    }
     else policiesError.value = errorMessage(policiesResult.reason)
-    if (hashesResult.status === 'fulfilled') hashes.value = hashesResult.value
-    if (rulesResult.status === 'fulfilled') ruleSets.value = rulesResult.value
-    if (bindingsResult.status === 'fulfilled') bindings.value = bindingsResult.value
+    if (hashesResult.status === 'fulfilled') {
+      hashes.value = hashesResult.value
+      hashesLoaded.value = true
+    } else hashesError.value = errorMessage(hashesResult.reason)
+    if (rulesResult.status === 'fulfilled') {
+      ruleSets.value = rulesResult.value
+      ruleSetsLoaded.value = true
+    } else ruleSetsError.value = errorMessage(rulesResult.reason)
+    if (bindingsResult.status === 'fulfilled') {
+      bindings.value = bindingsResult.value
+      bindingsLoaded.value = true
+    } else bindingsError.value = errorMessage(bindingsResult.reason)
     if (groupsResult.status === 'fulfilled') groupOptions.value = groupsResult.value
     const coreFailure = [overviewResult, hashesResult, rulesResult, bindingsResult, groupsResult].find((result) => result.status === 'rejected')
     if (coreFailure?.status === 'rejected') appStore.showError(errorMessage(coreFailure.reason))
-    await Promise.all([loadEvents(eventPage.page), loadStatistics()])
+    await Promise.all([loadEvents(eventPage.page), loadStatistics(), capabilityPromise])
   } catch (error) {
     appStore.showError(errorMessage(error))
   } finally {
     loading.value = false
   }
+}
+
+async function loadSensitiveCapability() {
+  const requestID = ++sensitiveCapabilityRequestID
+  sensitiveAccessLoading.value = true
+  sensitiveAccessError.value = ''
+  try {
+    const capability = await instructionAuditAPI.getSensitiveAccessCapability()
+    if (requestID !== sensitiveCapabilityRequestID) return
+    if (hasSensitiveAccess.value && !capability.has_access) clearSensitiveFrontendState()
+    sensitiveCapability.value = capability
+  } catch (error) {
+    if (requestID !== sensitiveCapabilityRequestID) return
+    clearSensitiveFrontendState()
+    sensitiveAccessError.value = errorMessage(error)
+  } finally {
+    if (requestID === sensitiveCapabilityRequestID) sensitiveAccessLoading.value = false
+  }
+}
+
+function clearSensitiveFrontendState() {
+  evidenceReviewEvent.value = null
+  if (sensitiveCapability.value) {
+    sensitiveCapability.value = {
+      ...sensitiveCapability.value,
+      has_access: false,
+      can_manage: false,
+      grant_id: null,
+    }
+  }
+}
+
+function handleSensitiveAccessDenied(error?: unknown) {
+  clearSensitiveFrontendState()
+  if (error) sensitiveAccessError.value = errorMessage(error)
+  void loadSensitiveCapability()
 }
 
 async function saveRuntimeConfig(payload: UpdateInstructionRuntimeConfigRequest) {
@@ -1320,13 +1465,22 @@ async function saveReasonPolicy(reason: string, payload: UpdateInstructionReason
 }
 
 async function loadEvents(page = 1) {
-  const result = await instructionAuditAPI.listEvents({
-    ...currentEventFilters(),
-    page,
-    page_size: eventPage.page_size,
-  })
-  Object.assign(eventPage, result)
-  await syncEventFilterURL()
+  eventsLoading.value = true
+  eventsError.value = ''
+  try {
+    const result = await instructionAuditAPI.listEvents({
+      ...currentEventFilters(),
+      page,
+      page_size: eventPage.page_size,
+    })
+    Object.assign(eventPage, result)
+    eventsLoaded.value = true
+    await syncEventFilterURL()
+  } catch (error) {
+    eventsError.value = errorMessage(error)
+  } finally {
+    eventsLoading.value = false
+  }
 }
 
 async function applyEventFilters() {
@@ -1663,7 +1817,7 @@ function openAddToRuleSetDialog(event: InstructionEvent) {
   const sources = availableEventSources(event)
   addToRuleSetDialog.event = event
   addToRuleSetDialog.sources = sources.map((source) => source.value)
-  addToRuleSetDialog.ruleSetId = ruleSets.value.find((rule) => rule.enabled)?.id ?? ruleSets.value[0]?.id ?? 0
+  addToRuleSetDialog.ruleSetId = ordinaryRuleSets.value.find((rule) => rule.enabled)?.id ?? ordinaryRuleSets.value[0]?.id ?? 0
   addToRuleSetDialog.confirmed = false
 }
 
@@ -1718,12 +1872,13 @@ async function copyText(value: string) {
 function openHashDialog(item?: InstructionHashEntry) {
   hashDialog.show = true
   hashDialog.id = item?.id ?? null
-  hashDialog.mode = 'digest'
+  hashDialog.mode = item ? 'digest' : 'plaintext'
   hashDialog.plaintext = ''
   hashDialog.validFrom = toDateTimeLocal(item?.valid_from)
   hashDialog.validUntil = toDateTimeLocal(item?.valid_until)
   hashDialog.form = item ? {
     digest: item.digest,
+    source_type: 'manual',
     name: item.name,
     note: item.note,
     observed_source: item.observed_source,
@@ -1748,6 +1903,7 @@ async function saveHash() {
     const payload: SaveInstructionHashRequest = {
       ...hashDialog.form,
       digest,
+      source_type: hashDialog.mode === 'plaintext' ? 'manual' : 'import',
       raw_content: hashDialog.id || hashDialog.mode !== 'plaintext' ? undefined : hashDialog.plaintext,
       valid_from: fromDateTimeLocal(hashDialog.validFrom),
       valid_until: fromDateTimeLocal(hashDialog.validUntil),
@@ -1843,6 +1999,7 @@ async function deleteRuleSet() {
 }
 
 function openBindingDialog(binding?: InstructionGroupBinding) {
+  if (binding?.system_managed) return
   const clientTypes = binding?.client_types?.length ? binding.client_types : ['all'] as InstructionClientType[]
   const allClients = clientTypes.includes('all')
   Object.assign(bindingDialog, {
@@ -1850,7 +2007,7 @@ function openBindingDialog(binding?: InstructionGroupBinding) {
     editingId: binding?.id ?? null,
     search: '',
     groupIds: binding ? [binding.group_id] : [],
-    ruleSetId: binding?.rule_set_id ?? ruleSets.value.find((rule) => rule.enabled)?.id ?? ruleSets.value[0]?.id ?? 0,
+    ruleSetId: binding?.rule_set_id ?? ordinaryRuleSets.value.find((rule) => rule.enabled)?.id ?? ordinaryRuleSets.value[0]?.id ?? 0,
     clientScope: allClients ? 'all' : 'selected',
     clientTypes: allClients ? [] : clientTypes.filter(isInstructionDetectedClientType),
     enabled: binding?.enabled ?? true,
@@ -1889,6 +2046,7 @@ async function saveBinding() {
 }
 
 async function setBindingEnabled(binding: InstructionGroupBinding, enabled: boolean) {
+  if (binding.system_managed) return
   saving.value = true
   try {
     await instructionStepUp.run(() => instructionAuditAPI.saveGroupBindings({
@@ -1907,6 +2065,7 @@ async function setBindingEnabled(binding: InstructionGroupBinding, enabled: bool
 }
 
 function requestDeleteBinding(binding: InstructionGroupBinding) {
+  if (binding.system_managed) return
   bindingToDelete.value = binding
 }
 
@@ -1936,6 +2095,7 @@ async function saveEvidenceRetention() {
 }
 
 function openEvidenceReview(event: InstructionEvent) {
+  if (!hasSensitiveAccess.value) return
   evidenceReviewEvent.value = event
 }
 
@@ -1959,6 +2119,10 @@ function compactDigest(value: string): string {
 function formatDate(value?: string | null): string {
   if (!value) return '-'
   return new Date(value).toLocaleString()
+}
+
+function hashScopeExpired(hash: InstructionHashEntry): boolean {
+  return Boolean(hash.scope_valid_until && new Date(hash.scope_valid_until).getTime() <= Date.now())
 }
 
 function eventAuditLatency(event: InstructionEvent): number {

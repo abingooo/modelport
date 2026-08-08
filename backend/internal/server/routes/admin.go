@@ -132,6 +132,12 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers,
 	forced := func(handler gin.HandlerFunc) []gin.HandlerFunc {
 		return []gin.HandlerFunc{middleware.ForceStepUp, gin.HandlerFunc(stepUpAuth), handler}
 	}
+	sensitiveAccess := middleware.NewInstructionSensitiveAccessMiddleware(h.Admin.InstructionAudit)
+	sensitiveForced := func(handler gin.HandlerFunc) []gin.HandlerFunc {
+		return []gin.HandlerFunc{
+			gin.HandlerFunc(sensitiveAccess), middleware.ForceStepUp, gin.HandlerFunc(stepUpAuth), handler,
+		}
+	}
 	{
 		instructionAudit.GET("/overview", h.Admin.InstructionAudit.GetOverview)
 		instructionAudit.GET("/config", h.Admin.InstructionAudit.GetRuntimeConfig)
@@ -145,11 +151,16 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers,
 		instructionAudit.POST("/hashes", forced(h.Admin.InstructionAudit.CreateHash)...)
 		instructionAudit.PUT("/hashes/:id", forced(h.Admin.InstructionAudit.UpdateHash)...)
 		instructionAudit.PUT("/hashes/:id/status", forced(h.Admin.InstructionAudit.ChangeHashStatus)...)
+		instructionAudit.PUT("/hashes/:id/scopes/:rule_set_id", forced(h.Admin.InstructionAudit.ChangeHashScope)...)
 		instructionAudit.DELETE("/hashes/:id", forced(h.Admin.InstructionAudit.DeleteHash)...)
-		instructionAudit.GET("/hashes/:id/raw", forced(h.Admin.InstructionAudit.RevealHashRaw)...)
-		instructionAudit.POST("/hashes/:id/raw-access", forced(h.Admin.InstructionAudit.RecordHashRawCopy)...)
-		instructionAudit.POST("/translations", forced(h.Admin.InstructionAudit.CreateTranslation)...)
-		instructionAudit.GET("/translations/:id", forced(h.Admin.InstructionAudit.GetTranslation)...)
+		instructionAudit.GET("/hashes/:id/raw", sensitiveForced(h.Admin.InstructionAudit.RevealHashRaw)...)
+		instructionAudit.POST("/hashes/:id/raw-access", sensitiveForced(h.Admin.InstructionAudit.RecordHashRawCopy)...)
+		instructionAudit.POST("/translations", sensitiveForced(h.Admin.InstructionAudit.CreateTranslation)...)
+		instructionAudit.GET("/translations/:id", sensitiveForced(h.Admin.InstructionAudit.GetTranslation)...)
+		instructionAudit.GET("/sensitive-access/me", h.Admin.InstructionAudit.GetInstructionSensitiveAccessMe)
+		instructionAudit.GET("/sensitive-access/grants", sensitiveForced(h.Admin.InstructionAudit.ListInstructionSensitiveAccessGrants)...)
+		instructionAudit.PUT("/sensitive-access/grants/:user_id", sensitiveForced(h.Admin.InstructionAudit.GrantInstructionSensitiveAccess)...)
+		instructionAudit.POST("/sensitive-access/grants/:user_id/revoke", sensitiveForced(h.Admin.InstructionAudit.RevokeInstructionSensitiveAccess)...)
 		instructionAudit.GET("/rule-sets", h.Admin.InstructionAudit.ListRuleSets)
 		instructionAudit.POST("/rule-sets", forced(h.Admin.InstructionAudit.CreateRuleSet)...)
 		instructionAudit.PUT("/rule-sets/:id", forced(h.Admin.InstructionAudit.UpdateRuleSet)...)
@@ -166,10 +177,10 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers,
 		instructionAudit.GET("/events/:id", h.Admin.InstructionAudit.GetEvent)
 		instructionAudit.GET("/events/:id/ai-reviews", h.Admin.InstructionAudit.ListEventAIReviews)
 		instructionAudit.DELETE("/events/:id", forced(h.Admin.InstructionAudit.DeleteEvent)...)
-		instructionAudit.GET("/events/:id/evidence", forced(h.Admin.InstructionAudit.RevealEvidence)...)
-		instructionAudit.POST("/events/:id/evidence-access", forced(h.Admin.InstructionAudit.RecordEvidenceCopy)...)
-		instructionAudit.POST("/events/:id/candidates", forced(h.Admin.InstructionAudit.CreateCandidate)...)
-		instructionAudit.POST("/events/:id/rule-set", forced(h.Admin.InstructionAudit.AddEventToRuleSet)...)
+		instructionAudit.GET("/events/:id/evidence", sensitiveForced(h.Admin.InstructionAudit.RevealEvidence)...)
+		instructionAudit.POST("/events/:id/evidence-access", sensitiveForced(h.Admin.InstructionAudit.RecordEvidenceCopy)...)
+		instructionAudit.POST("/events/:id/candidates", sensitiveForced(h.Admin.InstructionAudit.CreateCandidate)...)
+		instructionAudit.POST("/events/:id/rule-set", sensitiveForced(h.Admin.InstructionAudit.AddEventToRuleSet)...)
 	}
 }
 

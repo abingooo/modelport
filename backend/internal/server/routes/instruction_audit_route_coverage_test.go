@@ -124,12 +124,28 @@ func TestInstructionAuditAdminRoutesExposeOnlyGroupScopedBindings(t *testing.T) 
 	require.NotContains(t, routes, `instructionAudit.POST("/bindings"`)
 }
 
-func TestInstructionAuditTranslationRoutesRequireForcedStepUp(t *testing.T) {
+func TestInstructionAuditSensitiveRoutesRequireGrantBeforeForcedStepUp(t *testing.T) {
 	source, err := os.ReadFile("admin.go")
 	require.NoError(t, err)
 	routes := string(source)
-	require.Contains(t, routes, `instructionAudit.POST("/translations", forced(`)
-	require.Contains(t, routes, `instructionAudit.GET("/translations/:id", forced(`)
+	for _, route := range []string{
+		`instructionAudit.GET("/hashes/:id/raw", sensitiveForced(`,
+		`instructionAudit.POST("/hashes/:id/raw-access", sensitiveForced(`,
+		`instructionAudit.POST("/translations", sensitiveForced(`,
+		`instructionAudit.GET("/translations/:id", sensitiveForced(`,
+		`instructionAudit.GET("/events/:id/evidence", sensitiveForced(`,
+		`instructionAudit.POST("/events/:id/evidence-access", sensitiveForced(`,
+		`instructionAudit.POST("/events/:id/candidates", sensitiveForced(`,
+		`instructionAudit.POST("/events/:id/rule-set", sensitiveForced(`,
+	} {
+		require.Contains(t, routes, route)
+	}
+	sensitiveHelper := routes[strings.Index(routes, "sensitiveForced :="):]
+	requireInstructionSourceOrder(t, sensitiveHelper,
+		"gin.HandlerFunc(sensitiveAccess)", "middleware.ForceStepUp")
+	requireInstructionSourceOrder(t, sensitiveHelper,
+		"middleware.ForceStepUp", "gin.HandlerFunc(stepUpAuth)")
+	require.Contains(t, routes, `instructionAudit.GET("/sensitive-access/me", h.Admin.InstructionAudit.GetInstructionSensitiveAccessMe)`)
 	handlerSource, err := os.ReadFile("../../securityaudit/instruction_handler.go")
 	require.NoError(t, err)
 	handlers := string(handlerSource)

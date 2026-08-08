@@ -82,6 +82,10 @@ func (s *InstructionService) processInstructionTranslation(
 	if job == nil {
 		return
 	}
+	if err := s.repository.ValidateInstructionTranslationGrant(ctx, job); err != nil {
+		s.finishInstructionTranslationFailure(ctx, job, 0, nil, nil, errors.New("authorization_revoked"))
+		return
+	}
 	source, err := s.loadInstructionTranslationSource(ctx, job)
 	if err != nil {
 		s.finishInstructionTranslationFailure(ctx, job, 0, nil, nil, err)
@@ -292,6 +296,7 @@ func instructionTranslationErrorCode(err error) string {
 	for _, code := range []string{
 		"source_too_large", "source_expired", "source_integrity_failed",
 		"source_unavailable", "result_expired", "result_too_large", "worker_panic",
+		"authorization_revoked",
 	} {
 		if message == code {
 			return code

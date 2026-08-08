@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -12,6 +13,24 @@ import (
 )
 
 const securityAuditCompletedContextKey = "sub2api.security_audit.completed"
+
+func instructionRequestBodyBudget(coordinator *securityaudit.Coordinator) *pkghttputil.RequestBodyMemoryBudget {
+	if coordinator == nil {
+		return nil
+	}
+	return coordinator.InstructionRequestBodyBudget()
+}
+
+func instructionRequestBodyReadLimit(coordinator *securityaudit.Coordinator, gatewayLimit int64) int64 {
+	if coordinator == nil {
+		return gatewayLimit
+	}
+	auditLimit := coordinator.InstructionRequestBodyReadLimit()
+	if auditLimit > 0 && (gatewayLimit <= 0 || auditLimit < gatewayLimit) {
+		return auditLimit
+	}
+	return gatewayLimit
+}
 
 // cachesSecurityAuditCompletion reports whether a successful audit may be
 // reused for the rest of the gin request. WebSocket turns share one Context
@@ -128,6 +147,20 @@ func runSecurityAuditWithInstructionPayload(c *gin.Context, reqLog *zap.Logger, 
 func runInstructionAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securityaudit.Coordinator, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, excluded bool, stage string) *securityaudit.Decision {
 	if c == nil || c.Request == nil || coordinator == nil {
 		return nil
+	}
+	if securityaudit.IsReservedInstructionAuditPurpose(c.GetHeader("X-ModelPort-Internal-Purpose")) {
+		return &securityaudit.Decision{
+			Kind: securityaudit.DecisionBlock, HTTPStatus: http.StatusForbidden,
+			ErrorCode:     securityaudit.InstructionErrorCodeRejected,
+			ClientMessage: securityaudit.InstructionClientMessage,
+			Instruction: &securityaudit.InstructionDecision{
+				Applicable: true, Allow: false, Reason: "reserved_internal_marker",
+				InitialReason: "reserved_internal_marker", FinalReason: "reserved_internal_marker",
+				FinalOutcome: securityaudit.InstructionOutcomeBlocked,
+				PolicyAction: securityaudit.InstructionPolicyActionBlock,
+			},
+			AllowNextStage: false,
+		}
 	}
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
 	request.InstructionBody = body

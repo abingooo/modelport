@@ -8,9 +8,13 @@ import InstructionAuditStatistics from '../components/InstructionAuditStatistics
 import InstructionAuditReasonPolicies from '../components/InstructionAuditReasonPolicies.vue'
 import InstructionTranslationPanel from '../components/InstructionTranslationPanel.vue'
 import InstructionHashDetailDialog from '../components/InstructionHashDetailDialog.vue'
+import InstructionSensitiveAccessPanel from '../components/InstructionSensitiveAccessPanel.vue'
+import InstructionEvidenceReviewDialog from '../InstructionEvidenceReviewDialog.vue'
 
 const mocks = vi.hoisted(() => ({
-  createTranslation: vi.fn(), getTranslation: vi.fn(), getHash: vi.fn(), changeHashStatus: vi.fn(),
+  createTranslation: vi.fn(), getTranslation: vi.fn(), getHash: vi.fn(), changeHashStatus: vi.fn(), changeHashScope: vi.fn(),
+  revealHashRaw: vi.fn(), recordHashRawCopy: vi.fn(), revealEvidence: vi.fn(), recordEvidenceCopy: vi.fn(), listEventAIReviews: vi.fn(),
+  listSensitiveAccessGrants: vi.fn(), grantSensitiveAccess: vi.fn(), revokeSensitiveAccess: vi.fn(),
   showError: vi.fn(), copy: vi.fn(),
 }))
 
@@ -62,7 +66,7 @@ describe('instruction audit v0.1.170.13 components', () => {
     const wrapper = mount(InstructionAuditReasonPolicies, {
       props: {
         policies: [{ reason: 'hash_mismatch', action: 'block', ai_review_enabled: false, alert_enabled: true, config_version: 4, updated_at: '2026-08-01T00:00:00Z' }],
-        loading: false, error: '', savingReason: '', configVersion: 9,
+        loading: false, loaded: true, error: '', savingReason: '', configVersion: 9, auditEnabled: true,
       },
       global: { stubs: { Toggle: ToggleStub, ConfirmDialog: ConfirmStub, Icon: IconStub } },
     })
@@ -77,7 +81,7 @@ describe('instruction audit v0.1.170.13 components', () => {
     const wrapper = mount(InstructionAuditReasonPolicies, {
       props: {
         policies: [{ reason: 'fields_missing', action: 'block', ai_review_enabled: false, alert_enabled: true, config_version: 4, updated_at: '2026-08-01T00:00:00Z' }],
-        loading: false, error: '', savingReason: '', configVersion: 9,
+        loading: false, loaded: true, error: '', savingReason: '', configVersion: 9, auditEnabled: true,
       },
       global: { stubs: { Toggle: ToggleStub, ConfirmDialog: ConfirmStub, Icon: IconStub } },
     })
@@ -124,16 +128,150 @@ describe('instruction audit v0.1.170.13 components', () => {
     expect(wrapper.text()).toContain('untrusted content')
   })
 
-  it('offers promotion for an active temporary AI hash and clears its expiry through the status API', async () => {
+  it('locks sensitive actions without a grant and does not send protected requests', async () => {
+    const panel = mount(InstructionSensitiveAccessPanel, {
+      props: {
+        capability: { user_id: 7, has_access: false, can_manage: false },
+        capabilityLoading: false,
+        capabilityError: '',
+      },
+      global: { stubs: { Icon: IconStub, TotpStepUpDialog: StepUpStub, BaseDialog: BaseDialogStub } },
+    })
+    const loadButton = panel.get('[data-test="load-sensitive-grants"]')
+    expect(loadButton.attributes('disabled')).toBeDefined()
+    await loadButton.trigger('click')
+    expect(mocks.listSensitiveAccessGrants).not.toHaveBeenCalled()
+
+    mocks.getHash.mockResolvedValue({
+      id: 22, digest: 'a'.repeat(64), name: 'locked hash', note: '', observed_source: 'instructions',
+      client_name: '', client_version: '', status: 'active', hash_algorithm: 'sha256', normalization_version: 'identity_utf8_v1',
+      field_name: 'instructions', raw_content_status: 'stored', content_bytes: 12, sources: [], scopes: [],
+      created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z',
+    })
+    const hashDialog = mount(InstructionHashDetailDialog, {
+      props: { show: true, hashId: 22, translationEnabled: true, externalTranslationEnabled: false, sensitiveAccess: false },
+      global: { stubs: { BaseDialog: BaseDialogStub, ConfirmDialog: ConfirmStub, TotpStepUpDialog: StepUpStub, Icon: IconStub } },
+    })
+    await flushPromises()
+    const revealButton = hashDialog.findAll('button').find((button) => button.text().includes('admin.instructionAudit.sensitiveAccess.lockedAction'))
+    expect(revealButton?.attributes('disabled')).toBeDefined()
+    await revealButton?.trigger('click')
+    expect(mocks.revealHashRaw).not.toHaveBeenCalled()
+
+    const evidenceDialog = mount(InstructionEvidenceReviewDialog, {
+      props: {
+        show: true,
+        event: {
+          id: 9, request_id: 'req-9', user_email: 'user@example.com', group_name: 'OpenAI', client_type: 'codex_cli', client_user_agent: '', model: 'gpt-5', endpoint: '/v1/responses', stage: 'request',
+          instructions: { present: true, sha256: 'b'.repeat(64), result: 'mismatch' }, input1: { present: false, sha256: '', result: 'missing' },
+          decision: 'blocked', reason: 'hash_mismatch', initial_reason: 'hash_mismatch', final_reason: 'hash_mismatch', final_outcome: 'blocked', policy_action: 'block', rule_set_ids: [], config_version: 1,
+          latency_ms: 1, evidence_status: 'stored', user_notification_status: 'sent', ops_notification_status: 'sent', created_at: '2026-08-01T00:00:00Z',
+        },
+        translationEnabled: true,
+        externalTranslationEnabled: false,
+        sensitiveAccess: false,
+      },
+      global: { stubs: { BaseDialog: BaseDialogStub, TotpStepUpDialog: StepUpStub, Icon: IconStub } },
+    })
+    await flushPromises()
+    expect(evidenceDialog.text()).toContain('admin.instructionAudit.sensitiveAccess.lockedHint')
+    expect(mocks.revealEvidence).not.toHaveBeenCalled()
+  })
+
+  it('clears a translation and reports when the server revokes sensitive access', async () => {
+    mocks.createTranslation.mockRejectedValue({ reason: 'INSTRUCTION_SENSITIVE_ACCESS_REQUIRED' })
+    const wrapper = mount(InstructionTranslationPanel, {
+      props: {
+        resourceType: 'event', resourceId: 7, fieldName: 'instructions', original: 'sensitive original',
+        enabled: true, externalEnabled: false, sensitiveAccess: true,
+      },
+      global: { stubs: { Icon: IconStub, TotpStepUpDialog: StepUpStub } },
+    })
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(wrapper.emitted('access-denied')).toHaveLength(1)
+
+    await wrapper.setProps({ sensitiveAccess: false })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('sensitive original')
+    expect(wrapper.text()).toContain('admin.instructionAudit.sensitiveAccess.lockedHint')
+  })
+
+  it('removes already revealed hash plaintext as soon as the capability is revoked', async () => {
+    mocks.getHash.mockResolvedValue({
+      id: 31, digest: 'c'.repeat(64), name: 'sensitive hash', note: '', observed_source: 'instructions',
+      client_name: '', client_version: '', status: 'active', hash_algorithm: 'sha256', normalization_version: 'identity_utf8_v1',
+      field_name: 'instructions', raw_content_status: 'stored', content_bytes: 18, sources: [], scopes: [],
+      created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z',
+    })
+    mocks.revealHashRaw.mockResolvedValue({
+      hash_id: 31, field_name: 'instructions', raw_content_status: 'stored', raw_content: 'plaintext-to-remove',
+      content_bytes: 18, sha256: 'c'.repeat(64), recomputed_sha256: 'c'.repeat(64), digest_consistent: true,
+    })
+    const wrapper = mount(InstructionHashDetailDialog, {
+      props: { show: true, hashId: 31, translationEnabled: false, externalTranslationEnabled: false, sensitiveAccess: true },
+      global: { stubs: { BaseDialog: BaseDialogStub, ConfirmDialog: ConfirmStub, TotpStepUpDialog: StepUpStub, Icon: IconStub } },
+    })
+    await flushPromises()
+    const revealButton = wrapper.findAll('button').find((button) => button.text().includes('admin.instructionAudit.hashDetail.revealRaw'))
+    await revealButton?.trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('plaintext-to-remove')
+
+    await wrapper.setProps({ sensitiveAccess: false })
+    await flushPromises()
+    expect(wrapper.text()).not.toContain('plaintext-to-remove')
+  })
+
+  it('loads grants only on demand and clears the current administrator after revocation', async () => {
+    const currentGrant = {
+      id: 3, user_id: 7, email: 'admin@example.com', username: 'admin', user_status: 'active',
+      totp_enabled: true, effective: true, grant_source: 'manual', grant_reason: 'security duty',
+      granted_at: '2026-08-01T00:00:00Z',
+    }
+    mocks.listSensitiveAccessGrants.mockResolvedValue([currentGrant])
+    mocks.revokeSensitiveAccess.mockResolvedValue({ ...currentGrant, effective: false })
+    const wrapper = mount(InstructionSensitiveAccessPanel, {
+      props: {
+        capability: { user_id: 7, has_access: true, can_manage: true, grant_id: 3 },
+        capabilityLoading: false,
+        capabilityError: '',
+      },
+      global: { stubs: { Icon: IconStub, TotpStepUpDialog: StepUpStub, BaseDialog: BaseDialogStub } },
+    })
+    expect(mocks.listSensitiveAccessGrants).not.toHaveBeenCalled()
+    await wrapper.get('[data-test="load-sensitive-grants"]').trigger('click')
+    await flushPromises()
+    expect(mocks.listSensitiveAccessGrants).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('admin@example.com')
+
+    const revokeButton = wrapper.findAll('button').find((button) => button.text().includes('admin.instructionAudit.sensitiveAccess.revoke'))
+    await revokeButton?.trigger('click')
+    await wrapper.get('[data-test="confirm-sensitive-revoke"]').trigger('click')
+    await flushPromises()
+    expect(mocks.revokeSensitiveAccess).toHaveBeenCalledWith(7, '')
+    expect(wrapper.emitted('access-denied')).toHaveLength(1)
+    expect(wrapper.text()).not.toContain('admin@example.com')
+  })
+
+  it('promotes only the selected temporary AI scope', async () => {
     const temporaryHash = {
       id: 22, digest: 'a'.repeat(64), name: 'AI temporary rule', note: '', observed_source: 'instructions',
       client_name: '', client_version: '', status: 'active', hash_algorithm: 'sha256', normalization_version: 'identity_utf8_v1',
       field_name: 'instructions', raw_content_status: 'stored', content_bytes: 12, sources: [],
-      valid_from: '2026-08-01T00:00:00Z', valid_until: '2026-08-02T00:00:00Z',
+      scopes: [{
+        rule_set_id: 30, rule_set_name: 'AI temporary scope', rule_set_enabled: true, system_managed: true,
+        source_type: 'ai_review', status: 'active', valid_until: '2099-08-02T00:00:00Z', binding_id: 31, group_id: 7,
+        group_name: 'OpenAI', client_types: ['codex_cli'], binding_enabled: true, created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z',
+      }],
+      valid_from: '2026-08-01T00:00:00Z', valid_until: null,
       created_at: '2026-08-01T00:00:00Z', updated_at: '2026-08-01T00:00:00Z',
     }
     mocks.getHash.mockResolvedValue(temporaryHash)
-    mocks.changeHashStatus.mockResolvedValue({ ...temporaryHash, valid_until: null })
+    mocks.changeHashScope.mockResolvedValue({
+      ...temporaryHash,
+      scopes: temporaryHash.scopes.map((scope) => ({ ...scope, source_type: 'manual', valid_until: null })),
+    })
 
     const wrapper = mount(InstructionHashDetailDialog, {
       props: { show: true, hashId: 22, translationEnabled: false, externalTranslationEnabled: false },
@@ -148,11 +286,15 @@ describe('instruction audit v0.1.170.13 components', () => {
     })
     await flushPromises()
 
+    expect(wrapper.text()).toContain('AI temporary scope')
+    expect(wrapper.text()).toContain('admin.instructionAudit.hashDetail.temporaryScope')
+
     const promote = wrapper.findAll('button').find((button) => button.text().includes('admin.instructionAudit.hashDetail.promote'))
     expect(promote).toBeDefined()
     await promote!.trigger('click')
     await flushPromises()
-    expect(mocks.changeHashStatus).toHaveBeenCalledWith(22, 'active')
+    expect(mocks.changeHashScope).toHaveBeenCalledWith(22, 30, 'promote')
+    expect(mocks.changeHashStatus).not.toHaveBeenCalled()
   })
 
   it('keeps page overflow bounded and splits major workspaces into components', () => {

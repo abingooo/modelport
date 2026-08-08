@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
 const (
-	openAIWSClientReadLimitBytesDefault     int64 = 64 * 1024 * 1024
+	openAIWSClientReadLimitBytesDefault     int64 = 256 * 1024 * 1024
 	openAIWSHTTPBridgeThresholdBytesDefault int64 = 15 * 1024 * 1024
 	openAIWSHTTPBridgeErrorBodyLimitBytes         = 64 * 1024
 )
@@ -36,6 +38,80 @@ func ResolveOpenAIWSClientReadLimitBytes(cfg *config.Config) int64 {
 		return openAIWSClientReadLimitBytesDefault
 	}
 	return cfg.Gateway.OpenAIWS.ClientReadLimitBytes
+}
+
+func hooksInstructionReadLimit(hooks *OpenAIWSIngressHooks) int64 {
+	if hooks == nil {
+		return 0
+	}
+	return hooks.InstructionReadLimitBytes
+}
+
+func hooksInstructionBodyBudget(hooks *OpenAIWSIngressHooks) *pkghttputil.RequestBodyMemoryBudget {
+	if hooks == nil {
+		return nil
+	}
+	return hooks.InstructionBodyBudget
+}
+
+func extractOpenAIWSMaxBytesError(err error) (*http.MaxBytesError, bool) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		return maxErr, true
+	}
+	return nil, false
+}
+
+// ReadOpenAIWSClientFrameWithBudget is the budget-aware primitive for client
+// frame ingestion. The caller must release the returned lease after instruction
+// audit and all other consumers have finished with payload.
+func ReadOpenAIWSClientFrameWithBudget(
+	ctx context.Context,
+	conn *coderws.Conn,
+	readLimitBytes int64,
+	budget *pkghttputil.RequestBodyMemoryBudget,
+) (coderws.MessageType, []byte, *pkghttputil.RequestBodyMemoryLease, error) {
+	if conn == nil {
+		return 0, nil, nil, errors.New("openai websocket client connection is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if readLimitBytes <= 0 {
+		readLimitBytes = openAIWSClientReadLimitBytesDefault
+	}
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(readLimitBytes, 2)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	lease, err := budget.Acquire(ctx, workingSetBytes)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	releaseOnError := true
+	defer func() {
+		if releaseOnError {
+			lease.Release()
+		}
+	}()
+
+	// The control loop owns cancellation and closes the transport before
+	// joining this reader. Binding Reader directly to ctx can race that loop
+	// and replace the intended close status with a bare EOF.
+	messageType, reader, err := conn.Reader(context.Background())
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	payload, err := io.ReadAll(io.LimitReader(reader, readLimitBytes+1))
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	if int64(len(payload)) > readLimitBytes {
+		releaseOnError = false
+		return messageType, payload, lease, &http.MaxBytesError{Limit: readLimitBytes}
+	}
+	releaseOnError = false
+	return messageType, payload, lease, nil
 }
 
 func (s *OpenAIGatewayService) openAIWSHTTPBridgeEnabled() bool {

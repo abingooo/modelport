@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
 	"go.uber.org/zap"
@@ -215,7 +216,11 @@ type OpenAIWSIngressHooks struct {
 	MaxReasoningEffort string
 	// ReasoningEffortMappings rewrites explicit effort values for this WS session.
 	ReasoningEffortMappings []ReasoningEffortMapping
-	BeforeTurn              func(turn int) error
+	// InstructionReadLimitBytes and InstructionBodyBudget apply the same
+	// bounded ingress policy to every follow-up frame as the first frame.
+	InstructionReadLimitBytes int64
+	InstructionBodyBudget     *pkghttputil.RequestBodyMemoryBudget
+	BeforeTurn                func(turn int) error
 	// BeforeInstructionRequest receives the untouched client response.create
 	// frame before any gateway normalization, policy rewrite, or model mapping.
 	BeforeInstructionRequest func(turn int, payload []byte, originalModel string) error

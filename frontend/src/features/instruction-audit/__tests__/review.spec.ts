@@ -61,4 +61,12 @@ describe('instruction audit evidence review', () => {
     expect(view).toContain('system_log_q')
     expect(view).not.toContain('min-w-[960px]')
   })
+
+  it('requires plaintext for manual hashes and labels digest-only entries as imports', () => {
+    const view = read('../InstructionAuditView.vue')
+    const types = read('../types.ts')
+    expect(types).toContain("source_type: 'manual' | 'import'")
+    expect(view).toContain("source_type: hashDialog.mode === 'plaintext' ? 'manual' : 'import'")
+    expect(view).toContain("mode: 'plaintext' as 'digest' | 'plaintext'")
+  })
 })

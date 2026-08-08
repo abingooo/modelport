@@ -57,32 +57,55 @@ type InstructionDecision struct {
 }
 
 type InstructionHashEntry struct {
-	ID             int64                   `json:"id"`
-	Digest         string                  `json:"digest"`
-	Name           string                  `json:"name"`
-	Note           string                  `json:"note"`
-	ObservedSource string                  `json:"observed_source"`
-	ClientName     string                  `json:"client_name"`
-	ClientVersion  string                  `json:"client_version"`
-	Status         string                  `json:"status"`
-	HashAlgorithm  string                  `json:"hash_algorithm"`
-	Normalization  string                  `json:"normalization_version"`
-	FieldName      string                  `json:"field_name"`
-	RawStatus      string                  `json:"raw_content_status"`
-	ContentBytes   int                     `json:"content_bytes"`
-	KeyVersion     string                  `json:"encryption_key_version,omitempty"`
-	RawExpiresAt   *time.Time              `json:"raw_expires_at,omitempty"`
-	Sources        []InstructionHashSource `json:"sources,omitempty"`
-	ValidFrom      *time.Time              `json:"valid_from,omitempty"`
-	ValidUntil     *time.Time              `json:"valid_until,omitempty"`
-	CreatedBy      *int64                  `json:"created_by,omitempty"`
-	CreatedAt      time.Time               `json:"created_at"`
-	UpdatedAt      time.Time               `json:"updated_at"`
+	ID              int64                   `json:"id"`
+	Digest          string                  `json:"digest"`
+	Name            string                  `json:"name"`
+	Note            string                  `json:"note"`
+	ObservedSource  string                  `json:"observed_source"`
+	ClientName      string                  `json:"client_name"`
+	ClientVersion   string                  `json:"client_version"`
+	Status          string                  `json:"status"`
+	HashAlgorithm   string                  `json:"hash_algorithm"`
+	Normalization   string                  `json:"normalization_version"`
+	FieldName       string                  `json:"field_name"`
+	RawStatus       string                  `json:"raw_content_status"`
+	ContentBytes    int                     `json:"content_bytes"`
+	KeyVersion      string                  `json:"encryption_key_version,omitempty"`
+	RawExpiresAt    *time.Time              `json:"raw_expires_at,omitempty"`
+	Sources         []InstructionHashSource `json:"sources,omitempty"`
+	Scopes          []InstructionHashScope  `json:"scopes,omitempty"`
+	ScopeSource     string                  `json:"scope_source,omitempty"`
+	ScopeStatus     string                  `json:"scope_status,omitempty"`
+	ScopeValidUntil *time.Time              `json:"scope_valid_until,omitempty"`
+	ValidFrom       *time.Time              `json:"valid_from,omitempty"`
+	ValidUntil      *time.Time              `json:"valid_until,omitempty"`
+	CreatedBy       *int64                  `json:"created_by,omitempty"`
+	CreatedAt       time.Time               `json:"created_at"`
+	UpdatedAt       time.Time               `json:"updated_at"`
+}
+
+type InstructionHashScope struct {
+	RuleSetID      int64      `json:"rule_set_id"`
+	RuleSetName    string     `json:"rule_set_name"`
+	RuleSetEnabled bool       `json:"rule_set_enabled"`
+	SystemManaged  bool       `json:"system_managed"`
+	SourceType     string     `json:"source_type"`
+	Status         string     `json:"status"`
+	ValidUntil     *time.Time `json:"valid_until,omitempty"`
+	BindingID      *int64     `json:"binding_id,omitempty"`
+	GroupID        *int64     `json:"group_id,omitempty"`
+	GroupName      string     `json:"group_name"`
+	ClientTypes    []string   `json:"client_types"`
+	BindingEnabled bool       `json:"binding_enabled"`
+	UpdatedBy      *int64     `json:"updated_by,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type CreateInstructionHashRequest struct {
 	Digest         string     `json:"digest"`
 	RawContent     string     `json:"raw_content"`
+	SourceType     string     `json:"source_type"`
 	Name           string     `json:"name"`
 	Note           string     `json:"note"`
 	ObservedSource string     `json:"observed_source"`
@@ -137,18 +160,19 @@ type SaveInstructionRuleSetRequest struct {
 }
 
 type InstructionGroupBinding struct {
-	ID          int64     `json:"id"`
-	GroupID     int64     `json:"group_id"`
-	GroupName   string    `json:"group_name"`
-	Platform    string    `json:"platform"`
-	GroupStatus string    `json:"group_status"`
-	RuleSetID   int64     `json:"rule_set_id"`
-	RuleSetName string    `json:"rule_set_name"`
-	ClientTypes []string  `json:"client_types"`
-	Enabled     bool      `json:"enabled"`
-	Effective   bool      `json:"effective"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            int64     `json:"id"`
+	GroupID       int64     `json:"group_id"`
+	GroupName     string    `json:"group_name"`
+	Platform      string    `json:"platform"`
+	GroupStatus   string    `json:"group_status"`
+	RuleSetID     int64     `json:"rule_set_id"`
+	RuleSetName   string    `json:"rule_set_name"`
+	SystemManaged bool      `json:"system_managed"`
+	ClientTypes   []string  `json:"client_types"`
+	Enabled       bool      `json:"enabled"`
+	Effective     bool      `json:"effective"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type SaveInstructionGroupBindingsRequest struct {
@@ -308,42 +332,46 @@ type AddInstructionEventToRuleSetResult struct {
 }
 
 type InstructionOverview struct {
-	Enabled                     bool       `json:"enabled"`
-	ConfigVersion               int64      `json:"config_version"`
-	LoadedAt                    *time.Time `json:"loaded_at,omitempty"`
-	LoadError                   string     `json:"load_error"`
-	HashCount                   int64      `json:"hash_count"`
-	ActiveHashCount             int64      `json:"active_hash_count"`
-	RuleSetCount                int64      `json:"rule_set_count"`
-	AuditedGroupCount           int64      `json:"audited_group_count"`
-	EffectiveGroupCount         int64      `json:"effective_group_count"`
-	PendingEmailCount           int64      `json:"pending_email_count"`
-	QueuedEventCount            int64      `json:"queued_event_count"`
-	DroppedEventCount           int64      `json:"dropped_event_count"`
-	PersistFailureCount         int64      `json:"persist_failure_count"`
-	EvidenceEncryptionAvailable bool       `json:"evidence_encryption_available"`
-	EvidenceRetentionDays       int        `json:"evidence_retention_days"`
-	MaxBodyBytes                int64      `json:"max_body_bytes"`
-	ParseTimeoutMS              int        `json:"parse_timeout_ms"`
-	MaxInflightBodyBytes        int64      `json:"max_inflight_body_bytes"`
-	AIEnabled                   bool       `json:"ai_enabled"`
-	TranslationEnabled          bool       `json:"translation_enabled"`
-	TranslationPendingCount     int64      `json:"translation_pending_count"`
-	TranslationProcessingCount  int64      `json:"translation_processing_count"`
-	TranslationFailedCount      int64      `json:"translation_failed_count"`
-	TranslationActiveWorkers    int64      `json:"translation_active_workers"`
-	TranslationProcessedTotal   int64      `json:"translation_processed_total"`
-	TranslationWorkerFailTotal  int64      `json:"translation_worker_fail_total"`
-	PersistedOutcomeCount       int64      `json:"persisted_outcome_count"`
-	AggregatedOutcomeCount      int64      `json:"aggregated_outcome_count"`
-	ExpiredAggregateEventCount  int64      `json:"expired_aggregate_event_count"`
-	StatisticsLossCount         int64      `json:"statistics_loss_count"`
-	AuditLatencySampleCount     int64      `json:"audit_latency_sample_count"`
-	AuditLatencyP95MS           int64      `json:"audit_latency_p95_ms"`
-	AuditLatencyP99MS           int64      `json:"audit_latency_p99_ms"`
-	AILatencySampleCount        int64      `json:"ai_latency_sample_count"`
-	AILatencyP95MS              int64      `json:"ai_latency_p95_ms"`
-	AILatencyP99MS              int64      `json:"ai_latency_p99_ms"`
+	Enabled                        bool       `json:"enabled"`
+	ConfigVersion                  int64      `json:"config_version"`
+	LoadedAt                       *time.Time `json:"loaded_at,omitempty"`
+	LoadError                      string     `json:"load_error"`
+	HashCount                      int64      `json:"hash_count"`
+	ActiveHashCount                int64      `json:"active_hash_count"`
+	RuleSetCount                   int64      `json:"rule_set_count"`
+	AuditedGroupCount              int64      `json:"audited_group_count"`
+	EffectiveGroupCount            int64      `json:"effective_group_count"`
+	PendingEmailCount              int64      `json:"pending_email_count"`
+	QueuedEventCount               int64      `json:"queued_event_count"`
+	DroppedEventCount              int64      `json:"dropped_event_count"`
+	PersistFailureCount            int64      `json:"persist_failure_count"`
+	EvidenceEncryptionAvailable    bool       `json:"evidence_encryption_available"`
+	EvidenceRetentionDays          int        `json:"evidence_retention_days"`
+	MaxBodyBytes                   int64      `json:"max_body_bytes"`
+	HTTPGatewayMaxBodyBytes        int64      `json:"http_gateway_max_body_bytes"`
+	WebSocketGatewayMaxBodyBytes   int64      `json:"websocket_gateway_max_body_bytes"`
+	EffectiveHTTPMaxBodyBytes      int64      `json:"effective_http_max_body_bytes"`
+	EffectiveWebSocketMaxBodyBytes int64      `json:"effective_websocket_max_body_bytes"`
+	ParseTimeoutMS                 int        `json:"parse_timeout_ms"`
+	MaxInflightBodyBytes           int64      `json:"max_inflight_body_bytes"`
+	AIEnabled                      bool       `json:"ai_enabled"`
+	TranslationEnabled             bool       `json:"translation_enabled"`
+	TranslationPendingCount        int64      `json:"translation_pending_count"`
+	TranslationProcessingCount     int64      `json:"translation_processing_count"`
+	TranslationFailedCount         int64      `json:"translation_failed_count"`
+	TranslationActiveWorkers       int64      `json:"translation_active_workers"`
+	TranslationProcessedTotal      int64      `json:"translation_processed_total"`
+	TranslationWorkerFailTotal     int64      `json:"translation_worker_fail_total"`
+	PersistedOutcomeCount          int64      `json:"persisted_outcome_count"`
+	AggregatedOutcomeCount         int64      `json:"aggregated_outcome_count"`
+	ExpiredAggregateEventCount     int64      `json:"expired_aggregate_event_count"`
+	StatisticsLossCount            int64      `json:"statistics_loss_count"`
+	AuditLatencySampleCount        int64      `json:"audit_latency_sample_count"`
+	AuditLatencyP95MS              int64      `json:"audit_latency_p95_ms"`
+	AuditLatencyP99MS              int64      `json:"audit_latency_p99_ms"`
+	AILatencySampleCount           int64      `json:"ai_latency_sample_count"`
+	AILatencyP95MS                 int64      `json:"ai_latency_p95_ms"`
+	AILatencyP99MS                 int64      `json:"ai_latency_p99_ms"`
 }
 
 type UpdateInstructionEnabledRequest struct {

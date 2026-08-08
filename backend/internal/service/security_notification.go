@@ -42,6 +42,8 @@ type SecurityNotificationAudienceInput struct {
 	TemplateEvent string
 	Variables     map[string]string
 	DedupKey      string
+	Status        string
+	LastError     string
 }
 
 type SecurityNotificationOutboxItem struct {
@@ -143,6 +145,29 @@ func (s *SecurityNotificationService) Enqueue(ctx context.Context, input Securit
 	if input.SourceID <= 0 || strings.TrimSpace(input.SourceType) == "" {
 		return errors.New("security notification source required")
 	}
+	inputs, err := s.Prepare(ctx, input)
+	if err != nil {
+		return err
+	}
+	var enqueueErrors []error
+	for _, item := range inputs {
+		if err := s.repository.Enqueue(ctx, item); err != nil {
+			enqueueErrors = append(enqueueErrors, fmt.Errorf("%s notification: %w", item.Audience, err))
+		}
+	}
+	return errors.Join(enqueueErrors...)
+}
+
+func (s *SecurityNotificationService) Prepare(
+	ctx context.Context,
+	input SecurityNotificationEnqueueInput,
+) ([]SecurityNotificationAudienceInput, error) {
+	if s == nil || s.repository == nil {
+		return nil, errors.New("security notification service unavailable")
+	}
+	if input.SourceID < 0 || strings.TrimSpace(input.SourceType) == "" {
+		return nil, errors.New("security notification source required")
+	}
 	userRecipients := normalizeEmails([]string{input.UserEmail})
 	opsRecipients := s.opsRecipients(ctx)
 	bucket := time.Now().UTC().Truncate(15 * time.Minute).Format(time.RFC3339)
@@ -160,16 +185,14 @@ func (s *SecurityNotificationService) Enqueue(ctx context.Context, input Securit
 			DedupKey:  securityNotificationDedupKey(input.SourceType, "ops", input.DedupeScope, bucket),
 		},
 	}
-	var enqueueErrors []error
+	result := make([]SecurityNotificationAudienceInput, 0, len(inputs))
 	for _, item := range inputs {
 		if (item.Audience == "user" && input.SkipUser) || (item.Audience == "ops" && input.SkipOps) {
 			continue
 		}
-		if err := s.repository.Enqueue(ctx, item); err != nil {
-			enqueueErrors = append(enqueueErrors, fmt.Errorf("%s notification: %w", item.Audience, err))
-		}
+		result = append(result, item)
 	}
-	return errors.Join(enqueueErrors...)
+	return result, nil
 }
 
 func (s *SecurityNotificationService) opsRecipients(ctx context.Context) []string {

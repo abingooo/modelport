@@ -5,7 +5,12 @@
     width="wide"
     @close="close"
   >
-    <div v-if="loading" class="flex min-h-56 items-center justify-center text-sm text-gray-500 dark:text-gray-400">
+    <div v-if="!sensitiveAccess" class="flex min-h-56 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-amber-700 dark:text-amber-300">
+      <Icon name="lock" size="md" />
+      {{ t('admin.instructionAudit.sensitiveAccess.lockedHint') }}
+    </div>
+
+    <div v-else-if="loading" class="flex min-h-56 items-center justify-center text-sm text-gray-500 dark:text-gray-400">
       <Icon name="refresh" size="md" class="mr-2 animate-spin" />
       {{ t('common.loading') }}
     </div>
@@ -99,7 +104,9 @@
               :original="field.plaintext || ''"
               :enabled="translationEnabled"
               :external-enabled="externalTranslationEnabled"
+              :sensitive-access="sensitiveAccess"
               @copy-original="copyValue(`${field.source}_plaintext`, field.plaintext || '')"
+              @access-denied="handleSensitiveAccessDenied"
             />
             <p class="mt-2 break-all text-[11px] text-gray-500 dark:text-gray-400">
               {{ t('admin.instructionAudit.recomputedHash') }}: <span class="font-mono">{{ field.recomputed_sha256 || '-' }}</span>
@@ -156,7 +163,7 @@
 
     <template #footer>
       <button type="button" class="btn btn-secondary" @click="close">{{ t('common.close') }}</button>
-      <button v-if="review && event" type="button" class="btn btn-primary" @click="copyReviewBundle">
+      <button v-if="review && event" type="button" class="btn btn-primary" :disabled="!sensitiveAccess" @click="copyReviewBundle">
         <Icon name="copy" size="sm" />
         {{ t('admin.instructionAudit.copyReviewBundle') }}
       </button>
@@ -177,6 +184,7 @@ import { useAppStore } from '@/stores'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from './api'
 import InstructionTranslationPanel from './components/InstructionTranslationPanel.vue'
+import { isInstructionSensitiveAccessDenied } from './sensitiveAccess'
 import type {
   InstructionAIReview,
   InstructionEvidenceField,
@@ -185,16 +193,18 @@ import type {
   InstructionEvent,
 } from './types'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   event: InstructionEvent | null
   translationEnabled: boolean
   externalTranslationEnabled: boolean
-}>()
+  sensitiveAccess?: boolean
+}>(), { sensitiveAccess: true })
 
 const emit = defineEmits<{
   (event: 'close'): void
   (event: 'candidate', source: 'instructions' | 'input1'): void
+  (event: 'access-denied', error?: unknown): void
 }>()
 
 const { t } = useI18n()
@@ -230,7 +240,7 @@ watch(
     review.value = null
     reviewConfirmed.value = false
     aiReviews.value = []
-    if (!show || !eventId) return
+    if (!show || !eventId || !props.sensitiveAccess) return
     loading.value = true
     try {
       const [nextReview, nextAIReviews] = await Promise.all([
@@ -240,6 +250,10 @@ watch(
       review.value = nextReview
       aiReviews.value = nextAIReviews
     } catch (error) {
+      if (isInstructionSensitiveAccessDenied(error)) {
+        handleSensitiveAccessDenied(error)
+        return
+      }
       if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
       emit('close')
     } finally {
@@ -248,26 +262,31 @@ watch(
   },
   { immediate: true },
 )
+watch(() => props.sensitiveAccess, (allowed) => {
+  if (!allowed) clearSensitiveState()
+})
 
 function close() {
-  review.value = null
-  reviewConfirmed.value = false
-  aiReviews.value = []
+  clearSensitiveState()
   emit('close')
 }
 
 async function copyValue(source: string, value: string) {
-  if (!props.event || !value) return
+  if (!props.event || !props.sensitiveAccess || !value) return
   try {
     await stepUp.run(() => instructionAuditAPI.recordEvidenceCopy(props.event!.id, source))
     await copyToClipboard(value)
   } catch (error) {
+    if (isInstructionSensitiveAccessDenied(error)) {
+      handleSensitiveAccessDenied(error)
+      return
+    }
     if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
   }
 }
 
 async function copyReviewBundle() {
-  if (!props.event || !review.value) return
+  if (!props.event || !props.sensitiveAccess || !review.value) return
   const bundle = {
     event_id: props.event.id,
     request_id: props.event.request_id,
@@ -285,6 +304,17 @@ async function copyReviewBundle() {
     evidence: reviewFields.value,
   }
   await copyValue('review_bundle', JSON.stringify(bundle, null, 2))
+}
+
+function clearSensitiveState() {
+  review.value = null
+  reviewConfirmed.value = false
+  aiReviews.value = []
+}
+
+function handleSensitiveAccessDenied(error?: unknown) {
+  clearSensitiveState()
+  emit('access-denied', error)
 }
 
 function sourceLabel(source: 'instructions' | 'input1'): string {

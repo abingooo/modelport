@@ -28,19 +28,30 @@ func (r *securityNotificationRepository) Enqueue(ctx context.Context, input serv
 	if err != nil {
 		return fmt.Errorf("marshal security notification variables: %w", err)
 	}
-	status := "pending"
+	status := input.Status
+	if status == "" {
+		status = "pending"
+	}
 	dedupKey := any(input.DedupKey)
-	if len(input.Recipients) == 0 {
+	if len(input.Recipients) == 0 && status == "pending" {
 		status = "no_recipient"
 		dedupKey = nil
 	}
+	if status == "enqueue_failed" {
+		dedupKey = nil
+	}
+	recipients := input.Recipients
+	if recipients == nil {
+		recipients = []string{}
+	}
 	result, err := r.db.ExecContext(ctx, `
 		INSERT INTO security_notification_outbox
-			(source_type, source_id, audience, user_id, recipients, template_event, variables, dedup_key, status)
-		VALUES ($1, $2, $3, NULLIF($4, 0), $5, $6, $7, $8, $9)
+			(source_type, source_id, audience, user_id, recipients, template_event, variables,
+			 dedup_key, status, last_error)
+		VALUES ($1, $2, $3, NULLIF($4, 0), $5, $6, $7, $8, $9, LEFT($10, 512))
 		ON CONFLICT DO NOTHING`,
-		input.SourceType, input.SourceID, input.Audience, input.UserID, pq.Array(input.Recipients),
-		input.TemplateEvent, variables, dedupKey, status)
+		input.SourceType, input.SourceID, input.Audience, input.UserID, pq.Array(recipients),
+		input.TemplateEvent, variables, dedupKey, status, input.LastError)
 	if err != nil {
 		return err
 	}

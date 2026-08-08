@@ -257,6 +257,37 @@ func (h *InstructionAdminHandler) ChangeHashStatus(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *InstructionAdminHandler) ChangeHashScope(c *gin.Context) {
+	hashID, ok := instructionIDParam(c, "hash")
+	if !ok {
+		return
+	}
+	ruleSetID, err := strconv.ParseInt(c.Param("rule_set_id"), 10, 64)
+	if err != nil || ruleSetID <= 0 {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_scope_id", "规则作用域 ID 无效"))
+		return
+	}
+	var request ChangeInstructionHashScopeRequest
+	if err = c.ShouldBindJSON(&request); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_invalid_scope_action", "规则作用域操作无效"))
+		return
+	}
+	item, err := h.service.ChangeHashScope(
+		c.Request.Context(), hashID, ruleSetID, request.Action, adminID(c), instructionSensitiveAccess(c, ""),
+	)
+	if err != nil {
+		h.setAdminAudit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"hash_id": hashID, "rule_set_id": ruleSetID, "action": request.Action,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.setAdminAudit(c, "success", "", map[string]any{
+		"hash_id": hashID, "rule_set_id": ruleSetID, "action": request.Action,
+	})
+	response.Success(c, item)
+}
+
 func (h *InstructionAdminHandler) CreateHash(c *gin.Context) {
 	var request CreateInstructionHashRequest
 	if err := c.ShouldBindJSON(&request); err != nil {

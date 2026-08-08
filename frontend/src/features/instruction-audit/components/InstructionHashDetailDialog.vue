@@ -19,20 +19,62 @@
         </div>
       </section>
 
-      <div class="flex flex-wrap gap-2">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="mr-1 text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.hashDetail.globalActions') }}</span>
         <button v-if="canPromote" type="button" class="btn btn-primary btn-sm" :disabled="saving" @click="changeStatus('active')">
           <Icon name="check" size="sm" />{{ t('admin.instructionAudit.hashDetail.promote') }}
         </button>
         <button v-if="detail.status === 'active' || detail.status === 'candidate'" type="button" class="btn btn-secondary btn-sm" :disabled="saving" @click="changeStatus('disabled')">
           <Icon name="ban" size="sm" />{{ t('admin.instructionAudit.hashDetail.disable') }}
         </button>
-        <button v-if="detail.status !== 'revoked'" type="button" class="btn btn-danger btn-sm" :disabled="saving" @click="revokeRequested = true">
+        <button v-if="detail.status !== 'revoked'" type="button" class="btn btn-danger btn-sm" :disabled="saving" @click="globalRevokeRequested = true">
           <Icon name="x" size="sm" />{{ t('admin.instructionAudit.hashDetail.revoke') }}
         </button>
-        <button v-if="detail.raw_content_status === 'stored' && !raw" type="button" class="btn btn-secondary btn-sm" :disabled="revealing" @click="revealRaw">
-          <Icon name="eye" size="sm" />{{ t('admin.instructionAudit.hashDetail.revealRaw') }}
+        <button v-if="detail.raw_content_status === 'stored' && !raw" type="button" class="btn btn-secondary btn-sm" :disabled="revealing || !sensitiveAccess" :title="sensitiveActionTitle" @click="revealRaw">
+          <Icon :name="sensitiveAccess ? 'eye' : 'lock'" size="sm" />{{ sensitiveAccess ? t('admin.instructionAudit.hashDetail.revealRaw') : t('admin.instructionAudit.sensitiveAccess.lockedAction') }}
         </button>
       </div>
+
+      <section>
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.hashDetail.scopes') }}</h3>
+          <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.hashDetail.scopeCount', { count: detail.scopes?.length || 0 }) }}</span>
+        </div>
+        <div v-if="detail.scopes?.length" class="divide-y divide-gray-100 overflow-hidden rounded-md border border-gray-200 dark:divide-dark-700 dark:border-dark-600">
+          <article v-for="(scope, index) in detail.scopes" :key="`${scope.rule_set_id}:${scope.binding_id || index}`" class="grid min-w-0 gap-2 px-3 py-3 sm:grid-cols-[minmax(150px,0.8fr)_minmax(180px,1fr)_auto]">
+            <div class="min-w-0">
+              <p class="truncate text-sm font-medium text-gray-900 dark:text-white" :title="scope.rule_set_name">{{ scope.rule_set_name }}</p>
+              <div class="mt-1 flex flex-wrap gap-1">
+                <span :class="scopeSourcePill(scope.source_type)">{{ sourceTypeLabel(scope.source_type) }}</span>
+                <span :class="scopeStatePill(scope)">{{ scopeStateLabel(scope) }}</span>
+              </div>
+            </div>
+            <div class="min-w-0 text-xs text-gray-600 dark:text-gray-300">
+              <p>{{ scope.group_id ? `${scope.group_name || '-'} #${scope.group_id}` : t('admin.instructionAudit.hashDetail.scopeUnbound') }}</p>
+              <p class="mt-1 break-words">{{ t('admin.instructionAudit.hashDetail.clients') }}: {{ scopeClientLabels(scope.client_types) }}</p>
+            </div>
+            <div class="flex min-w-0 flex-col gap-2 text-xs text-gray-400 sm:items-end sm:text-right">
+              <div>
+              <p v-if="scope.valid_until">{{ t('admin.instructionAudit.hashDetail.expiresAt') }}</p>
+              <time v-if="scope.valid_until" class="block">{{ formatDate(scope.valid_until) }}</time>
+              <p v-else>{{ t('admin.instructionAudit.hashDetail.permanentScope') }}</p>
+              </div>
+              <div v-if="scope.system_managed" class="flex flex-wrap gap-1 sm:justify-end">
+                <button v-if="scope.source_type === 'ai_review' && scope.status !== 'revoked'" type="button" class="btn btn-primary btn-xs" :disabled="saving" @click="changeScope(scope, 'promote')">
+                  {{ t('admin.instructionAudit.hashDetail.promoteScope') }}
+                </button>
+                <button v-if="scope.status === 'active'" type="button" class="btn btn-secondary btn-xs" :disabled="saving" @click="changeScope(scope, 'disable')">
+                  {{ t('admin.instructionAudit.hashDetail.disableScope') }}
+                </button>
+                <button v-if="scope.status !== 'revoked'" type="button" class="btn btn-danger btn-xs" :disabled="saving" @click="scopeRevokeRequested = scope">
+                  {{ t('admin.instructionAudit.hashDetail.revokeScope') }}
+                </button>
+              </div>
+            </div>
+          </article>
+        </div>
+        <p v-else class="rounded-md border border-dashed border-gray-200 px-4 py-6 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-gray-400">{{ t('admin.instructionAudit.hashDetail.noScopes') }}</p>
+      </section>
 
       <section>
         <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -70,7 +112,9 @@
           :original="raw.raw_content || ''"
           :enabled="translationEnabled"
           :external-enabled="externalTranslationEnabled"
+          :sensitive-access="sensitiveAccess"
           @copy-original="copyRaw"
+          @access-denied="handleSensitiveAccessDenied"
         />
         <pre v-else class="max-h-80 overflow-auto whitespace-pre-wrap break-words rounded-md bg-gray-950 p-3 font-mono text-xs leading-5 text-gray-100">{{ raw.raw_content }}</pre>
         <p class="break-all text-[11px] text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.recomputedHash') }}: {{ raw.recomputed_sha256 || '-' }}</p>
@@ -82,13 +126,22 @@
     </div>
 
     <ConfirmDialog
-      :show="revokeRequested"
+      :show="globalRevokeRequested"
       :title="t('admin.instructionAudit.hashDetail.revokeTitle')"
       :message="t('admin.instructionAudit.hashDetail.revokeConfirm')"
       :confirm-text="t('admin.instructionAudit.hashDetail.revoke')"
       danger
       @confirm="changeStatus('revoked')"
-      @cancel="revokeRequested = false"
+      @cancel="globalRevokeRequested = false"
+    />
+    <ConfirmDialog
+      :show="Boolean(scopeRevokeRequested)"
+      :title="t('admin.instructionAudit.hashDetail.revokeScopeTitle')"
+      :message="t('admin.instructionAudit.hashDetail.revokeScopeConfirm')"
+      :confirm-text="t('admin.instructionAudit.hashDetail.revokeScope')"
+      danger
+      @confirm="scopeRevokeRequested && changeScope(scopeRevokeRequested, 'revoke')"
+      @cancel="scopeRevokeRequested = null"
     />
     <TotpStepUpDialog :controller="stepUp" />
     <template #footer><button type="button" class="btn btn-secondary" @click="close">{{ t('common.close') }}</button></template>
@@ -107,16 +160,22 @@ import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import instructionAuditAPI from '../api'
-import type { InstructionHashEntry, InstructionHashRawReview } from '../types'
+import { isInstructionSensitiveAccessDenied } from '../sensitiveAccess'
+import type { InstructionHashEntry, InstructionHashRawReview, InstructionHashScope } from '../types'
 import InstructionTranslationPanel from './InstructionTranslationPanel.vue'
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   hashId: number | null
   translationEnabled: boolean
   externalTranslationEnabled: boolean
+  sensitiveAccess?: boolean
+}>(), { sensitiveAccess: true })
+const emit = defineEmits<{
+  (event: 'close'): void
+  (event: 'changed'): void
+  (event: 'access-denied', error?: unknown): void
 }>()
-const emit = defineEmits<{ (event: 'close'): void; (event: 'changed'): void }>()
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
@@ -126,7 +185,8 @@ const saving = ref(false)
 const revealing = ref(false)
 const detail = ref<InstructionHashEntry | null>(null)
 const raw = ref<InstructionHashRawReview | null>(null)
-const revokeRequested = ref(false)
+const globalRevokeRequested = ref(false)
+const scopeRevokeRequested = ref<InstructionHashScope | null>(null)
 
 const translationField = computed<'instructions' | 'input1' | null>(() => {
   const field = detail.value?.field_name || detail.value?.observed_source
@@ -137,6 +197,9 @@ const canPromote = computed(() => Boolean(
   && detail.value.status !== 'revoked'
   && (detail.value.status !== 'active' || detail.value.valid_until),
 ))
+const sensitiveActionTitle = computed(() => props.sensitiveAccess
+  ? ''
+  : t('admin.instructionAudit.sensitiveAccess.lockedHint'))
 
 const MetaItem = defineComponent({
   props: { label: { type: String, required: true }, value: { type: String, required: true } },
@@ -151,7 +214,8 @@ const MetaItem = defineComponent({
 watch(() => [props.show, props.hashId] as const, async ([show, hashId]) => {
   detail.value = null
   raw.value = null
-  revokeRequested.value = false
+  globalRevokeRequested.value = false
+  scopeRevokeRequested.value = null
   if (!show || !hashId) return
   loading.value = true
   try {
@@ -163,13 +227,20 @@ watch(() => [props.show, props.hashId] as const, async ([show, hashId]) => {
     loading.value = false
   }
 }, { immediate: true })
+watch(() => props.sensitiveAccess, (allowed) => {
+  if (!allowed) raw.value = null
+})
 
 async function revealRaw() {
-  if (!detail.value || revealing.value) return
+  if (!detail.value || !props.sensitiveAccess || revealing.value) return
   revealing.value = true
   try {
     raw.value = await stepUp.run(() => instructionAuditAPI.revealHashRaw(detail.value!.id))
   } catch (error) {
+    if (isInstructionSensitiveAccessDenied(error)) {
+      handleSensitiveAccessDenied(error)
+      return
+    }
     if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
   } finally {
     revealing.value = false
@@ -177,11 +248,15 @@ async function revealRaw() {
 }
 
 async function copyRaw() {
-  if (!detail.value || !raw.value?.raw_content) return
+  if (!detail.value || !props.sensitiveAccess || !raw.value?.raw_content) return
   try {
     await stepUp.run(() => instructionAuditAPI.recordHashRawCopy(detail.value!.id))
     await copyToClipboard(raw.value.raw_content)
   } catch (error) {
+    if (isInstructionSensitiveAccessDenied(error)) {
+      handleSensitiveAccessDenied(error)
+      return
+    }
     if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
   }
 }
@@ -189,9 +264,24 @@ async function copyRaw() {
 async function changeStatus(status: 'active' | 'disabled' | 'revoked') {
   if (!detail.value || saving.value) return
   saving.value = true
-  revokeRequested.value = false
+  globalRevokeRequested.value = false
   try {
     detail.value = await stepUp.run(() => instructionAuditAPI.changeHashStatus(detail.value!.id, status))
+    appStore.showSuccess(t('common.saved'))
+    emit('changed')
+  } catch (error) {
+    if (!isStepUpCancelled(error)) appStore.showError(extractI18nErrorMessage(error, t, 'admin.instructionAudit.errors', t('common.error')))
+  } finally {
+    saving.value = false
+  }
+}
+
+async function changeScope(scope: InstructionHashScope, action: 'promote' | 'disable' | 'revoke') {
+  if (!detail.value || saving.value) return
+  saving.value = true
+  scopeRevokeRequested.value = null
+  try {
+    detail.value = await stepUp.run(() => instructionAuditAPI.changeHashScope(detail.value!.id, scope.rule_set_id, action))
     appStore.showSuccess(t('common.saved'))
     emit('changed')
   } catch (error) {
@@ -207,6 +297,11 @@ function close() {
   emit('close')
 }
 
+function handleSensitiveAccessDenied(error?: unknown) {
+  raw.value = null
+  emit('access-denied', error)
+}
+
 function sourceLabel(value: string): string {
   if (value === 'instructions') return t('admin.instructionAudit.fieldOne')
   if (value === 'input1') return t('admin.instructionAudit.fieldTwo')
@@ -215,6 +310,45 @@ function sourceLabel(value: string): string {
 
 function sourceTypeLabel(value: string): string {
   return t(`admin.instructionAudit.hashDetail.sourceTypes.${value}`, value)
+}
+
+function scopeClientLabels(values: string[]): string {
+  if (!values?.length) return '-'
+  return values.map((value) => value === 'all'
+    ? t('admin.instructionAudit.allClients')
+    : t(`admin.instructionAudit.clients.${value}`, value)).join(' / ')
+}
+
+function scopeExpired(scope: InstructionHashScope): boolean {
+  return Boolean(scope.valid_until && new Date(scope.valid_until).getTime() <= Date.now())
+}
+
+function scopeStateLabel(scope: InstructionHashScope): string {
+	if (detail.value?.status !== 'active') return t('admin.instructionAudit.hashDetail.globalHashInactive')
+	if (scope.status === 'revoked') return t('admin.instructionAudit.hashDetail.scopeRevoked')
+	if (scope.status === 'disabled') return t('admin.instructionAudit.hashDetail.scopeDisabled')
+  if (scopeExpired(scope)) return t('admin.instructionAudit.hashDetail.scopeExpired')
+  if (!scope.rule_set_enabled || (scope.binding_id && !scope.binding_enabled)) return t('common.disabled')
+  if (!scope.binding_id) return t('admin.instructionAudit.hashDetail.scopeUnbound')
+  return scope.valid_until
+    ? t('admin.instructionAudit.hashDetail.temporaryScope')
+    : t('admin.instructionAudit.hashDetail.permanentScope')
+}
+
+function scopeSourcePill(sourceType: string): string {
+  const base = 'inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium'
+  return sourceType === 'ai_review'
+    ? `${base} bg-cyan-50 text-cyan-700 dark:bg-cyan-950/40 dark:text-cyan-300`
+    : `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300`
+}
+
+function scopeStatePill(scope: InstructionHashScope): string {
+  const base = 'inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium'
+	if (detail.value?.status !== 'active' || scope.status === 'revoked') return `${base} bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300`
+	if (scope.status === 'disabled') return `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300`
+  if (scopeExpired(scope)) return `${base} bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300`
+  if (!scope.rule_set_enabled || (scope.binding_id && !scope.binding_enabled) || !scope.binding_id) return `${base} bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300`
+  return `${base} bg-primary-50 text-primary-700 dark:bg-primary-950/50 dark:text-primary-300`
 }
 
 function hashStatusLabel(value: string): string {

@@ -5,10 +5,36 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 )
 
 type LegacyEngine interface {
 	Check(ctx context.Context, req Request) (*LegacyDecision, error)
+}
+
+func (c *Coordinator) InstructionRequestBodyBudget() *pkghttputil.RequestBodyMemoryBudget {
+	if c == nil || c.instruction == nil {
+		return nil
+	}
+	provider, ok := c.instruction.(interface {
+		RequestBodyMemoryBudget() *pkghttputil.RequestBodyMemoryBudget
+	})
+	if !ok {
+		return nil
+	}
+	return provider.RequestBodyMemoryBudget()
+}
+
+func (c *Coordinator) InstructionRequestBodyReadLimit() int64 {
+	if c == nil || c.instruction == nil {
+		return 0
+	}
+	provider, ok := c.instruction.(interface{ RequestBodyReadLimit() int64 })
+	if !ok {
+		return 0
+	}
+	return provider.RequestBodyReadLimit()
 }
 
 type PromptEngine interface {
