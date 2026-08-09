@@ -51,11 +51,13 @@ func ProvideContentModerationService(
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
 	emailService *EmailService,
 	securityNotifications *SecurityNotificationService,
+	secretEncryptor SecretEncryptor,
 ) *ContentModerationService {
 	service := NewContentModerationService(
 		settingRepo, repo, hashCache, groupRepo, userRepo, proxyRepo, authCacheInvalidator, emailService,
 	)
 	service.SetSecurityNotificationService(securityNotifications)
+	service.SetSecretEncryptor(secretEncryptor)
 	return service
 }
 
