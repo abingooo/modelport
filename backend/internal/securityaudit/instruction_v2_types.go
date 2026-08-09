@@ -482,13 +482,6 @@ type instructionV2AIResult struct {
 	Category   string  `json:"category"`
 }
 
-type instructionV2AIResponse struct {
-	Result     string  `json:"result"`
-	Confidence float64 `json:"confidence"`
-	Reason     string  `json:"reason"`
-	Category   string  `json:"category"`
-}
-
 type instructionV2AIAttempt struct {
 	NodeID        *int64
 	NodeName      string
@@ -578,8 +571,4 @@ type instructionV2AsyncJob struct {
 	bodyBytes int64
 	startedAt time.Time
 	weight    int64
-}
-
-type instructionV2EventWriter interface {
-	PersistInstructionV2Event(context.Context, instructionV2PersistEvent) (instructionV2PersistResult, error)
 }

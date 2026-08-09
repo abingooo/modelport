@@ -8,13 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
-	"github.com/lib/pq"
 )
 
 type InstructionV2Repository struct {
@@ -162,7 +160,7 @@ func (r *InstructionV2Repository) loadRuntimeScopes(ctx context.Context, snapsho
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var scope instructionV2ScopeRuntime
 		var profileID sql.NullInt64
@@ -189,7 +187,7 @@ func (r *InstructionV2Repository) loadRuntimeHashes(ctx context.Context, snapsho
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var hashID, scopeID int64
 		var digest string
@@ -212,7 +210,7 @@ func (r *InstructionV2Repository) loadRuntimeAllowlist(ctx context.Context, snap
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var userID int64
 		if err := rows.Scan(&userID); err != nil {
@@ -231,7 +229,7 @@ func (r *InstructionV2Repository) loadRuntimeAINodes(ctx context.Context, snapsh
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var node instructionV2AINodeRuntime
 		var ciphertext string
@@ -286,7 +284,7 @@ func (r *InstructionV2Repository) ListAINodes(ctx context.Context) ([]Instructio
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2AINode, 0)
 	for rows.Next() {
 		var item InstructionV2AINode
@@ -387,7 +385,7 @@ func (r *InstructionV2Repository) ListClientProfiles(ctx context.Context) ([]Ins
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2ClientProfile, 0)
 	for rows.Next() {
 		var item InstructionV2ClientProfile
@@ -496,15 +494,6 @@ func (r *InstructionV2Repository) DeleteClientProfile(ctx context.Context, id, a
 	return version, tx.Commit()
 }
 
-func instructionV2ScopeIDs(scopes []instructionV2ScopeRuntime) []int64 {
-	ids := make([]int64, 0, len(scopes))
-	for _, scope := range scopes {
-		ids = append(ids, scope.ID)
-	}
-	sort.Slice(ids, func(left, right int) bool { return ids[left] < ids[right] })
-	return ids
-}
-
 func scanInstructionV2HashScopes(rows *sql.Rows, hashes map[int64]*InstructionV2Hash) error {
 	for rows.Next() {
 		var hashID int64
@@ -532,8 +521,4 @@ func scanInstructionV2HashScopes(rows *sql.Rows, hashes map[int64]*InstructionV2
 		}
 	}
 	return rows.Err()
-}
-
-func pqInt64Array(values []int64) any {
-	return pq.Array(values)
 }
