@@ -198,6 +198,17 @@ export interface ContentModerationLog {
   email_sent: boolean
   user_status: string
   queue_delay_ms: number | null
+  cyber_evidence_available: boolean
+  cyber_evidence_sha256?: string
+  cyber_evidence_bytes?: number
+  created_at: string
+}
+
+export interface ContentModerationCyberEvidence {
+  log_id: number
+  request_body: string
+  request_body_sha256: string
+  request_body_bytes: number
   created_at: string
 }
 
@@ -267,6 +278,13 @@ export async function listLogs(
   return data
 }
 
+export async function getCyberPolicyEvidence(logID: number): Promise<ContentModerationCyberEvidence> {
+  const { data } = await apiClient.get<ContentModerationCyberEvidence>(
+    `/admin/risk-control/logs/${logID}/cyber-evidence`
+  )
+  return data
+}
+
 export async function unbanUser(userID: number): Promise<ContentModerationUnbanUserResponse> {
   const { data } = await apiClient.post<ContentModerationUnbanUserResponse>(
     `/admin/risk-control/users/${userID}/unban`
@@ -292,6 +310,7 @@ export const riskControlAPI = {
   getStatus,
   testAPIKeys,
   listLogs,
+  getCyberPolicyEvidence,
   unbanUser,
   deleteFlaggedHash,
   clearFlaggedHashes,

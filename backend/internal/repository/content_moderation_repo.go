@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -24,6 +25,49 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	if log == nil {
 		return nil
 	}
+	if log.CyberEvidence == nil {
+		return insertContentModerationLog(ctx, r.db, log)
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return r.createLogWithoutCyberEvidence(ctx, log, err)
+	}
+	if err := insertContentModerationLog(ctx, tx, log); err != nil {
+		_ = tx.Rollback()
+		return r.createLogWithoutCyberEvidence(ctx, log, err)
+	}
+	evidence := log.CyberEvidence
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO content_moderation_cyber_evidence (
+    log_id, request_body_ciphertext, request_body_sha256, request_body_bytes, encryption_version
+) VALUES ($1, $2, $3, $4, $5)`,
+		log.ID,
+		evidence.RequestBodyCiphertext,
+		evidence.RequestBodySHA256,
+		evidence.RequestBodyBytes,
+		evidence.EncryptionVersion,
+	)
+	if err != nil {
+		_ = tx.Rollback()
+		return r.createLogWithoutCyberEvidence(ctx, log, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit content moderation cyber evidence: %w", err)
+	}
+	evidence.LogID = log.ID
+	evidence.CreatedAt = log.CreatedAt
+	log.CyberEvidenceAvailable = true
+	log.CyberEvidenceSHA256 = evidence.RequestBodySHA256
+	log.CyberEvidenceBytes = evidence.RequestBodyBytes
+	return nil
+}
+
+type contentModerationLogExecutor interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func insertContentModerationLog(ctx context.Context, executor contentModerationLogExecutor, log *service.ContentModerationLog) error {
 	categoryScores, err := json.Marshal(log.CategoryScores)
 	if err != nil {
 		return fmt.Errorf("marshal moderation category scores: %w", err)
@@ -48,7 +92,7 @@ func (r *contentModerationRepository) CreateLog(ctx context.Context, log *servic
 	if log.UpstreamLatencyMS != nil {
 		latency = *log.UpstreamLatencyMS
 	}
-	err = r.db.QueryRowContext(ctx, `
+	err = executor.QueryRowContext(ctx, `
 INSERT INTO content_moderation_logs (
     request_id, user_id, user_email, api_key_id, api_key_name, group_id, group_name,
     endpoint, provider, model, mode, action, flagged, highest_category, highest_score,
@@ -69,6 +113,43 @@ INSERT INTO content_moderation_logs (
 		return fmt.Errorf("insert content moderation log: %w", err)
 	}
 	return nil
+}
+
+func (r *contentModerationRepository) createLogWithoutCyberEvidence(ctx context.Context, log *service.ContentModerationLog, cause error) error {
+	slog.Warn("content_moderation.cyber_evidence_persist_failed", "request_id", log.RequestID, "error", cause)
+	log.ID = 0
+	log.CreatedAt = time.Time{}
+	log.CyberEvidence = nil
+	log.CyberEvidenceAvailable = false
+	log.CyberEvidenceSHA256 = ""
+	log.CyberEvidenceBytes = 0
+	log.Error = strings.TrimSpace(log.Error + "\ndownstream_evidence_status=persist_failed")
+	return insertContentModerationLog(ctx, r.db, log)
+}
+
+func (r *contentModerationRepository) GetCyberPolicyEvidence(ctx context.Context, logID int64) (*service.ContentModerationCyberEvidence, error) {
+	var evidence service.ContentModerationCyberEvidence
+	err := r.db.QueryRowContext(ctx, `
+SELECT e.log_id, e.request_body_ciphertext, e.request_body_sha256,
+       e.request_body_bytes, e.encryption_version, e.created_at
+FROM content_moderation_cyber_evidence e
+JOIN content_moderation_logs l ON l.id = e.log_id
+WHERE e.log_id = $1 AND l.action = 'cyber_policy'
+`, logID).Scan(
+		&evidence.LogID,
+		&evidence.RequestBodyCiphertext,
+		&evidence.RequestBodySHA256,
+		&evidence.RequestBodyBytes,
+		&evidence.EncryptionVersion,
+		&evidence.CreatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, service.ErrContentModerationCyberEvidenceNotFound
+		}
+		return nil, fmt.Errorf("get content moderation cyber evidence: %w", err)
+	}
+	return &evidence, nil
 }
 
 func (r *contentModerationRepository) ListLogs(ctx context.Context, filter service.ContentModerationLogFilter) ([]service.ContentModerationLog, *pagination.PaginationResult, error) {
@@ -97,9 +178,11 @@ SELECT
     l.id, l.request_id, l.user_id, l.user_email, l.api_key_id, l.api_key_name, l.group_id, l.group_name,
     l.endpoint, l.provider, l.model, l.mode, l.action, l.flagged, l.highest_category, l.highest_score,
     l.category_scores, l.threshold_snapshot, l.input_excerpt, l.upstream_latency_ms, l.error,
-    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.matched_keyword, l.created_at
+    l.violation_count, l.auto_banned, l.email_sent, COALESCE(u.status, ''), l.queue_delay_ms, l.matched_keyword,
+    (e.log_id IS NOT NULL), COALESCE(e.request_body_sha256, ''), COALESCE(e.request_body_bytes, 0), l.created_at
 FROM content_moderation_logs l
-LEFT JOIN users u ON u.id = l.user_id `+whereSQL+`
+LEFT JOIN users u ON u.id = l.user_id
+LEFT JOIN content_moderation_cyber_evidence e ON e.log_id = l.id `+whereSQL+`
 ORDER BY l.created_at DESC, l.id DESC
 LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 		queryArgs...,
@@ -142,6 +225,9 @@ LIMIT $`+fmt.Sprint(len(queryArgs)-1)+` OFFSET $`+fmt.Sprint(len(queryArgs)),
 			&item.UserStatus,
 			&queueDelay,
 			&item.MatchedKeyword,
+			&item.CyberEvidenceAvailable,
+			&item.CyberEvidenceSHA256,
+			&item.CyberEvidenceBytes,
 			&item.CreatedAt,
 		); err != nil {
 			return nil, nil, fmt.Errorf("scan content moderation log: %w", err)

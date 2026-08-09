@@ -31,8 +31,9 @@ const (
 	ContentModerationModeObserve  = "observe"
 	ContentModerationModePreBlock = "pre_block"
 
-	contentModerationAPIKeysModeAppend  = "append"
-	contentModerationAPIKeysModeReplace = "replace"
+	contentModerationAPIKeysModeAppend              = "append"
+	contentModerationAPIKeysModeReplace             = "replace"
+	contentModerationCyberEvidenceEncryptionVersion = "aes-256-gcm-v1"
 
 	ContentModerationActionAllow        = "allow"
 	ContentModerationActionBlock        = "block"
@@ -386,34 +387,55 @@ type ContentModerationDecision struct {
 }
 
 type ContentModerationLog struct {
-	ID                int64              `json:"id"`
-	RequestID         string             `json:"request_id"`
-	UserID            *int64             `json:"user_id,omitempty"`
-	UserEmail         string             `json:"user_email"`
-	APIKeyID          *int64             `json:"api_key_id,omitempty"`
-	APIKeyName        string             `json:"api_key_name"`
-	GroupID           *int64             `json:"group_id,omitempty"`
-	GroupName         string             `json:"group_name"`
-	Endpoint          string             `json:"endpoint"`
-	Provider          string             `json:"provider"`
-	Model             string             `json:"model"`
-	Mode              string             `json:"mode"`
-	Action            string             `json:"action"`
-	Flagged           bool               `json:"flagged"`
-	HighestCategory   string             `json:"highest_category"`
-	HighestScore      float64            `json:"highest_score"`
-	MatchedKeyword    string             `json:"matched_keyword"`
-	CategoryScores    map[string]float64 `json:"category_scores"`
-	ThresholdSnapshot map[string]float64 `json:"threshold_snapshot"`
-	InputExcerpt      string             `json:"input_excerpt"`
-	UpstreamLatencyMS *int               `json:"upstream_latency_ms,omitempty"`
-	Error             string             `json:"error"`
-	ViolationCount    int                `json:"violation_count"`
-	AutoBanned        bool               `json:"auto_banned"`
-	EmailSent         bool               `json:"email_sent"`
-	UserStatus        string             `json:"user_status"`
-	QueueDelayMS      *int               `json:"queue_delay_ms,omitempty"`
-	CreatedAt         time.Time          `json:"created_at"`
+	ID                     int64                           `json:"id"`
+	RequestID              string                          `json:"request_id"`
+	UserID                 *int64                          `json:"user_id,omitempty"`
+	UserEmail              string                          `json:"user_email"`
+	APIKeyID               *int64                          `json:"api_key_id,omitempty"`
+	APIKeyName             string                          `json:"api_key_name"`
+	GroupID                *int64                          `json:"group_id,omitempty"`
+	GroupName              string                          `json:"group_name"`
+	Endpoint               string                          `json:"endpoint"`
+	Provider               string                          `json:"provider"`
+	Model                  string                          `json:"model"`
+	Mode                   string                          `json:"mode"`
+	Action                 string                          `json:"action"`
+	Flagged                bool                            `json:"flagged"`
+	HighestCategory        string                          `json:"highest_category"`
+	HighestScore           float64                         `json:"highest_score"`
+	MatchedKeyword         string                          `json:"matched_keyword"`
+	CategoryScores         map[string]float64              `json:"category_scores"`
+	ThresholdSnapshot      map[string]float64              `json:"threshold_snapshot"`
+	InputExcerpt           string                          `json:"input_excerpt"`
+	UpstreamLatencyMS      *int                            `json:"upstream_latency_ms,omitempty"`
+	Error                  string                          `json:"error"`
+	ViolationCount         int                             `json:"violation_count"`
+	AutoBanned             bool                            `json:"auto_banned"`
+	EmailSent              bool                            `json:"email_sent"`
+	UserStatus             string                          `json:"user_status"`
+	QueueDelayMS           *int                            `json:"queue_delay_ms,omitempty"`
+	CyberEvidenceAvailable bool                            `json:"cyber_evidence_available"`
+	CyberEvidenceSHA256    string                          `json:"cyber_evidence_sha256,omitempty"`
+	CyberEvidenceBytes     int64                           `json:"cyber_evidence_bytes,omitempty"`
+	CreatedAt              time.Time                       `json:"created_at"`
+	CyberEvidence          *ContentModerationCyberEvidence `json:"-"`
+}
+
+type ContentModerationCyberEvidence struct {
+	LogID                 int64
+	RequestBodyCiphertext string
+	RequestBodySHA256     string
+	RequestBodyBytes      int64
+	EncryptionVersion     string
+	CreatedAt             time.Time
+}
+
+type ContentModerationCyberEvidenceDetail struct {
+	LogID             int64     `json:"log_id"`
+	RequestBody       string    `json:"request_body"`
+	RequestBodySHA256 string    `json:"request_body_sha256"`
+	RequestBodyBytes  int64     `json:"request_body_bytes"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type ContentModerationLogFilter struct {
@@ -489,6 +511,12 @@ type ContentModerationRepository interface {
 	UpdateLogEmailSent(ctx context.Context, id int64, sent bool) error
 }
 
+type ContentModerationCyberEvidenceRepository interface {
+	GetCyberPolicyEvidence(ctx context.Context, logID int64) (*ContentModerationCyberEvidence, error)
+}
+
+var ErrContentModerationCyberEvidenceNotFound = errors.New("content moderation cyber evidence not found")
+
 type ContentModerationHashCache interface {
 	RecordFlaggedInputHash(ctx context.Context, inputHash string) error
 	HasFlaggedInputHash(ctx context.Context, inputHash string) (bool, error)
@@ -507,6 +535,7 @@ type ContentModerationService struct {
 	authCacheInvalidator     APIKeyAuthCacheInvalidator
 	emailService             *EmailService
 	securityNotifications    *SecurityNotificationService
+	secretEncryptor          SecretEncryptor
 	httpClient               *http.Client
 	moderationProxyCache     atomic.Pointer[moderationProxyURLCacheEntry]
 	asyncQueue               chan contentModerationTask
@@ -1316,6 +1345,54 @@ func (s *ContentModerationService) ListLogs(ctx context.Context, filter ContentM
 		filter.Pagination.SortOrder = pagination.SortOrderDesc
 	}
 	return s.repo.ListLogs(ctx, filter)
+}
+
+func (s *ContentModerationService) SetSecretEncryptor(encryptor SecretEncryptor) {
+	if s != nil {
+		s.secretEncryptor = encryptor
+	}
+}
+
+func (s *ContentModerationService) GetCyberPolicyEvidence(ctx context.Context, logID int64) (*ContentModerationCyberEvidenceDetail, error) {
+	if logID <= 0 {
+		return nil, infraerrors.BadRequest("INVALID_CYBER_EVIDENCE_LOG_ID", "invalid content moderation log ID")
+	}
+	if s == nil || s.repo == nil {
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_UNAVAILABLE", "cyber policy evidence storage is unavailable")
+	}
+	repo, ok := s.repo.(ContentModerationCyberEvidenceRepository)
+	if !ok {
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_UNAVAILABLE", "cyber policy evidence storage is unavailable")
+	}
+	evidence, err := repo.GetCyberPolicyEvidence(ctx, logID)
+	if err != nil {
+		if errors.Is(err, ErrContentModerationCyberEvidenceNotFound) {
+			return nil, infraerrors.NotFound("CYBER_EVIDENCE_NOT_FOUND", "full downstream JSON is unavailable for this audit record")
+		}
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_READ_FAILED", "failed to read cyber policy evidence")
+	}
+	if evidence == nil || s.secretEncryptor == nil {
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_DECRYPTION_UNAVAILABLE", "cyber policy evidence decryption is unavailable")
+	}
+	if evidence.EncryptionVersion != contentModerationCyberEvidenceEncryptionVersion {
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_ENCRYPTION_VERSION_UNSUPPORTED", "cyber policy evidence uses an unsupported encryption version")
+	}
+	plaintext, err := s.secretEncryptor.Decrypt(evidence.RequestBodyCiphertext)
+	if err != nil {
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_DECRYPTION_FAILED", "failed to decrypt cyber policy evidence")
+	}
+	body := []byte(plaintext)
+	digest := sha256.Sum256(body)
+	if int64(len(body)) != evidence.RequestBodyBytes || !strings.EqualFold(hex.EncodeToString(digest[:]), evidence.RequestBodySHA256) {
+		return nil, infraerrors.InternalServer("CYBER_EVIDENCE_INTEGRITY_FAILED", "cyber policy evidence failed integrity verification")
+	}
+	return &ContentModerationCyberEvidenceDetail{
+		LogID:             evidence.LogID,
+		RequestBody:       plaintext,
+		RequestBodySHA256: evidence.RequestBodySHA256,
+		RequestBodyBytes:  evidence.RequestBodyBytes,
+		CreatedAt:         evidence.CreatedAt,
+	}, nil
 }
 
 func (s *ContentModerationService) UnbanUser(ctx context.Context, userID int64) (*ContentModerationUnbanUserResult, error) {
@@ -2990,6 +3067,7 @@ type CyberPolicyRecordInput struct {
 	UpstreamStatus  int
 	UpstreamInTok   int
 	UpstreamOutTok  int
+	DownstreamBody  []byte
 }
 
 // RecordCyberPolicyEvent 把一次 cyber_policy 硬阻断写入风控中心日志、计入违规计数、
@@ -3041,6 +3119,25 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		HighestScore:    1.0,
 		Error:           trimRunes(redactContentModerationSecrets(errBody), maxModerationExcerptRunes*4),
 		CreatedAt:       time.Now(),
+	}
+	if len(in.DownstreamBody) > 0 {
+		if s.secretEncryptor == nil {
+			log.Error = strings.TrimSpace(log.Error + "\ndownstream_evidence_status=encryption_unavailable")
+		} else {
+			digest := sha256.Sum256(in.DownstreamBody)
+			ciphertext, encryptErr := s.secretEncryptor.Encrypt(string(in.DownstreamBody))
+			if encryptErr != nil {
+				log.Error = strings.TrimSpace(log.Error + "\ndownstream_evidence_status=encryption_failed")
+				slog.Warn("content_moderation.cyber_evidence_encrypt_failed", "request_id", in.RequestID, "error", encryptErr)
+			} else {
+				log.CyberEvidence = &ContentModerationCyberEvidence{
+					RequestBodyCiphertext: ciphertext,
+					RequestBodySHA256:     hex.EncodeToString(digest[:]),
+					RequestBodyBytes:      int64(len(in.DownstreamBody)),
+					EncryptionVersion:     contentModerationCyberEvidenceEncryptionVersion,
+				}
+			}
+		}
 	}
 	// 开关开时 cyber_policy 不参与封号计数：当次不判定（此处跳过），
 	// 历史行由 CountFlaggedByUserSince 的 excludeCyberPolicy 排除。
