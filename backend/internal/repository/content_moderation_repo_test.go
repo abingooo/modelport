@@ -56,3 +56,60 @@ func TestContentModerationRepositoryCountFlaggedByUserSince_ExcludesCyberPolicyW
 	require.Equal(t, 3, count)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+func TestContentModerationRepositoryCreateLogPersistsCyberEvidenceInTransaction(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	repo := NewContentModerationRepository(db)
+	createdAt := time.Now()
+	log := &service.ContentModerationLog{
+		RequestID: "req-cyber", Action: service.ContentModerationActionCyberPolicy,
+		CyberEvidence: &service.ContentModerationCyberEvidence{
+			RequestBodyCiphertext: "encrypted-body",
+			RequestBodySHA256:     strings.Repeat("a", 64),
+			RequestBodyBytes:      128,
+			EncryptionVersion:     "aes-256-gcm-v1",
+		},
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO content_moderation_logs").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(42), createdAt))
+	mock.ExpectExec("INSERT INTO content_moderation_cyber_evidence").
+		WithArgs(int64(42), "encrypted-body", strings.Repeat("a", 64), int64(128), "aes-256-gcm-v1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+
+	err = repo.CreateLog(context.Background(), log)
+
+	require.NoError(t, err)
+	require.True(t, log.CyberEvidenceAvailable)
+	require.Equal(t, strings.Repeat("a", 64), log.CyberEvidenceSHA256)
+	require.Equal(t, int64(128), log.CyberEvidenceBytes)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestContentModerationRepositoryGetCyberPolicyEvidence(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	repo := NewContentModerationRepository(db)
+	createdAt := time.Now()
+	mock.ExpectQuery("SELECT e.log_id, e.request_body_ciphertext").
+		WithArgs(int64(42)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"log_id", "request_body_ciphertext", "request_body_sha256", "request_body_bytes", "encryption_version", "created_at",
+		}).AddRow(int64(42), "ciphertext", strings.Repeat("b", 64), int64(256), "aes-256-gcm-v1", createdAt))
+
+	evidenceRepo, ok := repo.(service.ContentModerationCyberEvidenceRepository)
+	require.True(t, ok)
+	evidence, err := evidenceRepo.GetCyberPolicyEvidence(context.Background(), 42)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(42), evidence.LogID)
+	require.Equal(t, "ciphertext", evidence.RequestBodyCiphertext)
+	require.Equal(t, int64(256), evidence.RequestBodyBytes)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

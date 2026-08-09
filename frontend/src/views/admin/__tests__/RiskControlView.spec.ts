@@ -11,19 +11,23 @@ const {
   updateConfig,
   getStatus,
   listLogs,
+  getCyberPolicyEvidence,
   getGroups,
   getProxies,
   showError,
   showSuccess,
+  copyToClipboard,
 } = vi.hoisted(() => ({
   getConfig: vi.fn(),
   updateConfig: vi.fn(),
   getStatus: vi.fn(),
   listLogs: vi.fn(),
+  getCyberPolicyEvidence: vi.fn(),
   getGroups: vi.fn(),
   getProxies: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
+  copyToClipboard: vi.fn(),
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -33,6 +37,7 @@ vi.mock('@/api/admin', () => ({
       updateConfig,
       getStatus,
       listLogs,
+      getCyberPolicyEvidence,
       testAPIKeys: vi.fn(),
       deleteFlaggedHash: vi.fn(),
       clearFlaggedHashes: vi.fn(),
@@ -45,6 +50,10 @@ vi.mock('@/api/admin', () => ({
       getAll: getProxies,
     },
   },
+}))
+
+vi.mock('@/composables/useClipboard', () => ({
+  useClipboard: () => ({ copyToClipboard }),
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -196,13 +205,22 @@ describe('admin RiskControlView', () => {
     updateConfig.mockReset()
     getStatus.mockReset()
     listLogs.mockReset()
+    getCyberPolicyEvidence.mockReset()
     getGroups.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
+    copyToClipboard.mockReset()
 
     getConfig.mockResolvedValue(baseConfig())
     getStatus.mockResolvedValue(runtimeStatus())
     listLogs.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 1 })
+    getCyberPolicyEvidence.mockResolvedValue({
+      log_id: 91,
+      request_body: '{"model":"gpt-5","instructions":"exact downstream body"}',
+      request_body_sha256: 'a'.repeat(64),
+      request_body_bytes: 57,
+      created_at: '2026-08-09T00:00:00Z',
+    })
     getGroups.mockResolvedValue([])
     getProxies.mockResolvedValue([])
     updateConfig.mockImplementation(async (payload: UpdateContentModerationConfig) => ({
@@ -414,5 +432,70 @@ describe('admin RiskControlView', () => {
       'max-h-[280px]',
       'overflow-y-auto',
     ]))
+  })
+
+  it('loads and copies complete downstream JSON for cyber policy records', async () => {
+    listLogs.mockResolvedValue({
+      items: [{
+        id: 91,
+        request_id: 'req-cyber-91',
+        user_id: 7,
+        user_email: 'user@example.com',
+        api_key_id: 8,
+        api_key_name: 'test-key',
+        group_id: 9,
+        group_name: 'OpenAI',
+        endpoint: '/v1/responses',
+        provider: 'openai',
+        model: 'gpt-5',
+        mode: 'post_upstream',
+        action: 'cyber_policy',
+        flagged: true,
+        highest_category: 'cyber_policy',
+        highest_score: 1,
+        matched_keyword: '',
+        category_scores: {},
+        threshold_snapshot: {},
+        input_excerpt: '',
+        upstream_latency_ms: 100,
+        error: 'upstream blocked',
+        violation_count: 1,
+        auto_banned: false,
+        email_sent: true,
+        user_status: 'active',
+        queue_delay_ms: null,
+        cyber_evidence_available: true,
+        cyber_evidence_sha256: 'a'.repeat(64),
+        cyber_evidence_bytes: 57,
+        created_at: '2026-08-09T00:00:00Z',
+      }],
+      total: 1,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+    const wrapper = mount(RiskControlView, {
+      global: {
+        stubs: {
+          AppLayout: AppLayoutStub,
+          BaseDialog: BaseDialogStub,
+          Icon: true,
+          Select: true,
+          Toggle: true,
+          Pagination: true,
+          ModelWhitelistSelector: ModelWhitelistSelectorStub,
+          ProxySelector: true,
+        },
+      },
+    })
+    await flushPromises()
+
+    await findButtonByText(wrapper, 'admin.riskControl.viewCyberEvidence').trigger('click')
+    await flushPromises()
+
+    expect(getCyberPolicyEvidence).toHaveBeenCalledWith(91)
+    expect(wrapper.text()).toContain('exact downstream body')
+    await wrapper.get('[data-test="copy-cyber-evidence-body"]').trigger('click')
+    expect(copyToClipboard).toHaveBeenCalledWith('{"model":"gpt-5","instructions":"exact downstream body"}')
   })
 })

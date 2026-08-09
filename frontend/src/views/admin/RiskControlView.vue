@@ -351,7 +351,15 @@
                         :title="inputSummaryText(row)"
                         @click="openInputDetail(row)"
                       >
-                        <span class="min-w-0 flex-1 truncate">{{ inputSummaryText(row) }}</span>
+                        <span v-if="row.action === 'cyber_policy'" class="min-w-0 flex-1">
+                          <span class="block truncate font-medium text-primary-600 dark:text-primary-300">
+                            {{ row.cyber_evidence_available ? t('admin.riskControl.viewCyberEvidence') : t('admin.riskControl.cyberEvidenceUnavailable') }}
+                          </span>
+                          <span v-if="row.cyber_evidence_available" class="mt-0.5 block truncate text-xs text-gray-400">
+                            {{ formatBytes(row.cyber_evidence_bytes || 0) }} · SHA-256
+                          </span>
+                        </span>
+                        <span v-else class="min-w-0 flex-1 truncate">{{ inputSummaryText(row) }}</span>
                         <Icon name="eye" size="xs" class="flex-shrink-0 text-gray-300 transition-colors group-hover:text-primary-500 dark:text-gray-500" />
                       </button>
                     </td>
@@ -1095,16 +1103,51 @@
           <div class="rounded-xl border border-gray-100 bg-white p-4 shadow-sm dark:border-dark-700 dark:bg-dark-800">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.inputDetailContent') }}</p>
+                <p class="text-sm font-semibold text-gray-900 dark:text-white">
+                  {{ inputDetailRow.action === 'cyber_policy' ? t('admin.riskControl.cyberEvidenceContent') : t('admin.riskControl.inputDetailContent') }}
+                </p>
                 <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   {{ inputDetailRow.endpoint || '-' }} · {{ inputDetailRow.provider || '-' }} / {{ inputDetailRow.model || '-' }}
                 </p>
               </div>
-              <span v-if="inputDetailRow.group_name" class="inline-flex rounded-md bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
-                {{ inputDetailRow.group_name }}
-              </span>
+              <div class="flex flex-wrap items-center gap-2">
+                <button
+                  v-if="cyberEvidence"
+                  type="button"
+                  data-test="copy-cyber-evidence-hash"
+                  class="btn btn-secondary inline-flex items-center gap-2"
+                  @click="copyToClipboard(cyberEvidence.request_body_sha256)"
+                >
+                  <Icon name="copy" size="xs" />
+                  {{ t('admin.riskControl.copyCyberEvidenceHash') }}
+                </button>
+                <button
+                  v-if="cyberEvidence"
+                  type="button"
+                  data-test="copy-cyber-evidence-body"
+                  class="btn btn-primary inline-flex items-center gap-2"
+                  @click="copyToClipboard(cyberEvidence.request_body)"
+                >
+                  <Icon name="copy" size="xs" />
+                  {{ t('admin.riskControl.copyCyberEvidence') }}
+                </button>
+                <span v-if="inputDetailRow.group_name" class="inline-flex rounded-md bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                  {{ inputDetailRow.group_name }}
+                </span>
+              </div>
             </div>
-            <pre class="mt-4 max-h-[420px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
+            <div v-if="cyberEvidence" class="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs text-gray-500 dark:text-gray-400">
+              <span>{{ t('admin.riskControl.cyberEvidenceBytes') }}: {{ formatBytes(cyberEvidence.request_body_bytes) }}</span>
+              <span class="min-w-0 break-all font-mono">SHA-256: {{ cyberEvidence.request_body_sha256 }}</span>
+            </div>
+            <div v-if="cyberEvidenceLoading" class="mt-4 flex min-h-40 items-center justify-center rounded-lg bg-gray-950 text-sm text-gray-300 dark:bg-black/50">
+              <Icon name="refresh" size="sm" class="mr-2 animate-spin" />
+              {{ t('admin.riskControl.loadingCyberEvidence') }}
+            </div>
+            <div v-else-if="cyberEvidenceError" class="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-200">
+              {{ cyberEvidenceError }}
+            </div>
+            <pre v-else class="mt-4 max-h-[520px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-gray-950 p-4 text-sm leading-6 text-gray-100 shadow-inner dark:bg-black/50">{{ inputDetailText }}</pre>
           </div>
         </div>
 
@@ -1134,6 +1177,7 @@ import type {
   ContentModerationAPIKeyLoad,
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
+  ContentModerationCyberEvidence,
   ContentModerationLog,
   ContentModerationModelFilter,
   ContentModerationModelFilterType,
@@ -1145,8 +1189,9 @@ import type {
 } from '@/api/admin/riskControl'
 import type { AdminGroup, Proxy, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
+import { useClipboard } from '@/composables/useClipboard'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import { formatDateTime as formatDateTimeValue } from '@/utils/format'
+import { formatBytes, formatDateTime as formatDateTimeValue } from '@/utils/format'
 
 type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
@@ -1197,6 +1242,7 @@ const riskThresholdCategories = Object.keys(riskThresholdDefaults)
 
 const { t } = useI18n()
 const appStore = useAppStore()
+const { copyToClipboard } = useClipboard()
 const defaultBlockMessage = () => t('admin.riskControl.defaultBlockMessage')
 
 const loading = ref(true)
@@ -1221,6 +1267,10 @@ const moderationTestPrompt = ref('')
 const moderationTestImages = ref<string[]>([])
 const moderationTestResult = ref<ContentModerationTestAuditResult | null>(null)
 const inputDetailRow = ref<ContentModerationLog | null>(null)
+const cyberEvidence = ref<ContentModerationCyberEvidence | null>(null)
+const cyberEvidenceLoading = ref(false)
+const cyberEvidenceError = ref('')
+let cyberEvidenceLoadSequence = 0
 let statusTimer: number | null = null
 
 const configForm = reactive({
@@ -1586,6 +1636,7 @@ const riskThresholdRows = computed<RiskThresholdRow[]>(() => (
 
 const inputDetailText = computed(() => {
   if (!inputDetailRow.value) return '-'
+  if (cyberEvidence.value) return cyberEvidence.value.request_body
   return inputDetailRow.value.input_excerpt || inputDetailRow.value.error || '-'
 })
 
@@ -1884,12 +1935,38 @@ function inputSummaryText(row: ContentModerationLog): string {
   return row.input_excerpt || row.error || '-'
 }
 
-function openInputDetail(row: ContentModerationLog) {
+async function openInputDetail(row: ContentModerationLog) {
+  const loadSequence = ++cyberEvidenceLoadSequence
   inputDetailRow.value = row
+  cyberEvidence.value = null
+  cyberEvidenceLoading.value = false
+  cyberEvidenceError.value = ''
+  if (row.action !== 'cyber_policy') return
+  if (!row.cyber_evidence_available) {
+    cyberEvidenceError.value = t('admin.riskControl.cyberEvidenceUnavailableHint')
+    return
+  }
+  cyberEvidenceLoading.value = true
+  try {
+    const evidence = await adminAPI.riskControl.getCyberPolicyEvidence(row.id)
+    if (loadSequence === cyberEvidenceLoadSequence && inputDetailRow.value?.id === row.id) {
+      cyberEvidence.value = evidence
+    }
+  } catch (err: unknown) {
+    if (loadSequence === cyberEvidenceLoadSequence && inputDetailRow.value?.id === row.id) {
+      cyberEvidenceError.value = extractApiErrorMessage(err, t('admin.riskControl.cyberEvidenceLoadFailed'))
+    }
+  } finally {
+    if (loadSequence === cyberEvidenceLoadSequence) cyberEvidenceLoading.value = false
+  }
 }
 
 function closeInputDetail() {
+  cyberEvidenceLoadSequence += 1
   inputDetailRow.value = null
+  cyberEvidence.value = null
+  cyberEvidenceError.value = ''
+  cyberEvidenceLoading.value = false
 }
 
 async function unbanUser(row: ContentModerationLog) {

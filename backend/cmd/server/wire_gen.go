@@ -255,7 +255,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	contentModerationHashCache := repository.NewContentModerationHashCache(redisClient)
 	securityNotificationRepository := repository.NewSecurityNotificationRepository(db)
 	securityNotificationService := service.ProvideSecurityNotificationService(securityNotificationRepository, settingRepository, userRepository, notificationEmailService)
-	contentModerationService := service.ProvideContentModerationService(settingRepository, contentModerationRepository, contentModerationHashCache, groupRepository, userRepository, proxyRepository, apiKeyAuthCacheInvalidator, emailService, securityNotificationService)
+	contentModerationService := service.ProvideContentModerationService(settingRepository, contentModerationRepository, contentModerationHashCache, groupRepository, userRepository, proxyRepository, apiKeyAuthCacheInvalidator, emailService, securityNotificationService, secretEncryptor)
 	contentModerationHandler := admin.NewContentModerationHandler(contentModerationService)
 	configManager := securityaudit.NewConfigManager(db, settingRepository, redisClient, secretEncryptor, configConfig)
 	postgreSQLRepository := securityaudit.NewPostgreSQLRepository(db)

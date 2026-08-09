@@ -2,7 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +15,39 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
+
+type cyberEvidenceTestEncryptor struct {
+	encryptErr error
+	decryptErr error
+}
+
+func (e *cyberEvidenceTestEncryptor) Encrypt(plaintext string) (string, error) {
+	if e.encryptErr != nil {
+		return "", e.encryptErr
+	}
+	return base64.StdEncoding.EncodeToString([]byte(plaintext)), nil
+}
+
+func (e *cyberEvidenceTestEncryptor) Decrypt(ciphertext string) (string, error) {
+	if e.decryptErr != nil {
+		return "", e.decryptErr
+	}
+	plaintext, err := base64.StdEncoding.DecodeString(ciphertext)
+	return string(plaintext), err
+}
+
+type cyberEvidenceReadTestRepo struct {
+	contentModerationTestRepo
+	evidence *ContentModerationCyberEvidence
+	err      error
+}
+
+func (r *cyberEvidenceReadTestRepo) GetCyberPolicyEvidence(ctx context.Context, logID int64) (*ContentModerationCyberEvidence, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.evidence, nil
+}
 
 // cyberOrderingTestRepo records the sequence of repo calls to verify F7 ordering.
 type cyberOrderingTestRepo struct {
@@ -155,6 +192,87 @@ func TestRecordCyberPolicyEvent_WritesLogWhenEnabled(t *testing.T) {
 	// Error field should also contain the upstream body JSON
 	require.True(t, strings.Contains(log.Error, "cyber_policy") || strings.Contains(log.Error, "flagged"),
 		"Error should mention flagged or cyber_policy")
+}
+
+func TestRecordCyberPolicyEventEncryptsCompleteDownstreamBody(t *testing.T) {
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: `{"cyber_policy_exclude_from_ban_count":true}`,
+		}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSecretEncryptor(&cyberEvidenceTestEncryptor{})
+	body := []byte("  {\n  \"model\": \"client-model\",\n  \"instructions\": \"" + strings.Repeat("complete-content-", 1024) + "\",\n  \"input\": [\"a\", \"b\"]\n}\n")
+	require.Greater(t, len(body), 4096)
+
+	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
+		RequestID:      "req-complete-body",
+		UserID:         1,
+		Model:          "mapped-model",
+		DownstreamBody: body,
+	})
+
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.NotNil(t, logs[0].CyberEvidence)
+	evidence := logs[0].CyberEvidence
+	require.Equal(t, int64(len(body)), evidence.RequestBodyBytes)
+	digest := sha256.Sum256(body)
+	require.Equal(t, hex.EncodeToString(digest[:]), evidence.RequestBodySHA256)
+	decrypted, err := svc.secretEncryptor.Decrypt(evidence.RequestBodyCiphertext)
+	require.NoError(t, err)
+	require.Equal(t, string(body), decrypted)
+	require.NotContains(t, logs[0].Error, string(body))
+}
+
+func TestRecordCyberPolicyEventEncryptionFailureNeverStoresPlaintext(t *testing.T) {
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: `{"cyber_policy_exclude_from_ban_count":true}`,
+		}},
+		repo, nil, nil, nil, nil, nil, nil,
+	)
+	svc.SetSecretEncryptor(&cyberEvidenceTestEncryptor{encryptErr: errors.New("encrypt failed")})
+	body := []byte(`{"instructions":"sensitive plaintext"}`)
+
+	svc.RecordCyberPolicyEvent(context.Background(), CyberPolicyRecordInput{
+		RequestID: "req-encryption-failed", UserID: 1, DownstreamBody: body,
+	})
+
+	logs := repo.snapshotLogs()
+	require.Len(t, logs, 1)
+	require.Nil(t, logs[0].CyberEvidence)
+	require.Contains(t, logs[0].Error, "downstream_evidence_status=encryption_failed")
+	require.NotContains(t, logs[0].Error, "sensitive plaintext")
+}
+
+func TestGetCyberPolicyEvidenceDecryptsAndVerifiesIntegrity(t *testing.T) {
+	body := []byte("{\n  \"instructions\": \"exact body\"\n}\n")
+	digest := sha256.Sum256(body)
+	encryptor := &cyberEvidenceTestEncryptor{}
+	ciphertext, err := encryptor.Encrypt(string(body))
+	require.NoError(t, err)
+	repo := &cyberEvidenceReadTestRepo{evidence: &ContentModerationCyberEvidence{
+		LogID:                 77,
+		RequestBodyCiphertext: ciphertext,
+		RequestBodySHA256:     hex.EncodeToString(digest[:]),
+		RequestBodyBytes:      int64(len(body)),
+		EncryptionVersion:     contentModerationCyberEvidenceEncryptionVersion,
+		CreatedAt:             time.Now(),
+	}}
+	svc := NewContentModerationService(nil, repo, nil, nil, nil, nil, nil, nil)
+	svc.SetSecretEncryptor(encryptor)
+
+	detail, err := svc.GetCyberPolicyEvidence(context.Background(), 77)
+
+	require.NoError(t, err)
+	require.Equal(t, string(body), detail.RequestBody)
+	require.Equal(t, hex.EncodeToString(digest[:]), detail.RequestBodySHA256)
+	require.Equal(t, int64(len(body)), detail.RequestBodyBytes)
 }
 
 // TestRecordCyberPolicyEvent_CreateLogBeforeEmail verifies F7: the moderation

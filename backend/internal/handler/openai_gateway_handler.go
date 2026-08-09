@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,6 +49,11 @@ type OpenAIGatewayHandler struct {
 type openAIWSTurnChannelMappingSnapshot struct {
 	turn    int
 	mapping service.ChannelMappingResult
+}
+
+type openAIWSTurnDownstreamBodySnapshot struct {
+	turn int
+	body []byte
 }
 
 var errOpenAIWSUnsupportedModelSwitch = errors.New("selected account does not support websocket model switch")
@@ -298,6 +304,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	downstreamBody := instructionAuditBody
 	instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, false)
 	preAuditModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http"); decision != nil && !decision.AllowNextStage {
@@ -586,7 +593,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockKeyHTTP = service.CyberSessionBlockKey(apiKey.ID, c, sessionHashBody)
 		}
-		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockKeyHTTP, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body))
+		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockKeyHTTP, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body), downstreamBody)
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
@@ -949,7 +956,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	body, downstreamBody, err := readLenientJSONRequestBodyWithAuditSource(c.Request, h.cfg)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
 			h.anthropicErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
@@ -1144,7 +1151,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if service.GetOpsCyberPolicy(c) != nil {
 			cyberBlockKeyMsg = service.CyberSessionBlockKey(apiKey.ID, c, body)
 		}
-		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockKeyMsg, clientRequestedUsageFields(c, channelMappingMsg, reqModel, ""), service.HashUsageRequestPayload(body))
+		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockKeyMsg, clientRequestedUsageFields(c, channelMappingMsg, reqModel, ""), service.HashUsageRequestPayload(body), downstreamBody)
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
@@ -2083,6 +2090,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// turn-tagged slot preserves the exact mapping used for the in-flight request.
 		var turnChannelMapping atomic.Pointer[openAIWSTurnChannelMappingSnapshot]
 		turnChannelMapping.Store(&openAIWSTurnChannelMappingSnapshot{turn: 1, mapping: channelMappingWS})
+		var turnDownstreamBody atomic.Pointer[openAIWSTurnDownstreamBodySnapshot]
+		turnDownstreamBody.Store(&openAIWSTurnDownstreamBodySnapshot{turn: 1, body: firstMessage})
 		// turn 级定价：BeforeTurn 重新冻结 pricingAt 并按最新门复核当前账号，
 		// AfterTurn 的计费读取所属 turn 的时刻。零值起步的语义见
 		// openAIWSTurnPricing 的注释——绝不能用建连时刻初始化。
@@ -2098,7 +2107,8 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				h.securityAuditCoordinator, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg),
 			),
 			InstructionBodyBudget: instructionRequestBodyBudget(h.securityAuditCoordinator),
-			BeforeInstructionRequest: func(_ int, payload []byte, originalModel string) error {
+			BeforeInstructionRequest: func(turn int, payload []byte, originalModel string) error {
+				turnDownstreamBody.Store(&openAIWSTurnDownstreamBodySnapshot{turn: turn, body: payload})
 				preAuditModel := strings.TrimSpace(originalModel)
 				if preAuditModel == "" {
 					preAuditModel = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
@@ -2219,7 +2229,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 					turnUpstreamModel = turnRequestedModel
 				}
 				turnUsageFields := turnMapping.ToUsageFields(turnRequestedModel, turnUpstreamModel)
-				h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockKey, turnUsageFields, requestPayloadHash)
+				var downstreamBody []byte
+				if snapshot := turnDownstreamBody.Load(); snapshot != nil && snapshot.turn == turn {
+					downstreamBody = snapshot.body
+				}
+				h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, turnRequestedModel, turnErr != nil, cyberBlockKey, turnUsageFields, requestPayloadHash, downstreamBody)
+				turnDownstreamBody.Store(nil)
 				if service.GetOpsCyberPolicy(c) != nil {
 					cyberBlockedThisConn = true
 				}
@@ -3233,7 +3248,7 @@ func (h *OpenAIGatewayHandler) enqueueCyberSessionBlockedOpsEntry(c *gin.Context
 // 并在 forward 返回错误时写一条 tokens=0 用量行。标记由 gateway 服务层在透传 cyber 后设置；
 // 当前请求已发给用户，本方法只做事后记录，不影响响应。forwardErrored 为 true 时才写用量行，
 // 避免与正常 RecordUsage(forward 成功路径)重复。每请求至多记录一次。
-func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey *service.APIKey, account *service.Account, subscription *service.UserSubscription, model string, forwardErrored bool, cyberBlockKey string, channelFields service.ChannelUsageFields, requestPayloadHash string) {
+func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey *service.APIKey, account *service.Account, subscription *service.UserSubscription, model string, forwardErrored bool, cyberBlockKey string, channelFields service.ChannelUsageFields, requestPayloadHash string, downstreamBody []byte) {
 	mark := service.GetOpsCyberPolicy(c)
 	if mark == nil {
 		return
@@ -3243,6 +3258,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 	}
 	c.Set(cyberPolicyRecordedKey, true)
 	model = clientRequestedModel(c, model)
+	downstreamBody = bytes.Clone(downstreamBody)
 
 	requestID := c.Writer.Header().Get("X-Request-Id")
 	var userID, apiKeyID int64
@@ -3334,6 +3350,7 @@ func (h *OpenAIGatewayHandler) recordCyberPolicyIfMarked(c *gin.Context, apiKey 
 				UpstreamStatus:  mark.UpstreamStatus,
 				UpstreamInTok:   mark.UpstreamInTok,
 				UpstreamOutTok:  mark.UpstreamOutTok,
+				DownstreamBody:  downstreamBody,
 			})
 		}
 		if forwardErrored && gwSvc != nil {

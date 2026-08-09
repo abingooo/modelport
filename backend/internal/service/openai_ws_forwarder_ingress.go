@@ -202,7 +202,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			rawOriginalModel = strings.TrimSpace(hooks.InitialRequestModel)
 		}
 		if turn > 1 && openAIWSInstructionCandidateFrame(trimmed) && hooks != nil && hooks.BeforeInstructionRequest != nil {
-			if err := hooks.BeforeInstructionRequest(turn, trimmed, rawOriginalModel); err != nil {
+			if err := hooks.BeforeInstructionRequest(turn, raw, rawOriginalModel); err != nil {
 				return openAIWSClientPayload{}, err
 			}
 		}
