@@ -231,9 +231,14 @@ func TestStrictInstructionParserRetainsOnlyAuditTargets(t *testing.T) {
 	require.Equal(t, "gpt-test", root["model"])
 	require.Equal(t, "trusted", root["instructions"])
 	require.NotContains(t, root, "metadata")
-	input := root["input"].([]any)
-	item := input[1].(map[string]any)
-	block := item["content"].([]any)[0].(map[string]any)
+	input, ok := root["input"].([]any)
+	require.True(t, ok)
+	item, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	content, ok := item["content"].([]any)
+	require.True(t, ok)
+	block, ok := content[0].(map[string]any)
+	require.True(t, ok)
 	require.Equal(t, map[string]any{"type": "input_text", "text": "fallback"}, block)
 }
 

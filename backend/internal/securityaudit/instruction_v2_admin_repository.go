@@ -26,7 +26,7 @@ func (r *InstructionV2Repository) ListScopes(ctx context.Context) ([]Instruction
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2Scope, 0)
 	for rows.Next() {
 		var item InstructionV2Scope
@@ -127,7 +127,7 @@ func (r *InstructionV2Repository) ListGroupOptions(ctx context.Context) ([]Instr
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionGroupOption, 0)
 	for rows.Next() {
 		var item InstructionGroupOption
@@ -149,7 +149,7 @@ func (r *InstructionV2Repository) ListUserAllowlist(ctx context.Context) ([]Inst
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2UserAllowlistEntry, 0)
 	for rows.Next() {
 		var item InstructionV2UserAllowlistEntry
@@ -177,7 +177,7 @@ func (r *InstructionV2Repository) ListUserOptions(ctx context.Context, query str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2UserOption, 0, 50)
 	for rows.Next() {
 		var item InstructionV2UserOption
@@ -277,7 +277,7 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 	if err != nil {
 		return InstructionV2HashPage{}, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2Hash, 0, pageSize)
 	for rows.Next() {
 		var item InstructionV2Hash
@@ -319,10 +319,12 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 			return InstructionV2HashPage{}, err
 		}
 		if err := scanInstructionV2HashScopes(scopeRows, byID); err != nil {
-			scopeRows.Close()
+			_ = scopeRows.Close()
 			return InstructionV2HashPage{}, err
 		}
-		scopeRows.Close()
+		if err := scopeRows.Close(); err != nil {
+			return InstructionV2HashPage{}, err
+		}
 	}
 	pages := 0
 	if total > 0 {
@@ -366,10 +368,12 @@ func (r *InstructionV2Repository) GetHash(ctx context.Context, id int64) (Instru
 		return InstructionV2Hash{}, nil, err
 	}
 	if err := scanInstructionV2HashScopes(rows, byID); err != nil {
-		rows.Close()
+		_ = rows.Close()
 		return InstructionV2Hash{}, nil, err
 	}
-	rows.Close()
+	if err := rows.Close(); err != nil {
+		return InstructionV2Hash{}, nil, err
+	}
 	return item, ciphertext, nil
 }
 
@@ -597,7 +601,7 @@ func (r *InstructionV2Repository) GetEventEvidence(ctx context.Context, eventID 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]instructionV2EvidenceWrite, 0, 2)
 	for rows.Next() {
 		var item instructionV2EvidenceWrite

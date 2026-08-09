@@ -390,11 +390,12 @@ func (s *InstructionV2Service) evaluateInstructionV2Enforced(ctx context.Context
 	}
 
 	reason := "ai_error"
-	if outcome.Result == "reject" {
+	switch outcome.Result {
+	case "reject":
 		reason = "ai_rejected"
-	} else if outcome.Result == "uncertain" {
+	case "uncertain":
 		reason = "ai_uncertain"
-	} else if outcome.Result == "queue_full" {
+	case "queue_full":
 		reason = "ai_queue_full"
 	}
 	event := s.newInstructionV2Event(evaluation, "block", InstructionV2OutcomeBlocked, reason)
@@ -1059,13 +1060,6 @@ func (s *InstructionV2Service) refreshAfterMutation(ctx context.Context, version
 func instructionV2Int64Pointer(value int64) *int64 {
 	copyValue := value
 	return &copyValue
-}
-
-func nullableInstructionV2Actor(actorID int64) *int64 {
-	if actorID <= 0 {
-		return nil
-	}
-	return instructionV2Int64Pointer(actorID)
 }
 
 func (s *InstructionV2Service) TestAINode(ctx context.Context, id int64) (instructionV2AIResult, time.Duration, error) {

@@ -3,7 +3,6 @@ package securityaudit
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -196,7 +195,7 @@ func (r *InstructionV2Repository) ListEvents(ctx context.Context, page, pageSize
 	if err != nil {
 		return InstructionV2EventPage{}, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2Event, 0)
 	for rows.Next() {
 		item, err := scanInstructionV2Event(rows)
@@ -238,7 +237,7 @@ func (r *InstructionV2Repository) ListAIReviews(ctx context.Context, eventID int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]InstructionV2AIReview, 0)
 	for rows.Next() {
 		var item InstructionV2AIReview
@@ -425,8 +424,4 @@ func pointerInt64Value(value *int64) int64 {
 		return 0
 	}
 	return *value
-}
-
-func isInstructionV2EventNotFound(err error) bool {
-	return errors.Is(err, sql.ErrNoRows)
 }
