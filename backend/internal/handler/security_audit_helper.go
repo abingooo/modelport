@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -30,6 +30,10 @@ func instructionRequestBodyReadLimit(coordinator *securityaudit.Coordinator, gat
 		return auditLimit
 	}
 	return gatewayLimit
+}
+
+func instructionAuditHasIndependentReadLimit(coordinator *securityaudit.Coordinator) bool {
+	return coordinator != nil && coordinator.InstructionRequestBodyReadLimit() > 0
 }
 
 // cachesSecurityAuditCompletion reports whether a successful audit may be

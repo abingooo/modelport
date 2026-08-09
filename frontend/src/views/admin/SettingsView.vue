@@ -6604,14 +6604,14 @@
                   <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
                     {{ t('admin.settings.instructionAudit.summary', {
                       hashes: instructionAuditOverview?.active_hash_count ?? 0,
-                      groups: instructionAuditOverview?.audited_group_count ?? 0,
-                      effective: instructionAuditOverview?.effective_group_count ?? 0,
+                      groups: instructionAuditOverview?.active_scope_count ?? 0,
+                      effective: instructionAuditOverview?.active_scope_count ?? 0,
                     }) }}
                   </p>
                 </div>
                 <div :class="{ 'pointer-events-none opacity-50': instructionAuditSaving || instructionAuditLoading }">
                   <Toggle
-                    :model-value="instructionAuditOverview?.enabled ?? false"
+                    :model-value="instructionAuditOverview?.mode !== 'off'"
                     @update:model-value="requestInstructionAuditEnabled"
                   />
                 </div>
@@ -8275,8 +8275,8 @@ import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { CONCRETE_PLATFORM_ORDER } from "@/utils/providerPresets";
 import { normalizeVisibleMethod } from "@/components/payment/paymentFlow";
-import instructionAuditAPI from "@/features/instruction-audit/api";
-import type { InstructionOverview } from "@/features/instruction-audit/types";
+import instructionAuditV2API from "@/features/instruction-audit/v2Api";
+import type { InstructionV2Config } from "@/features/instruction-audit/v2Types";
 import {
   isRegistrationEmailSuffixDomainValid,
   normalizeRegistrationEmailSuffixDomain,
@@ -8296,7 +8296,7 @@ const appStore = useAppStore();
 const settingsStepUp = useStepUp();
 const adminSettingsStore = useAdminSettingsStore();
 const isZhLocale = computed(() => locale.value.startsWith("zh"));
-const instructionAuditOverview = ref<InstructionOverview | null>(null);
+const instructionAuditOverview = ref<InstructionV2Config | null>(null);
 const instructionAuditLoading = ref(false);
 const instructionAuditSaving = ref(false);
 
@@ -10342,7 +10342,7 @@ async function loadSettings() {
 async function loadInstructionAuditOverview() {
   instructionAuditLoading.value = true;
   try {
-    instructionAuditOverview.value = await instructionAuditAPI.getOverview();
+    instructionAuditOverview.value = await instructionAuditV2API.getConfig();
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, "admin.instructionAudit.errors", t("common.error")));
   } finally {
@@ -10353,7 +10353,23 @@ async function loadInstructionAuditOverview() {
 async function requestInstructionAuditEnabled(enabled: boolean) {
   instructionAuditSaving.value = true;
   try {
-    instructionAuditOverview.value = await instructionAuditAPI.updateEnabled(enabled);
+    if (!instructionAuditOverview.value) return;
+    const current = instructionAuditOverview.value;
+    instructionAuditOverview.value = await settingsStepUp.run(() => instructionAuditV2API.updateConfig({
+      expected_config_version: current.config_version,
+      mode: enabled ? "enforce" : "off",
+      review_criteria: current.review_criteria,
+      confidence_threshold: current.confidence_threshold,
+      ai_input_max_chars: current.ai_input_max_chars,
+      ai_global_concurrency: current.ai_global_concurrency,
+      ai_queue_wait_ms: current.ai_queue_wait_ms,
+      ai_total_timeout_ms: current.ai_total_timeout_ms,
+      ai_cache_ttl_seconds: current.ai_cache_ttl_seconds,
+      event_retention_days: current.event_retention_days,
+      evidence_retention_days: current.evidence_retention_days,
+      candidate_retention_days: current.candidate_retention_days,
+      raw_full_max_bytes: current.raw_full_max_bytes,
+    }));
     appStore.showSuccess(t("common.saved"));
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, "admin.instructionAudit.errors", t("common.error")));

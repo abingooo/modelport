@@ -45,9 +45,10 @@ type openAIWSClientFrameConn struct {
 //     stops reading from the client.
 //   - _, _, err: a transport error other than block.
 type openAIWSPolicyEnforcingFrameConn struct {
-	inner   openaiwsv2.FrameConn
-	filter  func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error)
-	onBlock func(blocked *OpenAIFastBlockedError)
+	inner          openaiwsv2.FrameConn
+	filter         func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error)
+	onBlock        func(blocked *OpenAIFastBlockedError)
+	auditOversized bool
 }
 
 var _ openaiwsv2.FrameConn = (*openAIWSPolicyEnforcingFrameConn)(nil)
@@ -64,7 +65,7 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 		defer lease.Release()
 	}
 	if err != nil {
-		if _, oversized := extractOpenAIWSMaxBytesError(err); !oversized || len(payload) == 0 || c.filter == nil {
+		if _, oversized := extractOpenAIWSMaxBytesError(err); !oversized || !c.auditOversized || len(payload) == 0 || c.filter == nil {
 			return msgType, payload, err
 		}
 		if _, blocked, filterErr := c.filter(msgType, payload); filterErr != nil {
@@ -960,7 +961,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
-		inner: clientFrameConn,
+		inner: clientFrameConn, auditOversized: hooks != nil && hooks.AuditOversizedInstruction,
 		// 注意线程安全：filter 仅在 runClientToUpstream 这一条
 		// goroutine 中被调用（passthrough_relay.go: ReadFrame loop），
 		// capturedSessionModel 的读写都发生在该 goroutine 内，因此无需

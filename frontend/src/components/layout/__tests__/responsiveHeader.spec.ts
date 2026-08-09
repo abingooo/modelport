@@ -16,7 +16,12 @@ describe('AppHeader responsive sizing', () => {
   })
 
   it('bounds long display names in the user menu', () => {
-    expect(headerSource).toContain('class="hidden min-w-0 max-w-32 text-left md:block"')
+    expect(headerSource).toContain('class="hidden min-w-0 max-w-32 text-left xl:block"')
     expect(headerSource).toContain('class="truncate text-sm font-medium')
+  })
+
+  it('keeps action labels collapsed below the extra-large breakpoint', () => {
+    expect(headerSource.match(/class="hidden xl:inline"/g)).toHaveLength(2)
+    expect(headerSource).toContain('class="hidden text-gray-400 xl:block"')
   })
 })

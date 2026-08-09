@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
+	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -52,9 +53,12 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 	)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
-			instructionAuditExcluded := isOpenAIRemoteCompactPath(c)
-			preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
-			decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http")
+			var decision *securityaudit.Decision
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				instructionAuditExcluded := isOpenAIRemoteCompactPath(c)
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+				decision = h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http")
+			}
 			bodyLease.Release()
 			if decision != nil && !decision.AllowNextStage {
 				h.responsesSecurityAuditError(c, decision)

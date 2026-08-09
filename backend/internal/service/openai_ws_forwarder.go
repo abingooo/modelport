@@ -220,6 +220,7 @@ type OpenAIWSIngressHooks struct {
 	// bounded ingress policy to every follow-up frame as the first frame.
 	InstructionReadLimitBytes int64
 	InstructionBodyBudget     *pkghttputil.RequestBodyMemoryBudget
+	AuditOversizedInstruction bool
 	BeforeTurn                func(turn int) error
 	// BeforeInstructionRequest receives the untouched client response.create
 	// frame before any gateway normalization, policy rewrite, or model mapping.

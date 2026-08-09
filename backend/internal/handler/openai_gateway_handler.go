@@ -274,9 +274,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
-			instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, false)
-			preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
-			decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http")
+			var decision *securityaudit.Decision
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, false)
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+				decision = h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http")
+			}
 			bodyLease.Release()
 			if decision != nil && !decision.AllowNextStage {
 				h.openAISecurityAuditError(c, decision)
@@ -1702,8 +1705,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	)
 	if err != nil {
 		if _, oversized := extractMaxBytesError(err); oversized && len(firstMessage) > 0 {
-			preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
-			decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, firstMessage, false, "first_turn")
+			var decision *securityaudit.Decision
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
+				decision = h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, firstMessage, false, "first_turn")
+			}
 			firstMessageLease.Release()
 			if decision != nil && !decision.AllowNextStage {
 				writeSecurityAuditWSError(ctx, wsConn, decision)
@@ -2085,6 +2091,9 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			InitialRequestModel:     reqModel,
 			MaxReasoningEffort:      maxReasoningEffort,
 			ReasoningEffortMappings: reasoningEffortMappings,
+			AuditOversizedInstruction: instructionAuditHasIndependentReadLimit(
+				h.securityAuditCoordinator,
+			),
 			InstructionReadLimitBytes: instructionRequestBodyReadLimit(
 				h.securityAuditCoordinator, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg),
 			),

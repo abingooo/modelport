@@ -246,7 +246,7 @@ func TestOpenAIWSPolicyFrameHoldsBudgetThroughOversizedAudit(t *testing.T) {
 	}
 	filterCalled := false
 	wrapper := &openAIWSPolicyEnforcingFrameConn{
-		inner: inner,
+		inner: inner, auditOversized: true,
 		filter: func(_ coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error) {
 			filterCalled = true
 			require.NotEmpty(t, payload)

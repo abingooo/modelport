@@ -37,6 +37,9 @@ type InstructionFieldResult struct {
 
 type InstructionDecision struct {
 	EventID       int64                  `json:"-"`
+	HTTPStatus    int                    `json:"-"`
+	ErrorCode     string                 `json:"-"`
+	ClientMessage string                 `json:"-"`
 	Applicable    bool                   `json:"applicable"`
 	Allow         bool                   `json:"allow"`
 	Unavailable   bool                   `json:"unavailable"`
