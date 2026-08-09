@@ -16,8 +16,9 @@ import (
 )
 
 const (
-	SecurityNotificationSourceInstructionAudit = "instruction_audit"
-	SecurityNotificationSourceCyberPolicy      = "cyber_policy"
+	SecurityNotificationSourceInstructionAudit   = "instruction_audit"
+	SecurityNotificationSourceInstructionAuditV2 = "instruction_audit_v2"
+	SecurityNotificationSourceCyberPolicy        = "cyber_policy"
 )
 
 type SecurityNotificationEnqueueInput struct {
@@ -26,6 +27,7 @@ type SecurityNotificationEnqueueInput struct {
 	UserID       int64
 	UserEmail    string
 	DedupeScope  string
+	DedupeWindow time.Duration
 	UserTemplate string
 	OpsTemplate  string
 	Variables    map[string]string
@@ -170,7 +172,15 @@ func (s *SecurityNotificationService) Prepare(
 	}
 	userRecipients := normalizeEmails([]string{input.UserEmail})
 	opsRecipients := s.opsRecipients(ctx)
-	bucket := time.Now().UTC().Truncate(15 * time.Minute).Format(time.RFC3339)
+	dedupeWindow := input.DedupeWindow
+	if dedupeWindow <= 0 {
+		dedupeWindow = 15 * time.Minute
+	}
+	dedupeSeconds := int64(dedupeWindow / time.Second)
+	if dedupeSeconds < 1 {
+		dedupeSeconds = 1
+	}
+	bucket := strconv.FormatInt(time.Now().UTC().Unix()/dedupeSeconds, 10)
 	inputs := []SecurityNotificationAudienceInput{
 		{
 			SourceType: input.SourceType, SourceID: input.SourceID, Audience: "user",

@@ -469,7 +469,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	auditOversizedClientMessage := func(turn int, payload []byte) error {
-		if len(payload) == 0 || hooks == nil || hooks.BeforeInstructionRequest == nil {
+		if len(payload) == 0 || hooks == nil || !hooks.AuditOversizedInstruction || hooks.BeforeInstructionRequest == nil {
 			return nil
 		}
 		originalModel := strings.TrimSpace(gjson.GetBytes(payload, "model").String())

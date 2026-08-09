@@ -268,3 +268,18 @@ func TestInstructionAuditOperationalCountersMigrationIsAdditiveAndNormalizesRawE
 	require.NotContains(t, sql, "truncate")
 	require.NotContains(t, sql, "delete from")
 }
+
+func TestInstructionAuditV2MigrationIsIsolatedAndSupportsNotifications(t *testing.T) {
+	body, err := FS.ReadFile("217_instruction_audit_v2.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "values ('instruction_audit_enabled', 'false', now())")
+	require.Contains(t, sql, "'instruction_audit_v2', 'cyber_policy'")
+	require.Contains(t, sql, "drop constraint if exists chk_security_notification_source")
+	require.Contains(t, sql, "references instruction_audit_v2_client_profiles(id) on delete restrict")
+	require.Contains(t, sql, "ai_global_concurrency   int not null default 64")
+	require.Contains(t, sql, "max_concurrency     int not null default 16")
+	require.NotContains(t, sql, "drop table")
+	require.NotContains(t, sql, "truncate")
+	require.NotContains(t, sql, "delete from instruction_audit_")
+}

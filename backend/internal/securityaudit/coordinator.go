@@ -93,9 +93,21 @@ func (c *Coordinator) CheckInstruction(ctx context.Context, req Request) *Decisi
 	if instruction == nil || !instruction.Applicable || instruction.Allow {
 		return nil
 	}
+	status := instruction.HTTPStatus
+	if status < 400 || status > 599 {
+		status = http.StatusForbidden
+	}
+	errorCode := instruction.ErrorCode
+	if errorCode == "" {
+		errorCode = InstructionErrorCodeRejected
+	}
+	clientMessage := instruction.ClientMessage
+	if clientMessage == "" {
+		clientMessage = InstructionClientMessage
+	}
 	return &Decision{
-		Kind: DecisionBlock, HTTPStatus: http.StatusForbidden,
-		ErrorCode: InstructionErrorCodeRejected, ClientMessage: InstructionClientMessage,
+		Kind: DecisionBlock, HTTPStatus: status,
+		ErrorCode: errorCode, ClientMessage: clientMessage,
 		Instruction: instruction, AllowNextStage: false,
 	}
 }

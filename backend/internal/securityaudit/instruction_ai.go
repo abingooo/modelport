@@ -23,7 +23,7 @@ const (
 
 func IsReservedInstructionAuditPurpose(value string) bool {
 	switch strings.TrimSpace(value) {
-	case instructionAIReviewPurposeHeader, instructionTranslationPurposeHeader:
+	case instructionAIReviewPurposeHeader, instructionTranslationPurposeHeader, InstructionV2AIReviewPurposeHeader:
 		return true
 	default:
 		return false
