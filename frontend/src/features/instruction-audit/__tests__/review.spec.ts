@@ -31,34 +31,41 @@ describe('instruction audit evidence review', () => {
     expect(dialog).toContain("copyValue('event_id', String(event.id))")
   })
 
-  it('supports searchable, multi-value, URL-persisted audit filters', () => {
-    const view = read('../InstructionAuditView.vue')
+  it('supports focused event filters and independent statistics queries', () => {
+    const view = read('../components/InstructionV2EventsPanel.vue')
     for (const filter of [
-      'groupIds', 'clientTypes', 'reasons', 'instructionsResults', 'input1Results',
-      'userNotifications', 'opsNotifications',
+      'filters.q', 'filters.eventId', 'filters.userId', 'filters.groupId', 'filters.clientKey',
+      'filters.outcome', 'filters.reason', 'filters.aiResult', 'filters.model', 'filters.range',
     ]) {
       expect(view).toContain(filter)
     }
-    expect(view).toContain('syncEventFilterURL')
-    expect(view).toContain('hydrateEventFiltersFromURL')
-    expect(view).toContain('type="datetime-local"')
+    expect(view).toContain("emit('filters-change', activeFilters)")
+    expect(view).toContain('result.group_ids')
+    expect(view).toContain('result.client_keys')
+    expect(view).toContain('result.ai_results')
   })
 
-  it('supports correlated events, guarded cleanup, resource deletion, and quick rule creation', () => {
-    const api = read('../api.ts')
-    const view = read('../InstructionAuditView.vue')
+  it('supports correlated events, guarded cleanup, resource deletion, and quick trust', () => {
+    const api = read('../v2Api.ts')
+    const view = read('../components/InstructionV2EventsPanel.vue')
 
     expect(api).toContain('deleteHash(id: number)')
-    expect(api).toContain('deleteRuleSet(id: number)')
+    expect(api).toContain('deleteScope(id: number)')
+    expect(api).toContain('deleteClientProfile(id: number)')
+    expect(api).toContain('deleteUserAllowlist(id: number)')
     expect(api).toContain('/events/batch-delete')
-    expect(api).toContain('/events/delete-preview')
-    expect(api).toContain('/events/delete-by-filter')
-    expect(api).toContain('/rule-set`')
-    expect(view).toContain('event_id: eventFilters.eventId || undefined')
-    expect(view).toContain('snapshot_max_id')
-    expect(api).toContain('filter_hash: preview.filter_hash')
-    expect(view).toContain('openAddToRuleSetDialog(event)')
+    expect(api).toContain('/trust`')
+    expect(view).toContain('result.event_id = filters.eventId')
+    expect(view).toContain('instructionAuditV2API.trustEvent')
     expect(view).toContain('system_log_q')
     expect(view).not.toContain('min-w-[960px]')
+  })
+
+  it('requires plaintext for manual hashes and labels digest-only entries as imports', () => {
+    const view = read('../components/InstructionV2TrustedPanel.vue')
+    const types = read('../v2Types.ts')
+    expect(types).toContain("source: 'manual' | 'import'")
+    expect(view).toContain("source: form.inputMode === 'raw' ? 'manual' : 'import'")
+    expect(view).toContain("inputMode: 'raw' as 'raw' | 'digest'")
   })
 })

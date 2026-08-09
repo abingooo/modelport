@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -28,6 +29,242 @@ func TestResolveOpenAIWSClientFirstMessageTimeout(t *testing.T) {
 
 	cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds = 120
 	require.Equal(t, 120*time.Second, ResolveOpenAIWSClientFirstMessageTimeout(cfg))
+}
+
+func TestReadOpenAIWSClientFrameWithBudgetHoldsLeaseForCaller(t *testing.T) {
+	const readLimitBytes = int64(1024)
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(readLimitBytes, 2)
+	require.NoError(t, err)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(workingSetBytes)
+
+	type frameResult struct {
+		messageType coderws.MessageType
+		payload     []byte
+		lease       *pkghttputil.RequestBodyMemoryLease
+		err         error
+	}
+	resultCh := make(chan frameResult, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, acceptErr := coderws.Accept(w, request, nil)
+		if acceptErr != nil {
+			resultCh <- frameResult{err: acceptErr}
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		conn.SetReadLimit(readLimitBytes)
+		messageType, payload, lease, readErr := ReadOpenAIWSClientFrameWithBudget(request.Context(), conn, readLimitBytes, budget)
+		resultCh <- frameResult{messageType: messageType, payload: payload, lease: lease, err: readErr}
+	}))
+	defer server.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), time.Second)
+	client, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = client.CloseNow() }()
+	require.NoError(t, client.Write(context.Background(), coderws.MessageText, []byte(`{"type":"response.create"}`)))
+
+	result := <-resultCh
+	require.NoError(t, result.err)
+	require.Equal(t, coderws.MessageText, result.messageType)
+	require.JSONEq(t, `{"type":"response.create"}`, string(result.payload))
+	require.NotNil(t, result.lease)
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	_, err = budget.Acquire(waitCtx, workingSetBytes)
+	cancelWait()
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	result.lease.Release()
+	lease, err := budget.Acquire(context.Background(), workingSetBytes)
+	require.NoError(t, err)
+	lease.Release()
+}
+
+type openAIWSMatrixRepeatingReader byte
+
+func (reader openAIWSMatrixRepeatingReader) Read(buffer []byte) (int, error) {
+	for index := range buffer {
+		buffer[index] = byte(reader)
+	}
+	return len(buffer), nil
+}
+
+func writeSizedOpenAIWSResponseCreate(
+	ctx context.Context,
+	conn *coderws.Conn,
+	totalBytes int64,
+) error {
+	prefix := `{"type":"response.create","model":"gpt-test","instructions":"`
+	suffix := `"}`
+	fillerBytes := totalBytes - int64(len(prefix)+len(suffix))
+	writer, err := conn.Writer(ctx, coderws.MessageText)
+	if err != nil {
+		return err
+	}
+	closeWithError := func(writeErr error) error {
+		closeErr := writer.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		return closeErr
+	}
+	if _, err = io.WriteString(writer, prefix); err != nil {
+		return closeWithError(err)
+	}
+	if _, err = io.CopyN(writer, openAIWSMatrixRepeatingReader('a'), fillerBytes); err != nil {
+		return closeWithError(err)
+	}
+	_, err = io.WriteString(writer, suffix)
+	return closeWithError(err)
+}
+
+func TestReadOpenAIWSClientFrameWithBudgetSizeMatrix(t *testing.T) {
+	const (
+		readLimitBytes      = int64(64 << 20)
+		transportLimitBytes = int64(66 << 20)
+	)
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(readLimitBytes, 2)
+	require.NoError(t, err)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(workingSetBytes)
+
+	type frameResult struct {
+		messageType coderws.MessageType
+		payload     []byte
+		lease       *pkghttputil.RequestBodyMemoryLease
+		err         error
+	}
+	for _, sizeMiB := range []int{1, 16, 32, 42, 64, 65} {
+		t.Run(fmt.Sprintf("%dMiB", sizeMiB), func(t *testing.T) {
+			resultCh := make(chan frameResult, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+				conn, acceptErr := coderws.Accept(w, request, nil)
+				if acceptErr != nil {
+					resultCh <- frameResult{err: acceptErr}
+					return
+				}
+				defer func() { _ = conn.CloseNow() }()
+				conn.SetReadLimit(transportLimitBytes)
+				messageType, payload, lease, readErr := ReadOpenAIWSClientFrameWithBudget(
+					request.Context(), conn, readLimitBytes, budget,
+				)
+				resultCh <- frameResult{messageType: messageType, payload: payload, lease: lease, err: readErr}
+			}))
+			defer server.Close()
+
+			dialCtx, cancelDial := context.WithTimeout(context.Background(), 10*time.Second)
+			client, _, dialErr := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			cancelDial()
+			require.NoError(t, dialErr)
+			defer func() { _ = client.CloseNow() }()
+
+			targetBytes := int64(sizeMiB) << 20
+			writeResultCh := make(chan error, 1)
+			go func() {
+				writeCtx, cancelWrite := context.WithTimeout(context.Background(), 90*time.Second)
+				defer cancelWrite()
+				writeResultCh <- writeSizedOpenAIWSResponseCreate(writeCtx, client, targetBytes)
+			}()
+
+			var result frameResult
+			select {
+			case result = <-resultCh:
+			case <-time.After(90 * time.Second):
+				t.Fatal("timed out reading local websocket frame")
+			}
+			if result.lease != nil {
+				defer result.lease.Release()
+			}
+
+			if sizeMiB == 65 {
+				var maxErr *http.MaxBytesError
+				require.ErrorAs(t, result.err, &maxErr)
+				require.Equal(t, readLimitBytes, maxErr.Limit)
+				require.Equal(t, coderws.MessageText, result.messageType)
+				require.NotNil(t, result.lease)
+				require.Len(t, result.payload, int(readLimitBytes+1))
+				require.True(t, strings.HasPrefix(string(result.payload[:96]), `{"type":"response.create"`))
+			} else {
+				require.NoError(t, result.err)
+				require.Equal(t, coderws.MessageText, result.messageType)
+				require.NotNil(t, result.lease)
+				require.Len(t, result.payload, int(targetBytes))
+				require.Equal(t, byte('{'), result.payload[0])
+				require.Equal(t, byte('}'), result.payload[len(result.payload)-1])
+			}
+
+			blockedCtx, cancelBlocked := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			_, acquireErr := budget.Acquire(blockedCtx, workingSetBytes)
+			cancelBlocked()
+			require.ErrorIs(t, acquireErr, context.DeadlineExceeded)
+			result.lease.Release()
+
+			select {
+			case writeErr := <-writeResultCh:
+				if sizeMiB <= 64 {
+					require.NoError(t, writeErr)
+				}
+			case <-time.After(90 * time.Second):
+				t.Fatal("timed out writing local websocket frame")
+			}
+		})
+	}
+}
+
+type budgetedOpenAIWSTestFrameConn struct {
+	payload []byte
+	lease   *pkghttputil.RequestBodyMemoryLease
+	err     error
+}
+
+func (c *budgetedOpenAIWSTestFrameConn) ReadFrame(context.Context) (coderws.MessageType, []byte, error) {
+	return coderws.MessageText, c.payload, c.err
+}
+
+func (c *budgetedOpenAIWSTestFrameConn) WriteFrame(context.Context, coderws.MessageType, []byte) error {
+	return nil
+}
+
+func (c *budgetedOpenAIWSTestFrameConn) Close() error { return nil }
+
+func (c *budgetedOpenAIWSTestFrameConn) takeInstructionBodyLease() *pkghttputil.RequestBodyMemoryLease {
+	lease := c.lease
+	c.lease = nil
+	return lease
+}
+
+func TestOpenAIWSPolicyFrameHoldsBudgetThroughOversizedAudit(t *testing.T) {
+	const capacity int64 = 2048
+	budget := pkghttputil.NewRequestBodyMemoryBudget(capacity)
+	lease, err := budget.Acquire(context.Background(), capacity)
+	require.NoError(t, err)
+	maxErr := &http.MaxBytesError{Limit: 1024}
+	inner := &budgetedOpenAIWSTestFrameConn{
+		payload: []byte(`{"type":"response.create","instructions":"truncated`),
+		lease:   lease,
+		err:     maxErr,
+	}
+	filterCalled := false
+	wrapper := &openAIWSPolicyEnforcingFrameConn{
+		inner: inner, auditOversized: true,
+		filter: func(_ coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error) {
+			filterCalled = true
+			require.NotEmpty(t, payload)
+			waitCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			_, acquireErr := budget.Acquire(waitCtx, capacity)
+			require.ErrorIs(t, acquireErr, context.DeadlineExceeded)
+			return payload, nil, nil
+		},
+	}
+
+	_, _, err = wrapper.ReadFrame(context.Background())
+	require.ErrorIs(t, err, maxErr)
+	require.True(t, filterCalled)
+
+	released, err := budget.Acquire(context.Background(), capacity)
+	require.NoError(t, err)
+	released.Release()
 }
 
 func TestPrepareOpenAIWSHTTPBridgeBodyStripsWSFields(t *testing.T) {
@@ -827,6 +1064,15 @@ func TestOpenAIWSHTTPBridgeAcceptsFirstFrameAboveLegacy16MiB(t *testing.T) {
 	require.False(t, gjson.GetBytes(upstream.lastBody, "generate").Exists())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.Equal(t, "gpt-5", gjson.GetBytes(upstream.lastBody, "model").String())
+}
+
+func TestResolveOpenAIWSClientReadLimitDefaultExceedsInstructionAuditMaximum(t *testing.T) {
+	const instructionAuditMaximum = int64(128 * 1024 * 1024)
+	const oversizedAuditFrame = int64(65 * 1024 * 1024)
+
+	limit := ResolveOpenAIWSClientReadLimitBytes(nil)
+	require.Greater(t, limit, instructionAuditMaximum)
+	require.Greater(t, limit, oversizedAuditFrame)
 }
 
 func TestOpenAIWSHTTPBridgeKeepsContinuationFramesOnHTTPWithoutPreviousResponseID(t *testing.T) {

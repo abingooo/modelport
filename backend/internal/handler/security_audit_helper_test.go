@@ -188,14 +188,35 @@ type turnCountingEngine struct {
 type capturingInstructionEngine struct {
 	request  securityaudit.Request
 	decision *securityaudit.InstructionDecision
+	calls    atomic.Int64
 }
 
 func (e *capturingInstructionEngine) EvaluateInstruction(_ context.Context, request securityaudit.Request) *securityaudit.InstructionDecision {
+	e.calls.Add(1)
 	e.request = request
 	if e.decision != nil {
 		return e.decision
 	}
 	return &securityaudit.InstructionDecision{Allow: true}
+}
+
+func TestRunInstructionAuditRejectsReservedInternalPurposeAtPublicIngress(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &capturingInstructionEngine{}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("X-ModelPort-Internal-Purpose", "instruction-audit-review")
+
+	decision := runInstructionAudit(c, nil, coordinator, nil, middleware2.AuthSubject{UserID: 7},
+		"openai_responses", "gpt-test", []byte(`{"instructions":"exact"}`), false, "http")
+
+	require.NotNil(t, decision)
+	require.False(t, decision.AllowNextStage)
+	require.NotNil(t, decision.Instruction)
+	require.Equal(t, securityaudit.InstructionErrorCodeRejected, decision.ErrorCode)
+	require.Zero(t, instruction.calls.Load(), "a reserved internal marker must not recurse into instruction auditing")
 }
 
 func (e *turnCountingEngine) EffectiveMode() securityaudit.Mode { return e.mode }

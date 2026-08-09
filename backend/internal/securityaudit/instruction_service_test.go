@@ -29,6 +29,27 @@ func (r *recordingInstructionNotificationEnqueuer) Enqueue(
 	return nil
 }
 
+func (r *recordingInstructionNotificationEnqueuer) Prepare(
+	_ context.Context,
+	input modelportservice.SecurityNotificationEnqueueInput,
+) ([]modelportservice.SecurityNotificationAudienceInput, error) {
+	items := make([]modelportservice.SecurityNotificationAudienceInput, 0, 2)
+	if !input.SkipUser {
+		items = append(items, modelportservice.SecurityNotificationAudienceInput{
+			SourceType: input.SourceType, Audience: "user", UserID: input.UserID,
+			Recipients: []string{input.UserEmail}, TemplateEvent: input.UserTemplate,
+			Variables: input.Variables,
+		})
+	}
+	if !input.SkipOps {
+		items = append(items, modelportservice.SecurityNotificationAudienceInput{
+			SourceType: input.SourceType, Audience: "ops", Recipients: []string{"ops@example.test"},
+			TemplateEvent: input.OpsTemplate, Variables: input.Variables,
+		})
+	}
+	return items, nil
+}
+
 func instructionTestSnapshot(enabled bool, groupID int64, values ...string) *instructionSnapshot {
 	hashes := make([]instructionPolicyHash, 0, len(values))
 	for _, value := range values {
@@ -151,12 +172,20 @@ func TestInstructionServiceRuleSetExceptions(t *testing.T) {
 
 	whitelisted := service.EvaluateInstruction(context.Background(), Request{
 		Protocol: instructionAuditProtocol, UserID: 77, GroupID: instructionTestGroupID(groupID),
-		InstructionBody: []byte(`{`),
+		InstructionBody: []byte(`{"instructions":"unlisted"}`),
 	})
 	require.True(t, whitelisted.Applicable)
 	require.True(t, whitelisted.Allow)
 	require.Equal(t, "user_allowlist", whitelisted.Reason)
 	require.Equal(t, "not_checked", whitelisted.Instructions.Result)
+
+	malformedWhitelisted := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, UserID: 77, GroupID: instructionTestGroupID(groupID),
+		InstructionBody: []byte(`{`),
+	})
+	require.True(t, malformedWhitelisted.Applicable)
+	require.False(t, malformedWhitelisted.Allow)
+	require.Equal(t, "invalid_json", malformedWhitelisted.Reason)
 
 	for _, body := range []string{
 		`{}`,
@@ -284,6 +313,34 @@ func TestInstructionServiceUnionsWildcardAndClientSpecificPolicies(t *testing.T)
 	require.Equal(t, []int64{11, 12}, decision.RuleSetIDs)
 }
 
+func TestInstructionServiceExpiredAIScopeDoesNotOverridePermanentRule(t *testing.T) {
+	const groupID int64 = 7
+	digest := allowedDigest("shared")
+	snapshot := instructionTestSnapshot(true, groupID)
+	snapshot.Policies[groupID] = instructionPolicy{
+		RuleSetIDs: []int64{11},
+		Hashes:     []instructionPolicyHash{digest},
+	}
+	scope := instructionPolicyScope{GroupID: groupID, ClientType: InstructionClientCodexCLI}
+	snapshot.AuditedClientScopes = map[instructionPolicyScope]struct{}{scope: {}}
+	expired := digest
+	expired.ValidUntil = time.Now().UTC().Add(-time.Hour)
+	snapshot.ClientPolicies = map[instructionPolicyScope]instructionPolicy{
+		scope: {RuleSetIDs: []int64{12}, Hashes: []instructionPolicyHash{expired}},
+	}
+	service := &InstructionService{}
+	service.snapshot.Store(snapshot)
+
+	decision := service.EvaluateInstruction(context.Background(), Request{
+		Protocol: instructionAuditProtocol, GroupID: instructionTestGroupID(groupID),
+		UserAgent: "codex_cli_rs/0.145.0", InstructionBody: []byte(`{"instructions":"shared"}`),
+	})
+	require.True(t, decision.Applicable)
+	require.True(t, decision.Allow)
+	require.Equal(t, "instructions_match", decision.Reason)
+	require.Equal(t, []int64{11, 12}, decision.RuleSetIDs)
+}
+
 func TestInstructionServiceFailsClosedBeforeFirstValidSnapshot(t *testing.T) {
 	service := &InstructionService{}
 	decision := service.EvaluateInstruction(context.Background(), Request{
@@ -345,7 +402,8 @@ func TestInstructionServicePersistsBlockedEventBeforeReturning(t *testing.T) {
 	cancel()
 	service.recordBlocked(canceled, request, decision)
 	require.EqualValues(t, 17, decision.EventID)
-	require.Zero(t, service.failedBlockedEventPersists.Load())
+	require.Zero(t, service.pendingPersistFailures.Load())
+	require.Zero(t, service.pendingStatisticsLosses.Load())
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -379,7 +437,63 @@ func TestInstructionServiceFailsClosedWhenAllowedOutcomeCannotPersist(t *testing
 	require.Equal(t, "config_unavailable", decision.FinalReason)
 	require.Equal(t, InstructionOutcomeBlocked, decision.FinalOutcome)
 	require.Equal(t, InstructionPolicyActionBlock, decision.PolicyAction)
-	require.EqualValues(t, 1, service.failedBlockedEventPersists.Load())
+	require.EqualValues(t, 1, service.pendingPersistFailures.Load())
+	require.EqualValues(t, 1, service.pendingStatisticsLosses.Load())
+	mock.ExpectClose()
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestNormalizeInstructionHashRequestSeparatesManualAndImportSources(t *testing.T) {
+	manual, err := normalizeInstructionHashRequest(CreateInstructionHashRequest{
+		RawContent: "exact plaintext", Name: "manual", Status: "active",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "manual", manual.SourceType)
+	require.Equal(t, sha256Hex("exact plaintext"), manual.Digest)
+
+	missingRaw, err := normalizeInstructionHashRequest(CreateInstructionHashRequest{
+		Digest: sha256Hex("digest only"), Name: "missing raw", Status: "active",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "manual", missingRaw.SourceType)
+	_, err = (&InstructionService{}).CreateHash(context.Background(), missingRaw, 1)
+	require.Equal(t, "instruction_audit_manual_raw_required", infraerrors.Reason(err))
+
+	imported, err := normalizeInstructionHashRequest(CreateInstructionHashRequest{
+		Digest: sha256Hex("digest only"), SourceType: "import", Name: "imported", Status: "active",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "import", imported.SourceType)
+	require.Empty(t, imported.RawContent)
+
+	_, err = normalizeInstructionHashRequest(CreateInstructionHashRequest{
+		Digest: sha256Hex("invalid source"), SourceType: "ai_review", Name: "invalid", Status: "active",
+	})
+	require.Equal(t, "instruction_audit_invalid_hash_source_type", infraerrors.Reason(err))
+}
+
+func TestInstructionOperationalCountersRetryWithoutDoubleCounting(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	service := NewInstructionService(NewInstructionRepository(db), nil, nil)
+	service.pendingPersistFailures.Add(2)
+	service.pendingStatisticsLosses.Add(3)
+
+	mock.ExpectExec("INSERT INTO instruction_audit_operational_counters").
+		WithArgs(int64(2), int64(3)).
+		WillReturnError(errors.New("database unavailable"))
+	require.Error(t, service.flushOperationalCounters(context.Background()))
+	require.EqualValues(t, 2, service.pendingPersistFailures.Load())
+	require.EqualValues(t, 3, service.pendingStatisticsLosses.Load())
+
+	mock.ExpectExec("INSERT INTO instruction_audit_operational_counters").
+		WithArgs(int64(2), int64(3)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	require.NoError(t, service.flushOperationalCounters(context.Background()))
+	require.Zero(t, service.pendingPersistFailures.Load())
+	require.Zero(t, service.pendingStatisticsLosses.Load())
+
 	mock.ExpectClose()
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
@@ -489,9 +603,9 @@ func TestInstructionServiceMapsReferencedResourcesToConflict(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
 		mock.ExpectBegin()
-		mock.ExpectQuery(`SELECT id FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
+		mock.ExpectQuery(`SELECT system_managed FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
 			WithArgs(int64(11)).
-			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
+			WillReturnRows(sqlmock.NewRows([]string{"system_managed"}).AddRow(false))
 		mock.ExpectQuery(`(?s)SELECT.*instruction_audit_group_bindings.*instruction_audit_bindings`).
 			WithArgs(int64(11)).
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
@@ -554,6 +668,27 @@ func TestInstructionServiceReloadKeepsLastKnownGoodSnapshot(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestEffectiveInstructionBodyLimitUsesApplicationMinimum(t *testing.T) {
+	require.EqualValues(t, 64<<20, effectiveInstructionBodyLimit(64<<20, 256<<20))
+	require.EqualValues(t, 32<<20, effectiveInstructionBodyLimit(64<<20, 32<<20))
+	require.EqualValues(t, 64<<20, effectiveInstructionBodyLimit(64<<20, 0))
+}
+
+func TestMergeInstructionPolicyHashValidityUsesUnionWindow(t *testing.T) {
+	now := time.Now().UTC()
+	digest := allowedDigest("shared").Digest
+	merged := mergeInstructionPolicyHashValidity(
+		instructionPolicyHash{Digest: digest, ValidFrom: now.Add(time.Hour), ValidUntil: now.Add(2 * time.Hour)},
+		instructionPolicyHash{Digest: digest, ValidFrom: now, ValidUntil: now.Add(3 * time.Hour)},
+	)
+	require.Equal(t, now, merged.ValidFrom)
+	require.Equal(t, now.Add(3*time.Hour), merged.ValidUntil)
+
+	merged = mergeInstructionPolicyHashValidity(merged, instructionPolicyHash{Digest: digest})
+	require.True(t, merged.ValidFrom.IsZero())
+	require.True(t, merged.ValidUntil.IsZero())
+}
+
 func TestInstructionServiceFreshSnapshotSurvivesTransientRefreshFailure(t *testing.T) {
 	service := &InstructionService{}
 	service.snapshot.Store(instructionTestSnapshot(true, 7, "trusted"))
@@ -597,6 +732,21 @@ func TestInstructionServiceStaleSnapshotDoesNotEnableDisabledAudit(t *testing.T)
 	})
 	require.False(t, decision.Applicable)
 	require.True(t, decision.Allow)
+}
+
+func TestInstructionServiceRequestBodyBudgetOnlyAppliesWhileEnabled(t *testing.T) {
+	service := &InstructionService{}
+	service.configureInstructionRequestBodyBudget(InstructionDefaultMaxInflightBodyBytes)
+	service.snapshot.Store(instructionTestSnapshot(false, 7, "trusted"))
+	require.Nil(t, service.RequestBodyMemoryBudget())
+
+	service.snapshot.Store(instructionTestSnapshot(true, 7, "trusted"))
+	budget := service.RequestBodyMemoryBudget()
+	require.NotNil(t, budget)
+	require.Equal(t, InstructionDefaultMaxInflightBodyBytes, budget.Capacity())
+	service.configureInstructionRequestBodyBudget(InstructionDefaultMaxInflightBodyBytes * 2)
+	require.Same(t, budget, service.RequestBodyMemoryBudget())
+	require.Equal(t, InstructionDefaultMaxInflightBodyBytes*2, budget.Capacity())
 }
 
 func TestInstructionServiceKeepsLastScopedSnapshotWhileNewerVersionLoads(t *testing.T) {
@@ -690,7 +840,7 @@ func TestInstructionService47KBLatencyBudget(t *testing.T) {
 
 func TestNormalizeInstructionHashDefaultsToCandidate(t *testing.T) {
 	request, err := normalizeInstructionHashRequest(CreateInstructionHashRequest{
-		Digest: strings.Repeat("A", 64), Name: "Codex stable",
+		Digest: strings.Repeat("A", 64), SourceType: "import", Name: "Codex stable",
 	})
 	require.NoError(t, err)
 	require.Equal(t, strings.Repeat("a", 64), request.Digest)

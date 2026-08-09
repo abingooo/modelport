@@ -88,9 +88,9 @@ func TestInstructionRepositoryDeleteRuleSetRollsBackWhenBound(t *testing.T) {
 	require.NoError(t, err)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT system_managed FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
 		WithArgs(int64(11)).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)))
+		WillReturnRows(sqlmock.NewRows([]string{"system_managed"}).AddRow(false))
 	mock.ExpectQuery(`(?s)SELECT.*instruction_audit_group_bindings.*instruction_audit_bindings`).
 		WithArgs(int64(11)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(3)))
@@ -136,9 +136,9 @@ func TestInstructionRepositoryAddHashesToRuleSetCreatesAndReactivatesAtomically(
 	secondDigest := sha256Hex("new-value")
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
+	mock.ExpectQuery(`SELECT system_managed FROM instruction_audit_rule_sets WHERE id = \$1 FOR UPDATE`).
 		WithArgs(ruleSetID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(ruleSetID))
+		WillReturnRows(sqlmock.NewRows([]string{"system_managed"}).AddRow(false))
 	mock.ExpectQuery(`(?s)SELECT id, status, valid_from, valid_until.*FROM instruction_audit_hashes WHERE digest = \$1 FOR UPDATE`).
 		WithArgs(firstDigest).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "valid_from", "valid_until"}).
@@ -150,7 +150,7 @@ func TestInstructionRepositoryAddHashesToRuleSetCreatesAndReactivatesAtomically(
 		WithArgs(int64(21)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO instruction_audit_hash_sources`).
-		WithArgs(int64(21), "manual", "", nil, nil, "", "", nil, "", actorID).
+		WithArgs(int64(21), "import", "", nil, nil, "", "", nil, "", actorID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO instruction_audit_rule_set_hashes`).
 		WithArgs(ruleSetID, int64(21), actorID).
@@ -165,7 +165,7 @@ func TestInstructionRepositoryAddHashesToRuleSetCreatesAndReactivatesAtomically(
 		WithArgs(int64(22)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO instruction_audit_hash_sources`).
-		WithArgs(int64(22), "manual", "input1", nil, nil, "", "", nil, "", actorID).
+		WithArgs(int64(22), "import", "input1", nil, nil, "", "", nil, "", actorID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO instruction_audit_rule_set_hashes`).
 		WithArgs(ruleSetID, int64(22), actorID).

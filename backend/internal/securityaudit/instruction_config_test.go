@@ -112,7 +112,7 @@ func TestUpdateInstructionReasonPolicyRejectsUnsafeConfigurationBeforePersistenc
 
 func TestInstructionRuntimeConfigPreservesLegacyAggregateRetention(t *testing.T) {
 	current := InstructionRuntimeConfig{
-		MaxBodyBytes: 1 << 20, ParseTimeoutMS: 500, MaxInflightBodyBytes: 1 << 20,
+		MaxBodyBytes: 1 << 20, ParseTimeoutMS: 500, MaxInflightBodyBytes: 3 << 20,
 		PassEventRetentionDays: 7, AggregateRetentionDays: 365, RawContentRetentionDays: 30,
 		AITimeoutMS: 1000, AIMaxConcurrency: 1, AIMinConfidence: 0.9,
 		AIPerUserRPM: 1, AIPerUserDailyLimit: 1, AIGlobalDailyLimit: 1,
@@ -125,6 +125,10 @@ func TestInstructionRuntimeConfigPreservesLegacyAggregateRetention(t *testing.T)
 	invalid := current
 	invalid.AggregateRetentionDays = 29
 	require.Equal(t, "instruction_audit_invalid_retention", infraerrors.Reason(validateInstructionRuntimeConfig(invalid)))
+
+	invalid = current
+	invalid.MaxInflightBodyBytes = 2 << 20
+	require.Equal(t, "instruction_audit_invalid_inflight_limit", infraerrors.Reason(validateInstructionRuntimeConfig(invalid)))
 }
 
 func pointerToTime(value time.Time) *time.Time {

@@ -402,17 +402,28 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 	// 使用超时上下文避免安装流程因数据库异常而长时间阻塞。
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, "", err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx, "LOCK TABLE users IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return false, "", err
+	}
 
 	var totalUsers int64
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(1) FROM users").Scan(&totalUsers); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(1) FROM users").Scan(&totalUsers); err != nil {
 		return false, "", err
 	}
 	var adminUsers int64
-	if err := db.QueryRowContext(ctx, "SELECT COUNT(1) FROM users WHERE role = $1", service.RoleAdmin).Scan(&adminUsers); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(1) FROM users WHERE role = $1", service.RoleAdmin).Scan(&adminUsers); err != nil {
 		return false, "", err
 	}
 	decision := decideAdminBootstrap(totalUsers, adminUsers)
 	if !decision.shouldCreate {
+		if err := tx.Commit(); err != nil {
+			return false, "", err
+		}
 		return false, decision.reason, nil
 	}
 
@@ -440,10 +451,12 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 		return false, "", err
 	}
 
-	_, err = db.ExecContext(
+	var adminID int64
+	err = tx.QueryRowContext(
 		ctx,
 		`INSERT INTO users (email, password_hash, role, balance, concurrency, status, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		 RETURNING id`,
 		admin.Email,
 		admin.PasswordHash,
 		admin.Role,
@@ -452,8 +465,20 @@ func createAdminUser(cfg *SetupConfig) (bool, string, error) {
 		admin.Status,
 		admin.CreatedAt,
 		admin.UpdatedAt,
-	)
+	).Scan(&adminID)
 	if err != nil {
+		return false, "", err
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO instruction_audit_sensitive_access_grants
+			(subject_user_id, subject_email_snapshot, granted_by, grant_source, grant_reason)
+		VALUES ($1, $2, NULL, 'setup_bootstrap',
+			'Automatic bootstrap for the first administrator during initial setup')
+		ON CONFLICT DO NOTHING`, adminID, admin.Email)
+	if err != nil {
+		return false, "", err
+	}
+	if err = tx.Commit(); err != nil {
 		return false, "", err
 	}
 	return true, decision.reason, nil

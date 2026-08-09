@@ -6,6 +6,7 @@ const (
 	InstructionDefaultMaxBodyBytes         int64 = 64 << 20
 	InstructionDefaultParseTimeoutMS             = 500
 	InstructionDefaultMaxInflightBodyBytes int64 = 256 << 20
+	InstructionBodyWorkingSetMultiplier    int64 = 3
 	InstructionHashNormalizationIdentityV1       = "identity_utf8_v1"
 	InstructionHashAlgorithmSHA256               = "sha256"
 )
@@ -130,6 +131,10 @@ type ChangeInstructionHashStatusRequest struct {
 	Status string `json:"status"`
 }
 
+type ChangeInstructionHashScopeRequest struct {
+	Action string `json:"action"`
+}
+
 type instructionHashRawStorage struct {
 	HashID        int64
 	Ciphertext    []byte
@@ -225,6 +230,7 @@ type InstructionTranslationJob struct {
 	RedactionCount      int        `json:"redaction_count"`
 	ProviderLatencyMS   int        `json:"provider_latency_ms"`
 	RequestedBy         *int64     `json:"requested_by,omitempty"`
+	AuthorizedGrantID   *int64     `json:"-"`
 	ProcessingStartedAt *time.Time `json:"processing_started_at,omitempty"`
 	TranslatedText      string     `json:"translated_text,omitempty"`
 	ExpiresAt           time.Time  `json:"expires_at"`

@@ -24,6 +24,7 @@ func newInstructionAIFlowService(t *testing.T) (*InstructionService, *Instructio
 	db := openInstructionAuditIntegrationDB(t)
 	repository := NewInstructionRepository(db)
 	adminID := insertInstructionAuditUser(t, db, "ai-flow-admin@example.test", "admin")
+	insertInstructionSensitiveTestGrant(t, db, adminID, "emergency_cli")
 	userID := insertInstructionAuditUser(t, db, "ai-flow-user@example.test", "user")
 	groupID := insertInstructionAuditGroup(t, db, "AI Flow Group")
 	digest := sha256Hex("known standard")
@@ -83,7 +84,7 @@ func newInstructionAIFlowService(t *testing.T) (*InstructionService, *Instructio
 	policy.Action = InstructionPolicyActionBlock
 	snapshot.ReasonPolicies["hash_mismatch"] = policy
 	service.snapshot.Store(snapshot)
-	service.configureInstructionParserBudget(snapshot.Runtime.MaxInflightBodyBytes)
+	service.configureInstructionRequestBodyBudget(snapshot.Runtime.MaxInflightBodyBytes)
 	service.configureInstructionAIBudget(snapshot.Runtime.AIMaxConcurrency)
 	cleanup := func() { require.NoError(t, redisClient.Close()) }
 	return service, repository, userID, groupID, cleanup
@@ -291,9 +292,12 @@ func TestInstructionServiceRejectsRecursiveAIReasonPolicy(t *testing.T) {
 }
 
 func TestInstructionServiceHashRawLifecycleIsEncryptedAndAudited(t *testing.T) {
-	service, repository, actorID, _, cleanup := newInstructionAIFlowService(t)
+	service, repository, _, _, cleanup := newInstructionAIFlowService(t)
 	t.Cleanup(cleanup)
-	ctx := context.Background()
+	var actorID int64
+	require.NoError(t, repository.db.QueryRow(`
+		SELECT id FROM users WHERE email = 'ai-flow-admin@example.test'`).Scan(&actorID))
+	ctx := instructionSensitiveTestContext(t, repository.db, actorID)
 	plaintext := " exact standard\nclient instruction "
 	hash, err := service.CreateHash(ctx, CreateInstructionHashRequest{
 		RawContent: plaintext, Name: "raw standard", ObservedSource: "input1", Status: "candidate",

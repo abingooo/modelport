@@ -199,11 +199,12 @@ func (s *InstructionService) commitInstructionAIOutcome(
 	eventRequest := instructionEventRequest(request)
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), instructionBlockedEventPersistenceTimeout)
 	defer cancel()
+	notificationIntents := s.prepareInstructionOutcomeNotifications(recordCtx, eventRequest, decision)
 	return s.repository.CommitAIOutcome(recordCtx, instructionAIOutcomeCommit{
 		Request: eventRequest, Decision: decision, EvidenceStatus: evidenceStatus,
 		EvidenceExpiresAt: evidenceExpiresAt, Evidence: evidence, Attempts: attempts,
 		FinalAttempt: finalAttempt, ApprovedRaw: raw, ApprovedField: approvedField,
-		AutomaticUntil: automaticUntil,
+		AutomaticUntil: automaticUntil, NotificationIntents: notificationIntents,
 	})
 }
 
@@ -237,9 +238,6 @@ func (s *InstructionService) finishInstructionAIFailure(
 	if err == nil {
 		decision.EventID = result.EventID
 		decision.AIReviewID = &result.AIReviewID
-		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), instructionBlockedEventPersistenceTimeout)
-		defer cancel()
-		s.enqueueInstructionOutcomeNotifications(recordCtx, instructionEventRequest(request), decision, result.EventID)
 		return decision
 	}
 	decision.Allow = false

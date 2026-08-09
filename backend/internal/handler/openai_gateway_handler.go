@@ -267,26 +267,45 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 
 	// Read request body
-	body, instructionAuditBody, err := readLenientJSONRequestBodyWithAuditSource(c.Request, h.cfg)
+	body, instructionAuditBody, bodyLease, err := readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(
+		c.Request,
+		instructionRequestBodyReadLimit(h.securityAuditCoordinator, gatewayMaxBodySize(h.cfg)),
+		instructionRequestBodyBudget(h.securityAuditCoordinator),
+	)
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
+			var decision *securityaudit.Decision
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, false)
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+				decision = h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http")
+			}
+			bodyLease.Release()
+			if decision != nil && !decision.AllowNextStage {
+				h.openAISecurityAuditError(c, decision)
+				return
+			}
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
+		bodyLease.Release()
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to read request body")
 		return
 	}
 
 	if len(body) == 0 {
+		bodyLease.Release()
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
 	instructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, false)
 	preAuditModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, instructionAuditBody, instructionAuditExcluded, "http"); decision != nil && !decision.AllowNextStage {
+		bodyLease.Release()
 		h.openAISecurityAuditError(c, decision)
 		return
 	}
+	bodyLease.Release()
 
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
@@ -1672,14 +1691,35 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	wsConn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
 
 	firstMessageTimeout := service.ResolveOpenAIWSClientFirstMessageTimeout(h.cfg)
-	msgType, firstMessage, err := service.ReadOpenAIWSClientMessage(
+	clientReadLimit := instructionRequestBodyReadLimit(
+		h.securityAuditCoordinator, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg),
+	)
+	msgType, firstMessage, firstMessageLease, err := service.ReadOpenAIWSClientMessageWithBudget(
 		ctx,
 		wsConn,
 		firstMessageTimeout,
 		coderws.StatusPolicyViolation,
 		"missing first response.create message",
+		clientReadLimit,
+		instructionRequestBodyBudget(h.securityAuditCoordinator),
 	)
 	if err != nil {
+		if _, oversized := extractMaxBytesError(err); oversized && len(firstMessage) > 0 {
+			var decision *securityaudit.Decision
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
+				decision = h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, firstMessage, false, "first_turn")
+			}
+			firstMessageLease.Release()
+			if decision != nil && !decision.AllowNextStage {
+				writeSecurityAuditWSError(ctx, wsConn, decision)
+				closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
+				return
+			}
+			closeOpenAIClientWS(wsConn, coderws.StatusMessageTooBig, "websocket request exceeds the configured size limit")
+			return
+		}
+		firstMessageLease.Release()
 		if errors.Is(context.Cause(ctx), service.ErrOpenAIWSIngressLeaseLost) {
 			reqLog.Warn("openai.websocket_ingress_lease_lost_before_first_message", zap.Error(err))
 			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect")
@@ -1697,16 +1737,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 	if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+		firstMessageLease.Release()
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "unsupported websocket message type")
 		return
 	}
 	preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
 	firstInstructionAuditExcluded := isOpenAIInstructionAuditExcluded(c, true)
 	if decision := h.checkInstructionAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, preAuditModel, firstMessage, firstInstructionAuditExcluded, "first_turn"); decision != nil && !decision.AllowNextStage {
+		firstMessageLease.Release()
 		writeSecurityAuditWSError(ctx, wsConn, decision)
 		closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
 		return
 	}
+	firstMessageLease.Release()
 	if !gjson.ValidBytes(firstMessage) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
@@ -2048,6 +2091,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			InitialRequestModel:     reqModel,
 			MaxReasoningEffort:      maxReasoningEffort,
 			ReasoningEffortMappings: reasoningEffortMappings,
+			AuditOversizedInstruction: instructionAuditHasIndependentReadLimit(
+				h.securityAuditCoordinator,
+			),
+			InstructionReadLimitBytes: instructionRequestBodyReadLimit(
+				h.securityAuditCoordinator, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg),
+			),
+			InstructionBodyBudget: instructionRequestBodyBudget(h.securityAuditCoordinator),
 			BeforeInstructionRequest: func(_ int, payload []byte, originalModel string) error {
 				preAuditModel := strings.TrimSpace(originalModel)
 				if preAuditModel == "" {

@@ -18,6 +18,8 @@ import type {
   InstructionRuntimeConfig,
   InstructionStatistics,
   InstructionStatisticsFilters,
+  InstructionSensitiveCapability,
+  InstructionSensitiveGrant,
   InstructionTranslationJob,
   InstructionTranslationRequest,
   InstructionRuleSet,
@@ -90,6 +92,11 @@ export const instructionAuditAPI = {
     return data
   },
 
+  async changeHashScope(id: number, ruleSetId: number, action: 'promote' | 'disable' | 'revoke'): Promise<InstructionHashEntry> {
+    const { data } = await apiClient.put<InstructionHashEntry>(`${basePath}/hashes/${id}/scopes/${ruleSetId}`, { action })
+    return data
+  },
+
   async revealHashRaw(id: number): Promise<InstructionHashRawReview> {
     const { data } = await apiClient.get<InstructionHashRawReview>(`${basePath}/hashes/${id}/raw`)
     return data
@@ -106,6 +113,26 @@ export const instructionAuditAPI = {
 
   async getTranslation(id: number): Promise<InstructionTranslationJob> {
     const { data } = await apiClient.get<InstructionTranslationJob>(`${basePath}/translations/${id}`)
+    return data
+  },
+
+  async getSensitiveAccessCapability(): Promise<InstructionSensitiveCapability> {
+    const { data } = await apiClient.get<InstructionSensitiveCapability>(`${basePath}/sensitive-access/me`)
+    return data
+  },
+
+  async listSensitiveAccessGrants(): Promise<InstructionSensitiveGrant[]> {
+    const { data } = await apiClient.get<InstructionSensitiveGrant[]>(`${basePath}/sensitive-access/grants`)
+    return data
+  },
+
+  async grantSensitiveAccess(userId: number, reason: string): Promise<InstructionSensitiveGrant> {
+    const { data } = await apiClient.put<InstructionSensitiveGrant>(`${basePath}/sensitive-access/grants/${userId}`, { reason })
+    return data
+  },
+
+  async revokeSensitiveAccess(userId: number, reason: string): Promise<InstructionSensitiveGrant> {
+    const { data } = await apiClient.post<InstructionSensitiveGrant>(`${basePath}/sensitive-access/grants/${userId}/revoke`, { reason })
     return data
   },
 

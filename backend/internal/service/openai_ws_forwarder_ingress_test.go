@@ -25,6 +25,7 @@ func TestOpenAIWSInstructionCandidateFrameUsesFirstAndLastType(t *testing.T) {
 		{name: "non response frame", payload: `{"type":"response.cancel"}`},
 		{name: "duplicate hides create last", payload: `{"type":"response.cancel","type":"response.create"}`, want: true},
 		{name: "duplicate hides create first", payload: `{"type":"response.create","type":"response.cancel"}`, want: true},
+		{name: "malformed frame is audited before close", payload: `{"model":"gpt-5.1"`, want: true},
 		{name: "text value is irrelevant", payload: `{"type":"response.cancel","note":"response.create"}`},
 	}
 	for _, test := range tests {

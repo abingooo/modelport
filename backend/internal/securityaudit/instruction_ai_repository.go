@@ -9,10 +9,15 @@ import (
 	"strings"
 	"time"
 
+	modelportservice "github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 )
 
-var errInstructionAIAutomaticHashUnavailable = errors.New("instruction audit automatic hash is unavailable")
+var (
+	errInstructionAIAutomaticHashUnavailable = errors.New("instruction audit automatic hash is unavailable")
+	errInstructionAIScopeNotManaged          = errors.New("instruction audit scope is not system managed")
+	errInstructionAIScopeRevoked             = errors.New("instruction audit scope is revoked")
+)
 
 type instructionAIReviewAttempt struct {
 	ReviewedSource string
@@ -27,16 +32,17 @@ type instructionAIReviewAttempt struct {
 }
 
 type instructionAIOutcomeCommit struct {
-	Request           Request
-	Decision          *InstructionDecision
-	EvidenceStatus    string
-	EvidenceExpiresAt *time.Time
-	Evidence          []InstructionEvidence
-	Attempts          []instructionAIReviewAttempt
-	FinalAttempt      int
-	ApprovedRaw       *instructionHashRawStorage
-	ApprovedField     InstructionFieldResult
-	AutomaticUntil    time.Time
+	Request             Request
+	Decision            *InstructionDecision
+	EvidenceStatus      string
+	EvidenceExpiresAt   *time.Time
+	Evidence            []InstructionEvidence
+	Attempts            []instructionAIReviewAttempt
+	FinalAttempt        int
+	ApprovedRaw         *instructionHashRawStorage
+	ApprovedField       InstructionFieldResult
+	AutomaticUntil      time.Time
+	NotificationIntents []modelportservice.SecurityNotificationAudienceInput
 }
 
 type instructionAIOutcomeCommitResult struct {
@@ -81,7 +87,9 @@ func (r *InstructionRepository) CommitAIOutcome(
 		if err != nil {
 			return nil, err
 		}
-		systemRuleSetID, err = ensureInstructionAIScopeTx(ctx, tx, groupID, clientType, automaticHashID)
+		systemRuleSetID, err = ensureInstructionAIScopeTx(
+			ctx, tx, groupID, clientType, automaticHashID, commit.AutomaticUntil,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -130,6 +138,9 @@ func (r *InstructionRepository) CommitAIOutcome(
 		return nil, err
 	}
 	result.EventID = eventID
+	if err = insertInstructionNotificationIntentsTx(ctx, tx, eventID, commit.NotificationIntents); err != nil {
+		return nil, err
+	}
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE instruction_audit_ai_reviews SET event_id = $1 WHERE id = ANY($2)`,
 		eventID, pq.Array(reviewIDs)); err != nil {
@@ -178,58 +189,31 @@ func upsertInstructionAutomaticHashTx(
 	}
 	var hashID int64
 	err := tx.QueryRowContext(ctx, `
-		INSERT INTO instruction_audit_hashes
-			(digest, name, note, observed_source, client_name, status, valid_from, valid_until)
-		VALUES ($1, $2, 'AI 二审自动生成的精确范围临时规则', $3, 'ai_review', 'active', NOW(), $4)
-		ON CONFLICT (digest) DO NOTHING
-		RETURNING id`, digest, "AI 临时规则 "+digest[:12], fieldName, validUntil).Scan(&hashID)
+			INSERT INTO instruction_audit_hashes
+				(digest, name, note, observed_source, client_name, status, valid_from, valid_until)
+			VALUES ($1, $2, 'AI 二审自动生成的精确范围临时规则', $3, 'ai_review', 'active', NOW(), NULL)
+			ON CONFLICT (digest) DO NOTHING
+			RETURNING id`, digest, "AI 临时规则 "+digest[:12], fieldName).Scan(&hashID)
 	created := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
 	if !created {
 		var status string
-		var existingUntil sql.NullTime
-		var aiGenerated, ordinaryRuleReference bool
+		var existingFrom, existingUntil sql.NullTime
 		if err = tx.QueryRowContext(ctx, `
-			SELECT h.id, h.status, h.valid_until,
-				EXISTS (
-					SELECT 1 FROM instruction_audit_hash_sources hs
-					WHERE hs.hash_id = h.id AND hs.source_type = 'ai_review'
-				),
-				EXISTS (
-					SELECT 1
-					FROM instruction_audit_rule_set_hashes rsh
-					JOIN instruction_audit_rule_sets rs ON rs.id = rsh.rule_set_id
-					WHERE rsh.hash_id = h.id AND rs.system_managed = FALSE
-				)
-			FROM instruction_audit_hashes h
-			WHERE h.digest = $1 FOR UPDATE`, digest).Scan(
-			&hashID, &status, &existingUntil, &aiGenerated, &ordinaryRuleReference,
+				SELECT h.id, h.status, h.valid_from, h.valid_until
+				FROM instruction_audit_hashes h
+				WHERE h.digest = $1 FOR UPDATE`, digest).Scan(
+			&hashID, &status, &existingFrom, &existingUntil,
 		); err != nil {
 			return 0, err
 		}
 		status = strings.TrimSpace(status)
-		if !aiGenerated || ordinaryRuleReference || !existingUntil.Valid {
+		now := time.Now().UTC()
+		if status != "active" || (existingFrom.Valid && now.Before(existingFrom.Time)) ||
+			(existingUntil.Valid && !now.Before(existingUntil.Time)) {
 			return 0, errInstructionAIAutomaticHashUnavailable
-		}
-		if status == "disabled" || status == "revoked" {
-			return 0, errInstructionAIAutomaticHashUnavailable
-		}
-		if status != "active" || (existingUntil.Valid && !time.Now().UTC().Before(existingUntil.Time)) {
-			if _, err = tx.ExecContext(ctx, `
-				UPDATE instruction_audit_hashes
-				SET status = 'active', valid_from = NOW(), valid_until = $2, updated_at = NOW()
-				WHERE id = $1`, hashID, validUntil); err != nil {
-				return 0, err
-			}
-		} else if aiGenerated && !ordinaryRuleReference && existingUntil.Valid && existingUntil.Time.Before(validUntil) {
-			if _, err = tx.ExecContext(ctx, `
-					UPDATE instruction_audit_hashes
-					SET valid_until = $2, updated_at = NOW()
-					WHERE id = $1`, hashID, validUntil); err != nil {
-				return 0, err
-			}
 		}
 	}
 	if _, err = tx.ExecContext(ctx, `
@@ -261,33 +245,88 @@ func ensureInstructionAIScopeTx(
 	groupID int64,
 	clientType string,
 	hashID int64,
+	validUntil time.Time,
 ) (int64, error) {
 	systemKey := fmt.Sprintf("ai:%d:%s", groupID, clientType)
 	name := fmt.Sprintf("AI 临时规则 G%d %s", groupID, clientType)
 	var ruleSetID int64
 	err := tx.QueryRowContext(ctx, `
-		INSERT INTO instruction_audit_rule_sets
-			(name, description, enabled, system_managed, system_key)
-		VALUES ($1, 'AI 二审自动维护的精确分组与客户端范围', TRUE, TRUE, $2)
-		ON CONFLICT (system_key) WHERE system_managed = TRUE AND system_key <> ''
-		DO UPDATE SET enabled = TRUE, updated_at = NOW(), version = instruction_audit_rule_sets.version + 1
-		RETURNING id`, name, systemKey).Scan(&ruleSetID)
+			INSERT INTO instruction_audit_rule_sets
+				(name, description, enabled, system_managed, system_key)
+			VALUES ($1, 'AI 二审自动维护的精确分组与客户端范围', TRUE, TRUE, $2)
+			ON CONFLICT (system_key) WHERE system_managed = TRUE AND system_key <> ''
+			DO NOTHING
+			RETURNING id`, name, systemKey).Scan(&ruleSetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		var enabled, systemManaged bool
+		err = tx.QueryRowContext(ctx, `
+			SELECT id, enabled, system_managed
+			FROM instruction_audit_rule_sets
+			WHERE system_key = $1 AND system_managed = TRUE
+			FOR UPDATE`, systemKey).Scan(&ruleSetID, &enabled, &systemManaged)
+		if err == nil && (!enabled || !systemManaged) {
+			return 0, errInstructionAIAutomaticHashUnavailable
+		}
+	}
 	if err != nil {
 		return 0, err
 	}
-	if _, err = tx.ExecContext(ctx, `
-		INSERT INTO instruction_audit_rule_set_hashes (rule_set_id, hash_id)
-		VALUES ($1, $2) ON CONFLICT (rule_set_id, hash_id) DO NOTHING`, ruleSetID, hashID); err != nil {
+	insertResult, err := tx.ExecContext(ctx, `
+		INSERT INTO instruction_audit_rule_set_hashes
+			(rule_set_id, hash_id, source_type, status, valid_until)
+		VALUES ($1, $2, 'ai_review', 'active', $3)
+		ON CONFLICT (rule_set_id, hash_id) DO NOTHING`, ruleSetID, hashID, validUntil)
+	if err != nil {
 		return 0, err
 	}
-	if _, err = tx.ExecContext(ctx, `
+	if inserted, rowsErr := insertResult.RowsAffected(); rowsErr != nil {
+		return 0, rowsErr
+	} else if inserted == 0 {
+		var sourceType, status string
+		var existingUntil sql.NullTime
+		if err = tx.QueryRowContext(ctx, `
+			SELECT source_type, status, valid_until
+			FROM instruction_audit_rule_set_hashes
+			WHERE rule_set_id = $1 AND hash_id = $2
+			FOR UPDATE`, ruleSetID, hashID).Scan(&sourceType, &status, &existingUntil); err != nil {
+			return 0, err
+		}
+		if status != "active" {
+			return 0, errInstructionAIAutomaticHashUnavailable
+		}
+		if sourceType == "ai_review" && (!existingUntil.Valid || existingUntil.Time.Before(validUntil)) {
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE instruction_audit_rule_set_hashes
+				SET valid_until = $3, updated_at = NOW()
+				WHERE rule_set_id = $1 AND hash_id = $2`, ruleSetID, hashID, validUntil); err != nil {
+				return 0, err
+			}
+		}
+	}
+	bindingResult, err := tx.ExecContext(ctx, `
 		INSERT INTO instruction_audit_group_bindings
 			(group_id, rule_set_id, client_types, enabled)
 		VALUES ($1, $2, $3, TRUE)
 		ON CONFLICT (group_id, rule_set_id)
-		DO UPDATE SET client_types = EXCLUDED.client_types, enabled = TRUE, updated_at = NOW()`,
-		groupID, ruleSetID, pq.Array([]string{clientType})); err != nil {
+		DO NOTHING`, groupID, ruleSetID, pq.Array([]string{clientType}))
+	if err != nil {
 		return 0, err
+	}
+	if inserted, rowsErr := bindingResult.RowsAffected(); rowsErr != nil {
+		return 0, rowsErr
+	} else if inserted == 0 {
+		var enabled bool
+		var clientTypes pq.StringArray
+		if err = tx.QueryRowContext(ctx, `
+			SELECT enabled, client_types
+			FROM instruction_audit_group_bindings
+			WHERE group_id = $1 AND rule_set_id = $2
+			FOR UPDATE`, groupID, ruleSetID).Scan(&enabled, &clientTypes); err != nil {
+			return 0, err
+		}
+		if !enabled || len(clientTypes) != 1 || strings.ToLower(strings.TrimSpace(clientTypes[0])) != clientType {
+			return 0, errInstructionAIAutomaticHashUnavailable
+		}
 	}
 	return ruleSetID, nil
 }
@@ -372,6 +411,76 @@ func (r *InstructionRepository) UpdateHashStatus(
 			 user_agent, succeeded, error_code)
 		VALUES ('ai_hash', $1, NULLIF($2, 0), $3, LEFT($4, 128), LEFT($5, 64),
 			LEFT($6, 512), TRUE, '')`, hashID, access.ActorID, access.Action,
+		access.RequestID, access.ClientIP, access.UserAgent); err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return version, nil
+}
+
+func (r *InstructionRepository) UpdateHashScope(
+	ctx context.Context,
+	hashID int64,
+	ruleSetID int64,
+	action string,
+	access InstructionSensitiveAccess,
+) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var sourceType, status string
+	var systemManaged bool
+	if err = tx.QueryRowContext(ctx, `
+		SELECT rsh.source_type, rsh.status, rs.system_managed
+		FROM instruction_audit_rule_set_hashes rsh
+		JOIN instruction_audit_rule_sets rs ON rs.id = rsh.rule_set_id
+		WHERE rsh.hash_id = $1 AND rsh.rule_set_id = $2
+		FOR UPDATE OF rsh`, hashID, ruleSetID).Scan(&sourceType, &status, &systemManaged); err != nil {
+		return 0, err
+	}
+	if !systemManaged {
+		return 0, errInstructionAIScopeNotManaged
+	}
+	if status == "revoked" && action != "revoke" {
+		return 0, errInstructionAIScopeRevoked
+	}
+	switch action {
+	case "promote":
+		_, err = tx.ExecContext(ctx, `
+			UPDATE instruction_audit_rule_set_hashes
+			SET source_type = 'manual', status = 'active', valid_until = NULL,
+				updated_by = NULLIF($3, 0), updated_at = NOW()
+			WHERE hash_id = $1 AND rule_set_id = $2`, hashID, ruleSetID, access.ActorID)
+	case "disable":
+		_, err = tx.ExecContext(ctx, `
+			UPDATE instruction_audit_rule_set_hashes
+			SET status = 'disabled', updated_by = NULLIF($3, 0), updated_at = NOW()
+			WHERE hash_id = $1 AND rule_set_id = $2`, hashID, ruleSetID, access.ActorID)
+	case "revoke":
+		_, err = tx.ExecContext(ctx, `
+			UPDATE instruction_audit_rule_set_hashes
+			SET status = 'revoked', updated_by = NULLIF($3, 0), updated_at = NOW()
+			WHERE hash_id = $1 AND rule_set_id = $2`, hashID, ruleSetID, access.ActorID)
+	default:
+		return 0, errors.New("instruction audit scope action is invalid")
+	}
+	if err != nil {
+		return 0, err
+	}
+	version, err := bumpInstructionConfigTx(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	if _, err = tx.ExecContext(ctx, `
+		INSERT INTO instruction_audit_sensitive_access_logs
+			(resource_type, resource_id, scope_rule_set_id, actor_id, action, request_id,
+			 client_ip, user_agent, succeeded, error_code)
+		VALUES ('ai_scope', $1, $2, NULLIF($3, 0), $4, LEFT($5, 128), LEFT($6, 64),
+			LEFT($7, 512), TRUE, '')`, hashID, ruleSetID, access.ActorID, action,
 		access.RequestID, access.ClientIP, access.UserAgent); err != nil {
 		return 0, err
 	}

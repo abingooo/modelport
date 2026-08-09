@@ -209,8 +209,12 @@ func validateInstructionRuntimeConfig(config InstructionRuntimeConfig) error {
 	if config.ParseTimeoutMS < 50 || config.ParseTimeoutMS > 5000 {
 		return infraerrors.BadRequest("instruction_audit_invalid_parse_timeout", "解析超时必须在 50-5000 ms 之间")
 	}
-	if config.MaxInflightBodyBytes < config.MaxBodyBytes || config.MaxInflightBodyBytes > 2<<30 {
-		return infraerrors.BadRequest("instruction_audit_invalid_inflight_limit", "并发解析内存上限无效")
+	minimumInflightBytes := config.MaxBodyBytes * InstructionBodyWorkingSetMultiplier
+	if config.MaxInflightBodyBytes < minimumInflightBytes || config.MaxInflightBodyBytes > 2<<30 {
+		return infraerrors.BadRequest(
+			"instruction_audit_invalid_inflight_limit",
+			"并发请求体内存上限不能低于请求体上限的 3 倍",
+		)
 	}
 	if config.PassEventRetentionDays < 1 || config.PassEventRetentionDays > 90 ||
 		config.AggregateRetentionDays < 30 || config.AggregateRetentionDays > 3650 ||

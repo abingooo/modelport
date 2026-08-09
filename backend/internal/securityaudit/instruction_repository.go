@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	modelportservice "github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 )
 
@@ -23,6 +24,8 @@ type InstructionRepository struct{ db *sql.DB }
 var errInstructionAuditAllowedUserNotFound = errors.New("instruction audit allowed user not found")
 var errInstructionAuditConfigConflict = errors.New("instruction audit config version conflict")
 var errInstructionAuditHashRevoked = errors.New("instruction audit hash is revoked")
+var errInstructionAuditSystemRuleSetManaged = errors.New("instruction audit system rule set requires lifecycle API")
+var errInstructionAuditHashRawRequired = errors.New("instruction audit manual and AI hashes require encrypted raw content")
 
 func NewInstructionRepository(db *sql.DB) *InstructionRepository {
 	return &InstructionRepository{db: db}
@@ -60,10 +63,11 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 					WHERE rsu.rule_set_id = rs.id
 					ORDER BY rsu.user_id
 				),
-				h.digest, h.valid_from, h.valid_until
+				h.digest, h.valid_from, h.valid_until, rsh.valid_until
 			FROM instruction_audit_group_bindings b
 			JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id
-			LEFT JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id AND rs.enabled = TRUE
+			LEFT JOIN instruction_audit_rule_set_hashes rsh ON rsh.rule_set_id = rs.id
+				AND rs.enabled = TRUE AND rsh.status = 'active'
 			LEFT JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 				AND h.status = 'active'
 			WHERE b.enabled = TRUE
@@ -84,10 +88,10 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 		var allowEmptyFields bool
 		var allowedUserIDs pq.Int64Array
 		var digest sql.NullString
-		var validFrom, validUntil sql.NullTime
+		var validFrom, validUntil, scopeValidUntil sql.NullTime
 		if err := rows.Scan(
 			&groupID, &clientTypes, &ruleSetID, &ruleSetEnabled, &allowEmptyFields,
-			&allowedUserIDs, &digest, &validFrom, &validUntil,
+			&allowedUserIDs, &digest, &validFrom, &validUntil, &scopeValidUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -131,6 +135,9 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 			if validUntil.Valid {
 				valueHash.ValidUntil = validUntil.Time.UTC()
 			}
+			if scopeValidUntil.Valid && (valueHash.ValidUntil.IsZero() || scopeValidUntil.Time.Before(valueHash.ValidUntil)) {
+				valueHash.ValidUntil = scopeValidUntil.Time.UTC()
+			}
 			policyHash = &valueHash
 		}
 		for _, acc := range targets {
@@ -144,7 +151,11 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 				}
 			}
 			if policyHash != nil {
-				acc.hashes[policyHash.Digest] = *policyHash
+				if existing, ok := acc.hashes[policyHash.Digest]; ok {
+					acc.hashes[policyHash.Digest] = mergeInstructionPolicyHashValidity(existing, *policyHash)
+				} else {
+					acc.hashes[policyHash.Digest] = *policyHash
+				}
 			}
 		}
 	}
@@ -180,6 +191,21 @@ func (r *InstructionRepository) LoadSnapshot(ctx context.Context) (*instructionS
 		ClientPolicies: clientPolicies, ReasonPolicies: reasonPolicies,
 		Runtime: runtimeConfig, LoadedAt: time.Now().UTC(),
 	}, nil
+}
+
+func mergeInstructionPolicyHashValidity(left, right instructionPolicyHash) instructionPolicyHash {
+	result := left
+	if result.ValidFrom.IsZero() || right.ValidFrom.IsZero() {
+		result.ValidFrom = time.Time{}
+	} else if right.ValidFrom.Before(result.ValidFrom) {
+		result.ValidFrom = right.ValidFrom
+	}
+	if result.ValidUntil.IsZero() || right.ValidUntil.IsZero() {
+		result.ValidUntil = time.Time{}
+	} else if right.ValidUntil.After(result.ValidUntil) {
+		result.ValidUntil = right.ValidUntil
+	}
+	return result
 }
 
 func loadInstructionReasonPolicies(ctx context.Context, queryer interface {
@@ -471,9 +497,11 @@ func (r *InstructionRepository) SetEnabled(ctx context.Context, enabled bool) (r
 						FROM instruction_audit_rule_set_hashes rsh
 						JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 						WHERE rsh.rule_set_id = rs.id
+							AND rsh.status = 'active'
 							AND h.status = 'active'
 							AND (h.valid_from IS NULL OR h.valid_from <= NOW())
 							AND (h.valid_until IS NULL OR h.valid_until > NOW())
+							AND (rsh.valid_until IS NULL OR rsh.valid_until > NOW())
 					)
 				)`).Scan(&effectiveGroups)
 		if err != nil {
@@ -648,6 +676,55 @@ func (r *InstructionRepository) ListHashSources(ctx context.Context, hashID int6
 	return items, rows.Err()
 }
 
+func (r *InstructionRepository) ListHashScopes(ctx context.Context, hashID int64) ([]InstructionHashScope, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT rs.id, rs.name, rs.enabled, rs.system_managed,
+			rsh.source_type, rsh.status, rsh.valid_until, rsh.updated_by,
+			rsh.created_at, rsh.updated_at,
+			b.id, b.group_id, COALESCE(g.name, ''),
+			COALESCE(b.client_types, ARRAY[]::TEXT[]), COALESCE(b.enabled, FALSE)
+		FROM instruction_audit_rule_set_hashes rsh
+		JOIN instruction_audit_rule_sets rs ON rs.id = rsh.rule_set_id
+		LEFT JOIN instruction_audit_group_bindings b ON b.rule_set_id = rs.id
+		LEFT JOIN groups g ON g.id = b.group_id
+		WHERE rsh.hash_id = $1
+		ORDER BY rs.system_managed DESC, rs.name, rs.id, g.name, b.id`, hashID)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	items := make([]InstructionHashScope, 0)
+	for rows.Next() {
+		var item InstructionHashScope
+		var validUntil sql.NullTime
+		var bindingID, groupID, updatedBy sql.NullInt64
+		var clientTypes pq.StringArray
+		if err := rows.Scan(
+			&item.RuleSetID, &item.RuleSetName, &item.RuleSetEnabled, &item.SystemManaged,
+			&item.SourceType, &item.Status, &validUntil, &updatedBy, &item.CreatedAt, &item.UpdatedAt,
+			&bindingID, &groupID, &item.GroupName, &clientTypes, &item.BindingEnabled,
+		); err != nil {
+			return nil, err
+		}
+		if validUntil.Valid {
+			value := validUntil.Time.UTC()
+			item.ValidUntil = &value
+		}
+		if bindingID.Valid {
+			item.BindingID = &bindingID.Int64
+		}
+		if groupID.Valid {
+			item.GroupID = &groupID.Int64
+		}
+		if updatedBy.Valid {
+			item.UpdatedBy = &updatedBy.Int64
+		}
+		item.ClientTypes = append([]string(nil), clientTypes...)
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *InstructionRepository) GetHashRaw(ctx context.Context, hashID int64) (*instructionHashRawStorage, error) {
 	var item instructionHashRawStorage
 	var expiresAt sql.NullTime
@@ -671,7 +748,7 @@ func (r *InstructionRepository) GetHashRaw(ctx context.Context, hashID int64) (*
 func (r *InstructionRepository) ExpireHashRawContents(ctx context.Context) (int64, error) {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE instruction_audit_hash_raw_contents
-		SET ciphertext = NULL, raw_content_status = 'expired', encryption_key_version = '', updated_at = NOW()
+		SET ciphertext = NULL, raw_content_status = 'raw_content_unavailable', encryption_key_version = '', updated_at = NOW()
 		WHERE raw_content_status = 'stored' AND raw_expires_at <= NOW()`)
 	if err != nil {
 		return 0, err
@@ -680,20 +757,22 @@ func (r *InstructionRepository) ExpireHashRawContents(ctx context.Context) (int6
 }
 
 func (r *InstructionRepository) RecordSensitiveAccess(ctx context.Context, access InstructionSensitiveAccess) error {
+	grantID, authMethod, authorizationResult := instructionSensitiveAuditAuthorization(ctx)
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO instruction_audit_sensitive_access_logs
 			(resource_type, resource_id, actor_id, action, request_id, client_ip,
-			 user_agent, succeeded, error_code)
+			 user_agent, succeeded, error_code, grant_id, auth_method, authorization_result)
 		VALUES ($1, $2, NULLIF($3, 0), $4, LEFT($5, 128), LEFT($6, 64),
-			LEFT($7, 512), $8, LEFT($9, 64))`,
+			LEFT($7, 512), $8, LEFT($9, 64), $10, LEFT($11, 24), LEFT($12, 24))`,
 		access.ResourceType, access.ResourceID, access.ActorID, access.Action,
-		access.RequestID, access.ClientIP, access.UserAgent, access.Succeeded, access.ErrorCode)
+		access.RequestID, access.ClientIP, access.UserAgent, access.Succeeded, access.ErrorCode,
+		grantID, authMethod, authorizationResult)
 	return err
 }
 
 func (r *InstructionRepository) CreateHash(ctx context.Context, req CreateInstructionHashRequest, actorID int64) (*InstructionHashEntry, error) {
 	return r.CreateHashWithRaw(ctx, req, actorID, nil, InstructionHashSource{
-		SourceType: "manual", FieldName: req.ObservedSource, CreatedBy: nullableInstructionActor(actorID),
+		SourceType: "import", FieldName: req.ObservedSource, CreatedBy: nullableInstructionActor(actorID),
 	})
 }
 
@@ -704,6 +783,13 @@ func (r *InstructionRepository) CreateHashWithRaw(
 	raw *instructionHashRawStorage,
 	source InstructionHashSource,
 ) (*InstructionHashEntry, error) {
+	source.SourceType = strings.TrimSpace(source.SourceType)
+	if source.SourceType == "" {
+		source.SourceType = "manual"
+	}
+	if (source.SourceType == "manual" || source.SourceType == "ai_review") && raw == nil {
+		return nil, errInstructionAuditHashRawRequired
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -736,9 +822,6 @@ func (r *InstructionRepository) CreateHashWithRaw(
 			raw.Normalization, raw.KeyVersion, raw.ExpiresAt); err != nil {
 			return nil, err
 		}
-	}
-	if strings.TrimSpace(source.SourceType) == "" {
-		source.SourceType = "manual"
 	}
 	if strings.TrimSpace(source.FieldName) == "" {
 		source.FieldName = req.ObservedSource
@@ -855,7 +938,8 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 		return items, nil
 	}
 	hashRows, err := r.db.QueryContext(ctx, `
-		SELECT rsh.rule_set_id, `+instructionHashColumnsAliased+`
+			SELECT rsh.rule_set_id, `+instructionHashColumnsAliased+`,
+				rsh.source_type, rsh.status, rsh.valid_until
 		FROM instruction_audit_rule_set_hashes rsh
 		JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 		LEFT JOIN instruction_audit_hash_raw_contents hr ON hr.hash_id = h.id
@@ -866,7 +950,7 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 	for hashRows.Next() {
 		var ruleSetID int64
 		var hash InstructionHashEntry
-		var rawExpiresAt, validFrom, validUntil sql.NullTime
+		var rawExpiresAt, validFrom, validUntil, scopeValidUntil sql.NullTime
 		var createdBy sql.NullInt64
 		if err := hashRows.Scan(
 			&ruleSetID, &hash.ID, &hash.Digest, &hash.Name, &hash.Note, &hash.ObservedSource,
@@ -874,6 +958,7 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 			&hash.HashAlgorithm, &hash.Normalization, &hash.FieldName, &hash.RawStatus,
 			&hash.ContentBytes, &hash.KeyVersion, &rawExpiresAt, &validFrom, &validUntil,
 			&createdBy, &hash.CreatedAt, &hash.UpdatedAt,
+			&hash.ScopeSource, &hash.ScopeStatus, &scopeValidUntil,
 		); err != nil {
 			return nil, err
 		}
@@ -885,6 +970,10 @@ func (r *InstructionRepository) ListRuleSets(ctx context.Context) ([]Instruction
 		}
 		if validUntil.Valid {
 			hash.ValidUntil = &validUntil.Time
+		}
+		if scopeValidUntil.Valid {
+			value := scopeValidUntil.Time.UTC()
+			hash.ScopeValidUntil = &value
 		}
 		if createdBy.Valid {
 			hash.CreatedBy = &createdBy.Int64
@@ -938,6 +1027,9 @@ func (r *InstructionRepository) SaveRuleSet(ctx context.Context, id int64, req S
 				VALUES ($1, $2, $3, $4, NULLIF($5, 0), NULLIF($5, 0)) RETURNING id`,
 			req.Name, req.Description, req.Enabled, req.AllowEmptyFields, actorID).Scan(&savedID)
 	} else {
+		if err = lockOrdinaryInstructionRuleSet(ctx, tx, id); err != nil {
+			return nil, err
+		}
 		err = tx.QueryRowContext(ctx, `
 				UPDATE instruction_audit_rule_sets
 				SET name = $2, description = $3, enabled = $4, allow_empty_fields = $5,
@@ -1002,8 +1094,7 @@ func (r *InstructionRepository) DeleteRuleSet(ctx context.Context, id int64) (ve
 		return 0, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var lockedID int64
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM instruction_audit_rule_sets WHERE id = $1 FOR UPDATE`, id).Scan(&lockedID); err != nil {
+	if err = lockOrdinaryInstructionRuleSet(ctx, tx, id); err != nil {
 		return 0, 0, err
 	}
 	if err = tx.QueryRowContext(ctx, `
@@ -1027,6 +1118,18 @@ func (r *InstructionRepository) DeleteRuleSet(ctx context.Context, id int64) (ve
 	return version, 0, nil
 }
 
+func lockOrdinaryInstructionRuleSet(ctx context.Context, tx *sql.Tx, id int64) error {
+	var systemManaged bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT system_managed FROM instruction_audit_rule_sets WHERE id = $1 FOR UPDATE`, id).Scan(&systemManaged); err != nil {
+		return err
+	}
+	if systemManaged {
+		return errInstructionAuditSystemRuleSetManaged
+	}
+	return nil
+}
+
 func (r *InstructionRepository) AddHashesToRuleSet(
 	ctx context.Context,
 	ruleSetID int64,
@@ -1038,7 +1141,7 @@ func (r *InstructionRepository) AddHashesToRuleSet(
 		materials = append(materials, instructionHashMaterial{
 			Request: item,
 			Source: InstructionHashSource{
-				SourceType: "manual", FieldName: item.ObservedSource,
+				SourceType: "import", FieldName: item.ObservedSource,
 				CreatedBy: nullableInstructionActor(actorID),
 			},
 		})
@@ -1052,13 +1155,21 @@ func (r *InstructionRepository) AddHashMaterialsToRuleSet(
 	materials []instructionHashMaterial,
 	actorID int64,
 ) (*AddInstructionEventToRuleSetResult, error) {
+	for _, material := range materials {
+		sourceType := strings.TrimSpace(material.Source.SourceType)
+		if sourceType == "" {
+			sourceType = "manual"
+		}
+		if (sourceType == "manual" || sourceType == "ai_review") && material.Raw == nil {
+			return nil, errInstructionAuditHashRawRequired
+		}
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var lockedRuleSetID int64
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM instruction_audit_rule_sets WHERE id = $1 FOR UPDATE`, ruleSetID).Scan(&lockedRuleSetID); err != nil {
+	if err = lockOrdinaryInstructionRuleSet(ctx, tx, ruleSetID); err != nil {
 		return nil, err
 	}
 	result := &AddInstructionEventToRuleSetResult{RuleSetID: ruleSetID, HashIDs: make([]int64, 0, len(materials))}
@@ -1230,7 +1341,7 @@ func insertInstructionHashSourceTx(
 func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]InstructionGroupBinding, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT b.id, b.group_id, g.name, g.platform, g.status,
-			b.rule_set_id, rs.name, b.client_types, b.enabled,
+			b.rule_set_id, rs.name, rs.system_managed, b.client_types, b.enabled,
 			(rs.enabled AND (
 				rs.allow_empty_fields
 				OR EXISTS (
@@ -1242,9 +1353,11 @@ func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]Instru
 					FROM instruction_audit_rule_set_hashes rsh
 					JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 					WHERE rsh.rule_set_id = rs.id
+						AND rsh.status = 'active'
 						AND h.status = 'active'
 						AND (h.valid_from IS NULL OR h.valid_from <= NOW())
 						AND (h.valid_until IS NULL OR h.valid_until > NOW())
+						AND (rsh.valid_until IS NULL OR rsh.valid_until > NOW())
 				)
 			)) AS effective,
 			b.created_at, b.updated_at
@@ -1261,7 +1374,7 @@ func (r *InstructionRepository) ListGroupBindings(ctx context.Context) ([]Instru
 		var item InstructionGroupBinding
 		var clientTypes pq.StringArray
 		if err := rows.Scan(&item.ID, &item.GroupID, &item.GroupName, &item.Platform, &item.GroupStatus,
-			&item.RuleSetID, &item.RuleSetName, &clientTypes, &item.Enabled, &item.Effective, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.RuleSetID, &item.RuleSetName, &item.SystemManaged, &clientTypes, &item.Enabled, &item.Effective, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		item.ClientTypes = append([]string(nil), clientTypes...)
@@ -1304,6 +1417,9 @@ func (r *InstructionRepository) SaveGroupBindings(ctx context.Context, req SaveI
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err = lockOrdinaryInstructionRuleSet(ctx, tx, req.RuleSetID); err != nil {
+		return nil, err
+	}
 	var clientTypes any
 	if req.ClientTypes != nil {
 		clientTypes = pq.Array(req.ClientTypes)
@@ -1353,6 +1469,18 @@ func (r *InstructionRepository) DeleteGroupBinding(ctx context.Context, id int64
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	var systemManaged bool
+	if err = tx.QueryRowContext(ctx, `
+		SELECT rs.system_managed
+		FROM instruction_audit_group_bindings b
+		JOIN instruction_audit_rule_sets rs ON rs.id = b.rule_set_id
+		WHERE b.id = $1
+		FOR UPDATE OF b, rs`, id).Scan(&systemManaged); err != nil {
+		return err
+	}
+	if systemManaged {
+		return errInstructionAuditSystemRuleSetManaged
+	}
 	result, err := tx.ExecContext(ctx, `DELETE FROM instruction_audit_group_bindings WHERE id = $1`, id)
 	if err != nil {
 		return err
@@ -1735,6 +1863,20 @@ func (r *InstructionRepository) RecordEvent(
 	evidenceExpiresAt *time.Time,
 	evidence []InstructionEvidence,
 ) (int64, error) {
+	return r.RecordEventWithNotifications(
+		ctx, req, decision, evidenceStatus, evidenceExpiresAt, evidence, nil,
+	)
+}
+
+func (r *InstructionRepository) RecordEventWithNotifications(
+	ctx context.Context,
+	req Request,
+	decision *InstructionDecision,
+	evidenceStatus string,
+	evidenceExpiresAt *time.Time,
+	evidence []InstructionEvidence,
+	notifications []modelportservice.SecurityNotificationAudienceInput,
+) (int64, error) {
 	if decision == nil {
 		return 0, errors.New("instruction audit decision required")
 	}
@@ -1749,10 +1891,73 @@ func (r *InstructionRepository) RecordEvent(
 	if err != nil {
 		return 0, err
 	}
+	if err = insertInstructionNotificationIntentsTx(ctx, tx, eventID, notifications); err != nil {
+		return 0, err
+	}
 	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
 	return eventID, nil
+}
+
+func insertInstructionNotificationIntentsTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	eventID int64,
+	inputs []modelportservice.SecurityNotificationAudienceInput,
+) error {
+	for _, input := range inputs {
+		variables := make(map[string]string, len(input.Variables)+1)
+		for key, value := range input.Variables {
+			variables[key] = value
+		}
+		variables["event_id"] = strconv.FormatInt(eventID, 10)
+		encoded, err := json.Marshal(variables)
+		if err != nil {
+			return fmt.Errorf("marshal instruction notification variables: %w", err)
+		}
+		status := strings.TrimSpace(input.Status)
+		if status == "" {
+			status = "pending"
+		}
+		var dedupKey any = strings.TrimSpace(input.DedupKey)
+		if len(input.Recipients) == 0 && status == "pending" {
+			status = "no_recipient"
+		}
+		if status != "pending" || dedupKey == "" {
+			dedupKey = nil
+		}
+		recipients := input.Recipients
+		if recipients == nil {
+			recipients = []string{}
+		}
+		result, err := tx.ExecContext(ctx, `
+			INSERT INTO security_notification_outbox
+				(source_type, source_id, audience, user_id, recipients, template_event,
+				 variables, dedup_key, status, last_error)
+			VALUES ('instruction_audit', $1, $2, NULLIF($3, 0), $4, $5, $6, $7, $8, LEFT($9, 512))
+			ON CONFLICT DO NOTHING`, eventID, input.Audience, input.UserID,
+			pq.Array(recipients), input.TemplateEvent, encoded, dedupKey, status, input.LastError)
+		if err != nil {
+			return err
+		}
+		inserted, err := result.RowsAffected()
+		if err != nil || inserted > 0 || status != "pending" {
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err = tx.ExecContext(ctx, `
+			INSERT INTO security_notification_outbox
+				(source_type, source_id, audience, user_id, recipients, template_event, variables, status)
+			VALUES ('instruction_audit', $1, $2, NULLIF($3, 0), $4, $5, $6, 'suppressed')
+			ON CONFLICT (source_type, source_id, audience) DO NOTHING`, eventID,
+			input.Audience, input.UserID, pq.Array(recipients), input.TemplateEvent, encoded); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func recordInstructionEventTx(
@@ -1898,12 +2103,16 @@ func (r *InstructionRepository) ListEvidence(ctx context.Context, eventID int64)
 }
 
 func (r *InstructionRepository) RecordEvidenceAccess(ctx context.Context, eventID int64, access InstructionEvidenceAccess) error {
+	grantID, authMethod, authorizationResult := instructionSensitiveAuditAuthorization(ctx)
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO instruction_audit_evidence_access_logs
-			(event_id, actor_id, action, source, request_id, client_ip, user_agent, succeeded, error_code)
-		VALUES ($1, NULLIF($2, 0), $3, LEFT($4, 48), LEFT($5, 128), LEFT($6, 64), LEFT($7, 512), $8, LEFT($9, 64))`,
+			(event_id, actor_id, action, source, request_id, client_ip, user_agent, succeeded, error_code,
+			 grant_id, auth_method, authorization_result)
+		VALUES ($1, NULLIF($2, 0), $3, LEFT($4, 48), LEFT($5, 128), LEFT($6, 64), LEFT($7, 512), $8,
+			LEFT($9, 64), $10, LEFT($11, 24), LEFT($12, 24))`,
 		eventID, access.ActorID, access.Action, access.Source, access.RequestID,
-		access.ClientIP, access.UserAgent, access.Succeeded, access.ErrorCode)
+		access.ClientIP, access.UserAgent, access.Succeeded, access.ErrorCode,
+		grantID, authMethod, authorizationResult)
 	return err
 }
 
@@ -1968,9 +2177,11 @@ func (r *InstructionRepository) OverviewCounts(ctx context.Context) (hashes, act
 						FROM instruction_audit_rule_set_hashes rsh
 						JOIN instruction_audit_hashes h ON h.id = rsh.hash_id
 						WHERE rsh.rule_set_id = rs.id
+							AND rsh.status = 'active'
 							AND h.status = 'active'
 							AND (h.valid_from IS NULL OR h.valid_from <= NOW())
-							AND (h.valid_until IS NULL OR h.valid_until > NOW())
+								AND (h.valid_until IS NULL OR h.valid_until > NOW())
+								AND (rsh.valid_until IS NULL OR rsh.valid_until > NOW())
 					)
 				)),
 			(SELECT COUNT(*) FROM security_notification_outbox

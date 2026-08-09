@@ -9,6 +9,11 @@ import (
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 )
 
+const (
+	defaultGatewayRequestBodyBytes      int64 = 64 << 20
+	requestBodyWorkingSetBufferEstimate int64 = 2
+)
+
 func extractMaxBytesError(err error) (*http.MaxBytesError, bool) {
 	var maxErr *http.MaxBytesError
 	if errors.As(err, &maxErr) {
@@ -35,20 +40,46 @@ func readLenientJSONRequestBodyWithPrealloc(req *http.Request, cfg *config.Confi
 }
 
 func readLenientJSONRequestBodyWithAuditSource(req *http.Request, cfg *config.Config) ([]byte, []byte, error) {
-	decoded, err := pkghttputil.ReadRequestBodyWithPreallocLimit(req, gatewayMaxBodySize(cfg))
+	body, auditSource, _, err := readLenientJSONRequestBodyWithAuditSourceAndBudget(req, cfg, nil)
+	return body, auditSource, err
+}
+
+func readLenientJSONRequestBodyWithAuditSourceAndBudget(
+	req *http.Request,
+	cfg *config.Config,
+	budget *pkghttputil.RequestBodyMemoryBudget,
+) ([]byte, []byte, *pkghttputil.RequestBodyMemoryLease, error) {
+	maxBodyBytes := gatewayMaxBodySize(cfg)
+	return readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(req, maxBodyBytes, budget)
+}
+
+func readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(
+	req *http.Request,
+	maxBodyBytes int64,
+	budget *pkghttputil.RequestBodyMemoryBudget,
+) ([]byte, []byte, *pkghttputil.RequestBodyMemoryLease, error) {
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(maxBodyBytes, requestBodyWorkingSetBufferEstimate)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	body, err := pkghttputil.NormalizeLenientJSONRequestBody(decoded, gatewayMaxBodySize(cfg))
+	decoded, lease, err := pkghttputil.ReadRequestBodyWithPreallocLimitAndBudget(req, maxBodyBytes, workingSetBytes, budget)
 	if err != nil {
-		return nil, nil, err
+		if _, oversized := extractMaxBytesError(err); oversized && len(decoded) > 0 {
+			return nil, decoded, lease, err
+		}
+		return nil, nil, nil, err
 	}
-	return body, decoded, nil
+	body, err := pkghttputil.NormalizeLenientJSONRequestBody(decoded, maxBodyBytes)
+	if err != nil {
+		lease.Release()
+		return nil, nil, nil, err
+	}
+	return body, decoded, lease, nil
 }
 
 func gatewayMaxBodySize(cfg *config.Config) int64 {
-	if cfg == nil {
-		return 0
+	if cfg == nil || cfg.Gateway.MaxBodySize <= 0 {
+		return defaultGatewayRequestBodyBytes
 	}
 	return cfg.Gateway.MaxBodySize
 }

@@ -12,6 +12,49 @@ import (
 
 const instructionOutcomeAggregateShardSize int64 = 4096
 
+type InstructionOperationalCounters struct {
+	PersistFailures  int64
+	StatisticsLosses int64
+}
+
+func (r *InstructionRepository) AddInstructionOperationalCounters(
+	ctx context.Context,
+	persistFailures int64,
+	statisticsLosses int64,
+) error {
+	if r == nil || r.db == nil {
+		return errors.New("instruction audit repository unavailable")
+	}
+	if persistFailures < 0 || statisticsLosses < 0 {
+		return errors.New("instruction audit operational counter increment is invalid")
+	}
+	if persistFailures == 0 && statisticsLosses == 0 {
+		return nil
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO instruction_audit_operational_counters
+			(id, persist_failure_count, statistics_loss_count)
+		VALUES (1, $1, $2)
+		ON CONFLICT (id) DO UPDATE SET
+			persist_failure_count = instruction_audit_operational_counters.persist_failure_count + EXCLUDED.persist_failure_count,
+			statistics_loss_count = instruction_audit_operational_counters.statistics_loss_count + EXCLUDED.statistics_loss_count,
+			updated_at = NOW()`, persistFailures, statisticsLosses)
+	return err
+}
+
+func (r *InstructionRepository) InstructionOperationalCounters(ctx context.Context) (InstructionOperationalCounters, error) {
+	var counters InstructionOperationalCounters
+	if r == nil || r.db == nil {
+		return counters, errors.New("instruction audit repository unavailable")
+	}
+	err := r.db.QueryRowContext(ctx, `
+		SELECT persist_failure_count, statistics_loss_count
+		FROM instruction_audit_operational_counters WHERE id = 1`).Scan(
+		&counters.PersistFailures, &counters.StatisticsLosses,
+	)
+	return counters, err
+}
+
 func (r *InstructionRepository) ArchiveExpiredPassEvents(ctx context.Context, retentionDays int, batchSize int) (int64, error) {
 	if r == nil || r.db == nil {
 		return 0, errors.New("instruction audit repository unavailable")

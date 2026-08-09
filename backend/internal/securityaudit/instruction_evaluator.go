@@ -33,27 +33,28 @@ func (s *InstructionService) parseInstructionRoot(
 	if capacity <= 0 {
 		capacity = InstructionDefaultMaxInflightBodyBytes
 	}
-	budget := s.parserBudget.Load()
-	if budget == nil || budget.capacity != capacity {
-		s.configureInstructionParserBudget(capacity)
-		budget = s.parserBudget.Load()
+	budget := s.requestBodyBudget.Load()
+	if budget == nil || budget.Capacity() != capacity {
+		s.configureInstructionRequestBodyBudget(capacity)
+		budget = s.requestBodyBudget.Load()
 	}
-	if budget == nil || budget.semaphore == nil {
+	if budget == nil {
 		return nil, errors.New("instruction audit parser budget unavailable")
 	}
 	weight := int64(len(body))
 	if weight < 1 {
 		weight = 1
 	}
-	if weight > budget.capacity {
+	if weight > budget.Capacity() {
 		return nil, errInstructionAuditBodyTooLarge
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, limits.ParseTimeout)
 	defer cancel()
-	if err := budget.semaphore.Acquire(waitCtx, weight); err != nil {
+	lease, err := budget.Acquire(waitCtx, weight)
+	if err != nil {
 		return nil, errInstructionAuditParseTimeout
 	}
-	defer budget.semaphore.Release(weight)
+	defer lease.Release()
 	return decodeStrictJSONObjectWithLimits(body, limits)
 }
 

@@ -25,6 +25,10 @@ func (s *InstructionService) GetHashDetail(ctx context.Context, hashID int64) (*
 	if err != nil {
 		return nil, err
 	}
+	item.Scopes, err = s.repository.ListHashScopes(ctx, hashID)
+	if err != nil {
+		return nil, err
+	}
 	return item, nil
 }
 
@@ -39,6 +43,9 @@ func (s *InstructionService) ListAIReviewsForEvent(ctx context.Context, eventID 
 }
 
 func (s *InstructionService) RevealHashRaw(ctx context.Context, hashID int64, access InstructionSensitiveAccess) (*InstructionHashRawReview, error) {
+	if _, _, err := s.requireInstructionSensitiveAuthorization(ctx, access.ActorID); err != nil {
+		return nil, err
+	}
 	if hashID <= 0 {
 		return nil, infraerrors.BadRequest("instruction_audit_invalid_hash_id", "哈希 ID 无效")
 	}
@@ -93,6 +100,9 @@ func (s *InstructionService) RevealHashRaw(ctx context.Context, hashID int64, ac
 }
 
 func (s *InstructionService) RecordHashRawCopy(ctx context.Context, hashID int64, access InstructionSensitiveAccess) error {
+	if _, _, err := s.requireInstructionSensitiveAuthorization(ctx, access.ActorID); err != nil {
+		return err
+	}
 	if hashID <= 0 {
 		return infraerrors.BadRequest("instruction_audit_invalid_hash_id", "哈希 ID 无效")
 	}
@@ -139,6 +149,40 @@ func (s *InstructionService) ChangeHashStatus(ctx context.Context, hashID int64,
 	version, err := s.repository.UpdateHashStatus(ctx, hashID, status, access)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, infraerrors.NotFound("instruction_audit_hash_not_found", "哈希不存在")
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.refreshAfterMutation(ctx, version)
+	return s.GetHashDetail(ctx, hashID)
+}
+
+func (s *InstructionService) ChangeHashScope(
+	ctx context.Context,
+	hashID int64,
+	ruleSetID int64,
+	action string,
+	actorID int64,
+	access InstructionSensitiveAccess,
+) (*InstructionHashEntry, error) {
+	action = strings.TrimSpace(strings.ToLower(action))
+	if action != "promote" && action != "disable" && action != "revoke" {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_scope_action", "规则作用域操作无效")
+	}
+	if hashID <= 0 || ruleSetID <= 0 {
+		return nil, infraerrors.BadRequest("instruction_audit_invalid_scope_id", "规则作用域 ID 无效")
+	}
+	access.ResourceType, access.ResourceID, access.Action = "ai_scope", hashID, action
+	access.ActorID = actorID
+	version, err := s.repository.UpdateHashScope(ctx, hashID, ruleSetID, action, access)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, infraerrors.NotFound("instruction_audit_scope_not_found", "规则作用域不存在")
+	}
+	if errors.Is(err, errInstructionAIScopeNotManaged) {
+		return nil, infraerrors.BadRequest("instruction_audit_scope_not_managed", "该作用域不支持独立 AI 生命周期操作")
+	}
+	if errors.Is(err, errInstructionAIScopeRevoked) {
+		return nil, infraerrors.Conflict("instruction_audit_scope_revoked", "已撤销的规则作用域不能重新启用")
 	}
 	if err != nil {
 		return nil, err

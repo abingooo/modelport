@@ -12,14 +12,23 @@ import (
 	"sync"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/redis/go-redis/v9"
-	"golang.org/x/sync/semaphore"
 )
 
 const (
 	instructionAIReviewPurposeHeader = "instruction-audit-review"
 	instructionAIResponseLimit       = 64 * 1024
 )
+
+func IsReservedInstructionAuditPurpose(value string) bool {
+	switch strings.TrimSpace(value) {
+	case instructionAIReviewPurposeHeader, instructionTranslationPurposeHeader, InstructionV2AIReviewPurposeHeader:
+		return true
+	default:
+		return false
+	}
+}
 
 var (
 	errInstructionAIUnavailable = errors.New("instruction audit AI unavailable")
@@ -50,35 +59,45 @@ type OpenAIInstructionReviewer struct {
 }
 
 type instructionAIConcurrencyBudget struct {
-	capacity  int64
-	semaphore *semaphore.Weighted
+	budget *pkghttputil.RequestBodyMemoryBudget
 }
 
 func (s *InstructionService) configureInstructionAIBudget(capacity int) {
 	if capacity < 1 {
 		capacity = 8
 	}
-	if current := s.aiBudget.Load(); current != nil && current.capacity == int64(capacity) {
-		return
+	for {
+		current := s.aiBudget.Load()
+		if current != nil {
+			current.budget.SetCapacity(int64(capacity))
+			return
+		}
+		candidate := &instructionAIConcurrencyBudget{
+			budget: pkghttputil.NewRequestBodyMemoryBudget(int64(capacity)),
+		}
+		if s.aiBudget.CompareAndSwap(nil, candidate) {
+			return
+		}
 	}
-	s.aiBudget.Store(&instructionAIConcurrencyBudget{
-		capacity: int64(capacity), semaphore: semaphore.NewWeighted(int64(capacity)),
-	})
 }
 
 func (s *InstructionService) acquireInstructionAI(ctx context.Context, capacity int) (func(), error) {
 	if s == nil {
 		return nil, errInstructionAIUnavailable
 	}
-	s.configureInstructionAIBudget(capacity)
 	budget := s.aiBudget.Load()
-	if budget == nil || budget.semaphore == nil {
+	if budget == nil {
+		s.configureInstructionAIBudget(capacity)
+		budget = s.aiBudget.Load()
+	}
+	if budget == nil || budget.budget == nil {
 		return nil, errInstructionAIUnavailable
 	}
-	if err := budget.semaphore.Acquire(ctx, 1); err != nil {
+	lease, err := budget.budget.Acquire(ctx, 1)
+	if err != nil {
 		return nil, errInstructionAIUnavailable
 	}
-	return func() { budget.semaphore.Release(1) }, nil
+	return lease.Release, nil
 }
 
 func NewOpenAIInstructionReviewer() *OpenAIInstructionReviewer {
@@ -195,9 +214,8 @@ func (r *OpenAIInstructionReviewer) clientFor(config InstructionRuntimeConfig) (
 
 func parseInstructionAIResponse(content string, requestedSource string) (InstructionAIResult, error) {
 	decoder := json.NewDecoder(strings.NewReader(content))
-	decoder.DisallowUnknownFields()
-	var response instructionAIResponse
-	if err := decoder.Decode(&response); err != nil {
+	response, err := decodeInstructionAIResponseObject(decoder)
+	if err != nil {
 		return InstructionAIResult{}, errInstructionAIInvalid
 	}
 	if err := ensureInstructionJSONEOF(decoder); err != nil {
@@ -224,6 +242,57 @@ func parseInstructionAIResponse(content string, requestedSource string) (Instruc
 		return InstructionAIResult{}, errInstructionAIInvalid
 	}
 	return result, nil
+}
+
+func decodeInstructionAIResponseObject(decoder *json.Decoder) (instructionAIResponse, error) {
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return instructionAIResponse{}, errInstructionAIInvalid
+	}
+	fields := make(map[string]json.RawMessage, 4)
+	for decoder.More() {
+		keyToken, tokenErr := decoder.Token()
+		if tokenErr != nil {
+			return instructionAIResponse{}, tokenErr
+		}
+		key, ok := keyToken.(string)
+		if !ok {
+			return instructionAIResponse{}, errInstructionAIInvalid
+		}
+		if _, duplicate := fields[key]; duplicate {
+			return instructionAIResponse{}, errInstructionAIInvalid
+		}
+		if key != "result" && key != "approved_source" && key != "confidence" && key != "reason" {
+			return instructionAIResponse{}, errInstructionAIInvalid
+		}
+		var raw json.RawMessage
+		if decodeErr := decoder.Decode(&raw); decodeErr != nil {
+			return instructionAIResponse{}, decodeErr
+		}
+		fields[key] = raw
+	}
+	end, err := decoder.Token()
+	if err != nil || end != json.Delim('}') || len(fields) != 4 {
+		return instructionAIResponse{}, errInstructionAIInvalid
+	}
+	var response instructionAIResponse
+	if err = json.Unmarshal(fields["result"], &response.Result); err != nil {
+		return instructionAIResponse{}, err
+	}
+	if string(fields["approved_source"]) != "null" {
+		var source string
+		if err = json.Unmarshal(fields["approved_source"], &source); err != nil {
+			return instructionAIResponse{}, err
+		}
+		response.ApprovedSource = &source
+	}
+	if err = json.Unmarshal(fields["confidence"], &response.Confidence); err != nil {
+		return instructionAIResponse{}, err
+	}
+	if err = json.Unmarshal(fields["reason"], &response.Reason); err != nil {
+		return instructionAIResponse{}, err
+	}
+	return response, nil
 }
 
 func ensureInstructionJSONEOF(decoder *json.Decoder) error {

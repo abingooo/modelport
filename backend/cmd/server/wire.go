@@ -27,7 +27,7 @@ import (
 type Application struct {
 	Server           *http.Server
 	PromptAudit      *securityaudit.PromptService
-	InstructionAudit *securityaudit.InstructionService
+	InstructionAudit *securityaudit.InstructionV2Service
 	Cleanup          func()
 }
 
@@ -115,7 +115,7 @@ func provideCleanup(
 	ollamaCloudUsage *service.OllamaCloudUsageService,
 	auditLog *service.AuditLogService,
 	promptAudit *securityaudit.PromptService,
-	instructionAudit *securityaudit.InstructionService,
+	instructionAudit *securityaudit.InstructionV2Service,
 ) func() {
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

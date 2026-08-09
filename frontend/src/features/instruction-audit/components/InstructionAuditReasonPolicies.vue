@@ -5,13 +5,16 @@
       <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.policies.description') }}</p>
     </div>
 
-    <div v-if="error && !policies.length" role="alert" class="m-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
-      {{ error }}
-    </div>
-    <div v-else-if="loading && !policies.length" class="space-y-3 p-5" aria-busy="true">
-      <div v-for="index in 5" :key="index" class="h-20 animate-pulse rounded-md bg-gray-100 dark:bg-dark-700" />
-    </div>
-    <div v-else-if="policies.length" class="divide-y divide-gray-100 dark:divide-dark-700">
+    <InstructionAuditResourceState
+      :loading="loading"
+      :loaded="loaded"
+      :error="error"
+      :has-data="policies.length > 0"
+      :empty-description="t('admin.instructionAudit.states.policiesEmpty')"
+      :disabled="auditEnabled === false"
+      :skeleton-rows="5"
+    >
+    <div class="divide-y divide-gray-100 dark:divide-dark-700">
       <article v-for="policy in policies" :key="policy.reason" class="px-4 py-4 sm:px-6">
         <div class="grid min-w-0 gap-4 xl:grid-cols-[minmax(180px,1.2fr)_minmax(170px,0.8fr)_minmax(120px,0.6fr)_minmax(120px,0.6fr)_minmax(190px,0.9fr)_auto] xl:items-end">
           <div class="min-w-0">
@@ -58,6 +61,7 @@
         </p>
       </article>
     </div>
+    </InstructionAuditResourceState>
 
     <ConfirmDialog
       :show="Boolean(pendingPolicy)"
@@ -77,6 +81,7 @@ import { useI18n } from 'vue-i18n'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import InstructionAuditResourceState from './InstructionAuditResourceState.vue'
 import type { InstructionReasonPolicy, InstructionPolicyAction, UpdateInstructionReasonPolicyRequest } from '../types'
 
 interface PolicyDraft {
@@ -86,7 +91,15 @@ interface PolicyDraft {
   allow_until_local: string
 }
 
-const props = defineProps<{ policies: InstructionReasonPolicy[]; loading: boolean; error: string; savingReason: string; configVersion: number }>()
+const props = defineProps<{
+  policies: InstructionReasonPolicy[]
+  loading: boolean
+  loaded: boolean
+  error: string
+  savingReason: string
+  configVersion: number
+  auditEnabled: boolean | null
+}>()
 const emit = defineEmits<{
   (event: 'save', reason: string, payload: UpdateInstructionReasonPolicyRequest): void
 }>()

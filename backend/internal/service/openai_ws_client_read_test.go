@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -139,5 +140,61 @@ func TestReadOpenAIWSClientMessage_ParentCancellationStillJoinsRead(t *testing.T
 	case <-serverResult:
 	case <-time.After(time.Second):
 		t.Fatal("server read goroutine leaked after parent cancellation")
+	}
+}
+
+func TestReadOpenAIWSClientMessage_TimeoutCancelsBudgetWait(t *testing.T) {
+	const readLimitBytes = int64(1024)
+	workingSetBytes, err := pkghttputil.RequestBodyWorkingSetBytes(readLimitBytes, 2)
+	require.NoError(t, err)
+	budget := pkghttputil.NewRequestBodyMemoryBudget(workingSetBytes)
+	heldLease, err := budget.Acquire(context.Background(), workingSetBytes)
+	require.NoError(t, err)
+	defer heldLease.Release()
+
+	serverResult := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		conn, acceptErr := coderws.Accept(w, request, nil)
+		if acceptErr != nil {
+			serverResult <- acceptErr
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		_, _, lease, readErr := ReadOpenAIWSClientMessageWithBudget(
+			request.Context(), conn, 25*time.Millisecond, coderws.StatusPolicyViolation,
+			"missing first response.create message", readLimitBytes, budget,
+		)
+		lease.Release()
+		serverResult <- readErr
+	}))
+	defer server.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), time.Second)
+	client, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = client.CloseNow() }()
+
+	clientResult := make(chan error, 1)
+	go func() {
+		readCtx, cancelRead := context.WithTimeout(context.Background(), time.Second)
+		defer cancelRead()
+		_, _, readErr := client.Read(readCtx)
+		clientResult <- readErr
+	}()
+
+	select {
+	case serverErr := <-serverResult:
+		require.ErrorIs(t, serverErr, context.DeadlineExceeded)
+	case <-time.After(time.Second):
+		t.Fatal("websocket timeout did not cancel the pending body-budget reservation")
+	}
+	select {
+	case clientErr := <-clientResult:
+		var closeErr coderws.CloseError
+		require.ErrorAs(t, clientErr, &closeErr)
+		require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+	case <-time.After(time.Second):
+		t.Fatal("client did not receive the timeout close frame")
 	}
 }
