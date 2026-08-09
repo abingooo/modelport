@@ -139,9 +139,10 @@ func (s *InstructionService) ChangeHashStatus(ctx context.Context, hashID int64,
 		return nil, infraerrors.Conflict("instruction_audit_hash_revoked", "已撤销哈希不能重新启用")
 	}
 	action := "disable"
-	if status == "active" {
+	switch status {
+	case "active":
 		action = "promote"
-	} else if status == "revoked" {
+	case "revoked":
 		action = "revoke"
 	}
 	access.ResourceType, access.ResourceID, access.Action = "ai_hash", hashID, action

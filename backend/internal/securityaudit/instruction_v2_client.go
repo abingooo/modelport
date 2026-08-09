@@ -145,9 +145,10 @@ func instructionV2ClientProfileMatches(profile instructionV2ClientRuntime, userA
 
 func instructionV2FallbackClient(key string) instructionV2ClientRuntime {
 	name := "Unknown"
-	if key == InstructionClientOther {
+	switch key {
+	case InstructionClientOther:
 		name = "Other"
-	} else if key == InstructionClientModelPortInternal {
+	case InstructionClientModelPortInternal:
 		name = "ModelPort Internal"
 	}
 	return instructionV2ClientRuntime{profile: InstructionV2ClientProfile{ProfileKey: key, Name: name, Enabled: true}}

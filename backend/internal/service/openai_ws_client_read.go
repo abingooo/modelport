@@ -54,25 +54,6 @@ func ReadOpenAIWSClientMessageWithBudget(
 	)
 }
 
-// readOpenAIWSClientMessageWithTimeoutStart supports readers whose timeout
-// starts after a state transition, such as a completed passthrough turn. When
-// timeoutActive is nil, a positive timeout starts immediately.
-func readOpenAIWSClientMessageWithTimeoutStart(
-	controlCtx context.Context,
-	conn *coderws.Conn,
-	timeout time.Duration,
-	timeoutStatus coderws.StatusCode,
-	timeoutReason string,
-	timeoutStart <-chan struct{},
-	timeoutActive func() bool,
-) (coderws.MessageType, []byte, error) {
-	messageType, payload, lease, err := readOpenAIWSClientMessageWithTimeoutStartAndBudget(
-		controlCtx, conn, timeout, timeoutStatus, timeoutReason, timeoutStart, timeoutActive, 0, nil,
-	)
-	lease.Release()
-	return messageType, payload, err
-}
-
 func readOpenAIWSClientMessageWithTimeoutStartAndBudget(
 	controlCtx context.Context,
 	conn *coderws.Conn,
