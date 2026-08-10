@@ -9,10 +9,6 @@
               <span class="h-1.5 w-1.5 rounded-full" :class="config.effective_mode === 'enforce' ? 'bg-primary-500' : config.effective_mode === 'observe' ? 'bg-amber-500' : 'bg-gray-400'" />
               {{ modeLabel(t, config.effective_mode) }}
             </span>
-            <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium" :class="hasSensitiveAccess ? 'bg-primary-50 text-primary-700 dark:bg-primary-950/40 dark:text-primary-300' : 'bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-300'">
-              <Icon :name="hasSensitiveAccess ? 'check' : 'lock'" size="xs" :class="{ 'animate-pulse': sensitiveLoading }" />
-              {{ sensitiveLoading ? t('admin.instructionAudit.v2.checkingPermission') : hasSensitiveAccess ? t('admin.instructionAudit.v2.sensitiveAuthorized') : t('admin.instructionAudit.v2.sensitiveLocked') }}
-            </span>
           </div>
           <p class="mt-1 max-w-4xl text-sm text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.description') }}</p>
         </div>
@@ -70,7 +66,6 @@
           v-if="activeTab === 'events'"
           :groups="groups"
           :clients="clients"
-          :sensitive-access="hasSensitiveAccess"
           :refresh-key="eventRefreshKey"
           @filters-change="loadStatistics"
           @trusted="handleTrustedChanged"
@@ -78,9 +73,18 @@
         <InstructionV2TrustedPanel
           v-else-if="activeTab === 'hashes'"
           :scopes="scopes"
-          :sensitive-access="hasSensitiveAccess"
           :refresh-key="hashRefreshKey"
           @changed="handleTrustedChanged"
+        />
+        <InstructionV2RiskPanel
+          v-else-if="activeTab === 'risk'"
+          :refresh-key="riskRefreshKey"
+          @changed="handlePolicyChanged"
+        />
+        <InstructionV2ReviewJobsPanel
+          v-else-if="activeTab === 'reviews'"
+          :refresh-key="reviewRefreshKey"
+          @changed="handlePolicyChanged"
         />
         <InstructionV2ScopePanel
           v-else-if="activeTab === 'scopes'"
@@ -94,12 +98,8 @@
           v-else
           :config="config"
           :nodes="aiNodes"
-          :sensitive-capability="sensitiveCapability"
-          :sensitive-loading="sensitiveLoading"
-          :sensitive-error="sensitiveError"
           @config-updated="handleConfigUpdated"
           @changed="reloadReferences"
-          @refresh-sensitive="loadSensitiveCapability"
         />
       </template>
 
@@ -122,6 +122,8 @@ import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import InstructionV2AISettingsPanel from './components/InstructionV2AISettingsPanel.vue'
 import InstructionV2EventsPanel from './components/InstructionV2EventsPanel.vue'
+import InstructionV2ReviewJobsPanel from './components/InstructionV2ReviewJobsPanel.vue'
+import InstructionV2RiskPanel from './components/InstructionV2RiskPanel.vue'
 import InstructionV2ScopePanel from './components/InstructionV2ScopePanel.vue'
 import InstructionV2TrustedPanel from './components/InstructionV2TrustedPanel.vue'
 import instructionAuditV2API from './v2Api'
@@ -131,14 +133,13 @@ import type {
   InstructionEventFilters,
   InstructionGroupOption,
   InstructionScope,
-  InstructionSensitiveCapability,
   InstructionStatistics,
   InstructionUserAllowlistEntry,
   InstructionV2Config,
 } from './v2Types'
 import { modeLabel, modePill } from './v2Presentation'
 
-type Tab = 'events' | 'hashes' | 'scopes' | 'ai'
+type Tab = 'events' | 'hashes' | 'risk' | 'reviews' | 'scopes' | 'ai'
 type IconName = InstanceType<typeof Icon>['$props']['name']
 
 const { t } = useI18n()
@@ -155,17 +156,17 @@ const scopes = ref<InstructionScope[]>([])
 const clients = ref<InstructionClientProfile[]>([])
 const allowlist = ref<InstructionUserAllowlistEntry[]>([])
 const aiNodes = ref<InstructionAINode[]>([])
-const sensitiveCapability = ref<InstructionSensitiveCapability | null>(null)
-const sensitiveLoading = ref(true)
-const sensitiveError = ref('')
 const eventRefreshKey = ref(0)
 const hashRefreshKey = ref(0)
+const riskRefreshKey = ref(0)
+const reviewRefreshKey = ref(0)
 let statisticsRequest = 0
 
-const hasSensitiveAccess = computed(() => Boolean(sensitiveCapability.value?.has_access && sensitiveCapability.value?.can_manage))
 const tabs = computed<Array<{ value: Tab; label: string; icon: IconName; count?: number }>>(() => [
   { value: 'events', label: t('admin.instructionAudit.v2.tabs.events'), icon: 'clipboard', count: statistics.value?.total ?? 0 },
   { value: 'hashes', label: t('admin.instructionAudit.v2.tabs.hashes'), icon: 'key', count: config.value?.active_hash_count ?? 0 },
+  { value: 'risk', label: t('admin.instructionAudit.v2.tabs.risk'), icon: 'ban', count: config.value?.active_risk_hash_count ?? 0 },
+  { value: 'reviews', label: t('admin.instructionAudit.v2.tabs.reviews'), icon: 'clock', count: config.value?.pending_review_job_count ?? 0 },
   { value: 'scopes', label: t('admin.instructionAudit.v2.tabs.scopes'), icon: 'shield', count: config.value?.active_scope_count ?? 0 },
   { value: 'ai', label: t('admin.instructionAudit.v2.tabs.ai'), icon: 'brain', count: config.value?.enabled_ai_node_count ?? 0 },
 ])
@@ -210,7 +211,6 @@ async function refreshAll() {
   } finally {
     loading.value = false
   }
-  await loadSensitiveCapability()
 }
 
 async function reloadReferences() {
@@ -231,21 +231,10 @@ async function reloadReferences() {
     aiNodes.value = nextNodes
     eventRefreshKey.value += 1
     hashRefreshKey.value += 1
+    riskRefreshKey.value += 1
+    reviewRefreshKey.value += 1
   } catch (caught) {
     appStore.showError(extractApiErrorMessage(caught, t('common.error')))
-  }
-}
-
-async function loadSensitiveCapability() {
-  sensitiveLoading.value = true
-  sensitiveError.value = ''
-  try {
-    sensitiveCapability.value = await instructionAuditV2API.getSensitiveCapability()
-  } catch (caught) {
-    sensitiveCapability.value = null
-    sensitiveError.value = extractApiErrorMessage(caught, t('common.error'))
-  } finally {
-    sensitiveLoading.value = false
   }
 }
 
@@ -266,12 +255,21 @@ function setTab(tab: Tab) {
 
 function normalizeTab(value: string): Tab {
   if (value === 'hashes' || value === 'candidates') return 'hashes'
+  if (value === 'risk') return 'risk'
+  if (value === 'reviews' || value === 'jobs') return 'reviews'
   if (value === 'scopes' || value === 'rules' || value === 'config') return 'scopes'
   if (value === 'ai' || value === 'policies') return 'ai'
   return 'events'
 }
 
 function handleTrustedChanged() {
+  hashRefreshKey.value += 1
+  reloadReferences()
+}
+
+function handlePolicyChanged() {
+  riskRefreshKey.value += 1
+  reviewRefreshKey.value += 1
   hashRefreshKey.value += 1
   reloadReferences()
 }

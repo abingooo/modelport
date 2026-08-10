@@ -1,7 +1,6 @@
 package securityaudit
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -11,26 +10,11 @@ import (
 )
 
 type InstructionV2AdminHandler struct {
-	service         *InstructionV2Service
-	sensitiveAccess *InstructionService
+	service *InstructionV2Service
 }
 
-func NewInstructionV2AdminHandler(
-	service *InstructionV2Service,
-	sensitiveAccess *InstructionService,
-) *InstructionV2AdminHandler {
-	return &InstructionV2AdminHandler{service: service, sensitiveAccess: sensitiveAccess}
-}
-
-func (h *InstructionV2AdminHandler) AuthorizeInstructionSensitiveAccess(
-	ctx context.Context,
-	userID int64,
-	authMethod string,
-) (int64, error) {
-	if h == nil || h.sensitiveAccess == nil {
-		return 0, instructionSensitiveUnavailable()
-	}
-	return h.sensitiveAccess.AuthorizeInstructionSensitiveAccess(ctx, userID, authMethod)
+func NewInstructionV2AdminHandler(service *InstructionV2Service) *InstructionV2AdminHandler {
+	return &InstructionV2AdminHandler{service: service}
 }
 
 func (h *InstructionV2AdminHandler) GetOverview(c *gin.Context) {
@@ -273,6 +257,154 @@ func (h *InstructionV2AdminHandler) RecordHashRawCopy(c *gin.Context) {
 	response.Success(c, gin.H{"recorded": true})
 }
 
+func (h *InstructionV2AdminHandler) ListRiskHashes(c *gin.Context) {
+	page, pageSize, err := instructionV2Pagination(c)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	items, err := h.service.ListAdminRiskHashes(c.Request.Context(), page, pageSize, c.Query("status"), c.Query("q"))
+	respondInstructionV2(c, items, err)
+}
+
+func (h *InstructionV2AdminHandler) GetRiskHash(c *gin.Context) {
+	id, ok := instructionIDParam(c, "risk_hash")
+	if !ok {
+		return
+	}
+	item, err := h.service.GetAdminRiskHash(c.Request.Context(), id)
+	respondInstructionV2(c, item, err)
+}
+
+func (h *InstructionV2AdminHandler) CreateRiskHash(c *gin.Context) {
+	var request SaveInstructionV2RiskHashRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_v2_invalid_risk_hash", "风险哈希请求无效"))
+		return
+	}
+	item, err := h.service.CreateAdminRiskHash(c.Request.Context(), request, adminID(c))
+	if err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{"sha256": request.SHA256})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{"risk_hash_id": item.ID, "sha256": item.SHA256})
+	response.Success(c, item)
+}
+
+func (h *InstructionV2AdminHandler) UpdateRiskHash(c *gin.Context) {
+	id, ok := instructionIDParam(c, "risk_hash")
+	if !ok {
+		return
+	}
+	var request UpdateInstructionV2RiskHashRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_v2_invalid_risk_action", "风险哈希操作无效"))
+		return
+	}
+	item, err := h.service.UpdateAdminRiskHash(c.Request.Context(), id, request, adminID(c))
+	if err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{"risk_hash_id": id, "action": request.Action})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{"risk_hash_id": id, "action": request.Action})
+	response.Success(c, item)
+}
+
+func (h *InstructionV2AdminHandler) DeleteRiskHash(c *gin.Context) {
+	id, ok := instructionIDParam(c, "risk_hash")
+	if !ok {
+		return
+	}
+	if err := h.service.DeleteAdminRiskHash(c.Request.Context(), id, adminID(c)); err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{"risk_hash_id": id})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{"risk_hash_id": id})
+	response.Success(c, gin.H{"deleted": true})
+}
+
+func (h *InstructionV2AdminHandler) RevealRiskHashRaw(c *gin.Context) {
+	id, ok := instructionIDParam(c, "risk_hash")
+	if !ok {
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	item, err := h.service.RevealAdminRiskHashRaw(c.Request.Context(), id, instructionV2RawAccess(c, "reveal", ""))
+	respondInstructionV2(c, item, err)
+}
+
+func (h *InstructionV2AdminHandler) RecordRiskHashRawCopy(c *gin.Context) {
+	id, ok := instructionIDParam(c, "risk_hash")
+	if !ok {
+		return
+	}
+	err := h.service.RecordAdminRiskHashRawCopy(c.Request.Context(), id, instructionV2RawAccess(c, "copy", ""))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"recorded": true})
+}
+
+func (h *InstructionV2AdminHandler) ListReviewJobs(c *gin.Context) {
+	page, pageSize, err := instructionV2Pagination(c)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	items, err := h.service.ListAdminReviewJobs(c.Request.Context(), page, pageSize, c.Query("status"), c.Query("q"))
+	respondInstructionV2(c, items, err)
+}
+
+func (h *InstructionV2AdminHandler) GetReviewJob(c *gin.Context) {
+	id, ok := instructionIDParam(c, "review_job")
+	if !ok {
+		return
+	}
+	item, err := h.service.GetAdminReviewJob(c.Request.Context(), id)
+	respondInstructionV2(c, item, err)
+}
+
+func (h *InstructionV2AdminHandler) RetryReviewJob(c *gin.Context) {
+	id, ok := instructionIDParam(c, "review_job")
+	if !ok {
+		return
+	}
+	if err := h.service.RetryAdminReviewJob(c.Request.Context(), id); err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{"review_job_id": id, "action": "retry"})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{"review_job_id": id, "action": "retry"})
+	response.Success(c, gin.H{"queued": true})
+}
+
+func (h *InstructionV2AdminHandler) RevealReviewJobRaw(c *gin.Context) {
+	id, ok := instructionIDParam(c, "review_job")
+	if !ok {
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	item, err := h.service.RevealAdminReviewJobRaw(c.Request.Context(), id, instructionV2RawAccess(c, "reveal", ""))
+	respondInstructionV2(c, item, err)
+}
+
+func (h *InstructionV2AdminHandler) RecordReviewJobRawCopy(c *gin.Context) {
+	id, ok := instructionIDParam(c, "review_job")
+	if !ok {
+		return
+	}
+	err := h.service.RecordAdminReviewJobRawCopy(c.Request.Context(), id, instructionV2RawAccess(c, "copy", ""))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"recorded": true})
+}
+
 func (h *InstructionV2AdminHandler) ListScopes(c *gin.Context) {
 	items, err := h.service.ListAdminScopes(c.Request.Context())
 	respondInstructionV2(c, items, err)
@@ -448,64 +580,6 @@ func (h *InstructionV2AdminHandler) TestAINode(c *gin.Context) {
 		return
 	}
 	h.audit(c, "success", "", map[string]any{"ai_node_id": id, "action": "test", "result": item.Result})
-	response.Success(c, item)
-}
-
-func (h *InstructionV2AdminHandler) GetInstructionSensitiveAccessMe(c *gin.Context) {
-	c.Header("Cache-Control", "no-store")
-	if h == nil || h.sensitiveAccess == nil {
-		response.ErrorFrom(c, instructionSensitiveUnavailable())
-		return
-	}
-	item, err := h.sensitiveAccess.GetInstructionSensitiveCapability(c.Request.Context(), adminID(c), c.GetString("auth_method"))
-	respondInstructionV2(c, item, err)
-}
-
-func (h *InstructionV2AdminHandler) ListInstructionSensitiveAccessGrants(c *gin.Context) {
-	c.Header("Cache-Control", "no-store")
-	items, err := h.sensitiveAccess.ListInstructionSensitiveGrants(c.Request.Context(), adminID(c))
-	respondInstructionV2(c, items, err)
-}
-
-func (h *InstructionV2AdminHandler) GrantInstructionSensitiveAccess(c *gin.Context) {
-	userID, ok := instructionSensitiveUserIDParam(c)
-	if !ok {
-		return
-	}
-	var request instructionSensitiveGrantRequest
-	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&request); err != nil {
-			response.ErrorFrom(c, infraerrors.BadRequest("INSTRUCTION_SENSITIVE_INVALID_GRANT_REQUEST", "敏感内容授权请求无效"))
-			return
-		}
-	}
-	item, err := h.sensitiveAccess.GrantInstructionSensitiveAccess(c.Request.Context(), adminID(c), userID, request.Reason)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	h.audit(c, "success", "", map[string]any{"user_id": userID, "grant_id": item.ID})
-	response.Success(c, item)
-}
-
-func (h *InstructionV2AdminHandler) RevokeInstructionSensitiveAccess(c *gin.Context) {
-	userID, ok := instructionSensitiveUserIDParam(c)
-	if !ok {
-		return
-	}
-	var request instructionSensitiveGrantRequest
-	if c.Request.ContentLength != 0 {
-		if err := c.ShouldBindJSON(&request); err != nil {
-			response.ErrorFrom(c, infraerrors.BadRequest("INSTRUCTION_SENSITIVE_INVALID_REVOKE_REQUEST", "敏感内容撤销请求无效"))
-			return
-		}
-	}
-	item, err := h.sensitiveAccess.RevokeInstructionSensitiveAccess(c.Request.Context(), adminID(c), userID, request.Reason)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	h.audit(c, "success", "", map[string]any{"user_id": userID, "grant_id": item.ID})
 	response.Success(c, item)
 }
 

@@ -128,7 +128,7 @@
           </div>
           <div class="flex shrink-0 items-center gap-1">
             <button type="button" class="icon-btn" :title="t('admin.instructionAudit.v2.reviewEvidence')" @click="openEvidence(event)">
-              <Icon :name="sensitiveAccess ? 'eye' : 'lock'" size="sm" />
+              <Icon name="eye" size="sm" />
             </button>
             <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="eventToDelete = event">
               <Icon name="trash" size="sm" />
@@ -169,7 +169,10 @@
           <div v-for="field in eventFields(event)" :key="field.name" class="min-w-0 rounded-md border border-gray-200 px-3 py-2 dark:border-dark-600">
             <div class="flex min-w-0 items-center justify-between gap-2">
               <span class="font-mono text-xs font-semibold text-gray-800 dark:text-gray-200">{{ field.label }}</span>
-              <span class="text-[11px] text-gray-500 dark:text-gray-400">{{ fieldStateLabel(t, field.value.state) }}</span>
+              <div class="flex items-center gap-1.5">
+                <span v-if="event.selected_field === field.name" class="rounded bg-primary-50 px-1.5 py-0.5 text-[10px] font-semibold text-primary-700 dark:bg-primary-950/40 dark:text-primary-300">{{ t('admin.instructionAudit.v2.selected') }}</span>
+                <span class="text-[11px] text-gray-500 dark:text-gray-400">{{ fieldStateLabel(t, field.value.state) }}</span>
+              </div>
             </div>
             <div class="mt-1 flex min-w-0 items-center justify-between gap-2">
               <span class="min-w-0 truncate font-mono text-[10px] text-gray-400" :title="field.value.sha256">{{ compactDigest(field.value.sha256) }}</span>
@@ -190,7 +193,7 @@
             <router-link :to="opsLogLink(event)" class="icon-btn h-8 w-8" :title="t('admin.instructionAudit.v2.relatedSystemLog')">
               <Icon name="link" size="sm" />
             </router-link>
-            <button type="button" class="btn btn-primary btn-sm" :disabled="!sensitiveAccess || !trustableFields(event).length" @click="eventToTrust = event">
+            <button type="button" class="btn btn-primary btn-sm" :disabled="!trustableFields(event).length" @click="eventToTrust = event">
               <Icon name="plus" size="sm" />
               {{ t('admin.instructionAudit.v2.quickTrust') }}
             </button>
@@ -207,12 +210,11 @@
 
     <Pagination v-if="page.total > 0" :total="page.total" :page="page.page" :page-size="page.page_size" @update:page="changePage" @update:page-size="changePageSize" />
 
-    <InstructionV2EvidenceDialog :show="Boolean(evidenceEvent)" :event="evidenceEvent" :sensitive-access="sensitiveAccess" @close="evidenceEvent = null" @trusted="handleTrusted" />
+    <InstructionV2EvidenceDialog :show="Boolean(evidenceEvent)" :event="evidenceEvent" @close="evidenceEvent = null" @trusted="handleTrusted" />
 
     <ConfirmDialog :show="Boolean(eventToDelete)" :title="t('admin.instructionAudit.v2.deleteEventTitle')" :message="t('admin.instructionAudit.v2.deleteEventConfirm', { id: eventToDelete?.id })" danger @confirm="deleteSingle" @cancel="eventToDelete = null" />
     <ConfirmDialog :show="confirmBatchDelete" :title="t('admin.instructionAudit.v2.deleteEventsTitle')" :message="t('admin.instructionAudit.v2.deleteEventsConfirm', { count: selectedIds.length })" danger @confirm="deleteBatch" @cancel="confirmBatchDelete = false" />
     <ConfirmDialog :show="Boolean(eventToTrust)" :title="t('admin.instructionAudit.v2.quickTrust')" :message="t('admin.instructionAudit.v2.quickTrustConfirm', { id: eventToTrust?.id, count: eventToTrust ? trustableFields(eventToTrust).length : 0 })" @confirm="quickTrust" @cancel="eventToTrust = null" />
-    <TotpStepUpDialog :controller="stepUp" />
   </section>
 </template>
 
@@ -222,10 +224,8 @@ import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Pagination from '@/components/common/Pagination.vue'
-import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import instructionAuditV2API from '../v2Api'
@@ -255,7 +255,6 @@ import {
 const props = defineProps<{
   groups: InstructionGroupOption[]
   clients: InstructionClientProfile[]
-  sensitiveAccess: boolean
   refreshKey: number
 }>()
 
@@ -268,7 +267,6 @@ const { t } = useI18n()
 const route = useRoute()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
-const stepUp = useStepUp()
 const page = reactive<InstructionEventPage>({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
 const loading = ref(false)
 const deleting = ref(false)
@@ -293,9 +291,9 @@ const filters = reactive({
   range: '24h',
 })
 
-const outcomeOptions: InstructionEventOutcome[] = ['blocked', 'hash_pass', 'ai_pass', 'observe_allow', 'empty_pass', 'user_allowlist_pass']
+const outcomeOptions: InstructionEventOutcome[] = ['blocked', 'risk_hash_blocked', 'ai_review_pending', 'hash_pass', 'ai_pass', 'observe_allow', 'empty_pass', 'user_allowlist_pass']
 const reasonOptions = instructionEventReasonOptions
-const aiResultOptions = ['not_run', 'pass', 'reject', 'uncertain', 'error', 'queue_full']
+const aiResultOptions = ['not_run', 'pass', 'reject', 'uncertain', 'error', 'timeout', 'invalid', 'queue_full']
 
 onMounted(loadEvents)
 watch(() => props.refreshKey, loadEvents)
@@ -380,19 +378,20 @@ function eventFields(event: InstructionEvent): Array<{ name: string; label: stri
 }
 
 function trustableFields(event: InstructionEvent): string[] {
-  return eventFields(event).filter((field) => Boolean(field.value.sha256)).map((field) => field.name)
+  if (event.selected_field && event.selected_sha256) return [event.selected_field]
+  return []
 }
 
 async function deleteSingle() {
   if (!eventToDelete.value) return
   deleting.value = true
   try {
-    await stepUp.run(() => instructionAuditV2API.deleteEvent(eventToDelete.value!.id))
+    await instructionAuditV2API.deleteEvent(eventToDelete.value!.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.eventDeleted'))
     eventToDelete.value = null
     await loadEvents()
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     deleting.value = false
   }
@@ -402,13 +401,13 @@ async function deleteBatch() {
   if (!selectedIds.value.length) return
   deleting.value = true
   try {
-    const deleted = await stepUp.run(() => instructionAuditV2API.deleteEvents([...selectedIds.value]))
+    const deleted = await instructionAuditV2API.deleteEvents([...selectedIds.value])
     appStore.showSuccess(t('admin.instructionAudit.v2.eventsDeleted', { count: deleted }))
     selectedIds.value = []
     confirmBatchDelete.value = false
     await loadEvents()
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     deleting.value = false
   }
@@ -418,13 +417,13 @@ async function quickTrust() {
   if (!eventToTrust.value) return
   const event = eventToTrust.value
   try {
-    await stepUp.run(() => instructionAuditV2API.trustEvent(event.id, trustableFields(event)))
+    await instructionAuditV2API.trustEvent(event.id, trustableFields(event))
     appStore.showSuccess(t('admin.instructionAudit.v2.trustCreated'))
     eventToTrust.value = null
     emit('trusted')
     await loadEvents()
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 

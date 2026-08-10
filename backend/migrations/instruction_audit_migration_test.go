@@ -283,3 +283,18 @@ func TestInstructionAuditV2MigrationIsIsolatedAndSupportsNotifications(t *testin
 	require.NotContains(t, sql, "truncate")
 	require.NotContains(t, sql, "delete from instruction_audit_")
 }
+
+func TestInstructionAuditV2ReviewPipelineMigrationReplacesCandidates(t *testing.T) {
+	body, err := FS.ReadFile("219_instruction_audit_v2_review_pipeline.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "create table if not exists instruction_audit_v2_content_vault")
+	require.Contains(t, sql, "create table if not exists instruction_audit_v2_risk_hashes")
+	require.Contains(t, sql, "create table if not exists instruction_audit_v2_review_jobs")
+	require.Contains(t, sql, "create table if not exists instruction_audit_v2_review_attempts")
+	require.Contains(t, sql, "add column if not exists review_criteria")
+	require.Contains(t, sql, "add column if not exists observe_only")
+	require.Contains(t, sql, "'sync', 'async_1', 'async_2', 'async_3'")
+	require.Contains(t, sql, "delete from instruction_audit_v2_hashes where status = 'candidate'")
+	require.NotContains(t, sql, "truncate")
+}

@@ -52,15 +52,17 @@ describe('instruction audit group scope', () => {
     expect(types).toContain('immutable_internal: boolean')
   })
 
-  it('keeps AI candidates scoped and requires explicit promotion', () => {
+  it('supports scoped or global trusted hashes without candidate promotion', () => {
     const view = read('../components/InstructionV2TrustedPanel.vue')
     const types = read('../v2Types.ts')
     expect(types).toContain('source: string')
     expect(types).toContain("source: 'manual' | 'import'")
-    expect(types).toContain("'candidate' | 'active' | 'disabled' | 'revoked'")
-    expect(view).toContain("hash.status === 'candidate'")
-    expect(view).toContain("instructionAuditV2API.updateHash(hash.id, { status: 'active' })")
-    expect(view).toContain('scope_ids: form.scopeIds')
+    expect(types).toContain("'active' | 'disabled' | 'revoked'")
+    expect(types).not.toContain("'candidate' | 'active' | 'disabled' | 'revoked'")
+    expect(view).toContain('hash.global_trust')
+    expect(view).toContain('scope_ids: form.globalTrust ? [] : form.scopeIds')
+    expect(view).toContain('global_trust: form.globalTrust')
+    expect(view).not.toContain("hash.status === 'candidate'")
   })
 
   it('places the global switch under feature switches risk control', () => {

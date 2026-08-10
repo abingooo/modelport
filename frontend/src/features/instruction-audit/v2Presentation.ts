@@ -3,18 +3,19 @@ import type { InstructionAuditMode, InstructionEventOutcome, InstructionHashStat
 type Translate = (key: string, params?: Record<string, unknown>) => string
 
 export const instructionEventReasonOptions = [
-  'instructions_hash_match',
-  'input1_hash_match',
+  'global_trusted_hash_match',
+  'scoped_trusted_hash_match',
+  'risk_hash_match',
   'fields_empty',
   'user_allowlist',
   'invalid_json',
   'config_unavailable',
-  'ai_pass',
-  'ai_rejected',
-  'ai_reject',
-  'ai_uncertain',
-  'ai_error',
-  'ai_queue_full',
+  'sync_ai_pass',
+  'sync_ai_reject',
+  'sync_ai_uncertain',
+  'sync_ai_error',
+  'sync_ai_timeout',
+  'sync_ai_invalid',
   'persistence_error',
 ] as const
 
@@ -75,7 +76,7 @@ export function modePill(mode: InstructionAuditMode): string {
 }
 
 export function outcomePill(outcome: InstructionEventOutcome): string {
-  if (outcome === 'blocked') return 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300'
+  if (outcome === 'blocked' || outcome === 'risk_hash_blocked') return 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300'
   if (outcome === 'ai_pass') return 'bg-cyan-100 text-cyan-800 dark:bg-cyan-950/50 dark:text-cyan-200'
   if (outcome === 'hash_pass') return 'bg-primary-100 text-primary-800 dark:bg-primary-950/60 dark:text-primary-200'
   if (outcome === 'observe_allow') return 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'
@@ -84,7 +85,6 @@ export function outcomePill(outcome: InstructionEventOutcome): string {
 
 export function hashStatusPill(status: InstructionHashStatus): string {
   if (status === 'active') return 'bg-primary-100 text-primary-800 dark:bg-primary-950/60 dark:text-primary-200'
-  if (status === 'candidate') return 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'
   if (status === 'revoked') return 'bg-red-100 text-red-700 dark:bg-red-950/50 dark:text-red-300'
   return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
 }

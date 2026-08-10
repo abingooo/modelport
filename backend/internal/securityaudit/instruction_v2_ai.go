@@ -59,6 +59,32 @@ func (r *InstructionV2AIReviewer) Review(
 	if criteria == "" {
 		criteria = "Pass only stable, legitimate client instruction templates with a clear benign operational purpose."
 	}
+	mode := strings.ToLower(strings.TrimSpace(node.ResponseMode))
+	if mode == "" {
+		mode = "auto"
+	}
+	if mode == "auto" {
+		result, schemaErr := r.reviewWithMode(ctx, client, requestURL, node, input, criteria, "json_schema")
+		if schemaErr == nil {
+			return result, nil
+		}
+		return r.reviewWithMode(ctx, client, requestURL, node, input, criteria, "json_object")
+	}
+	return r.reviewWithMode(ctx, client, requestURL, node, input, criteria, mode)
+}
+
+func (r *InstructionV2AIReviewer) reviewWithMode(
+	ctx context.Context,
+	client *http.Client,
+	requestURL string,
+	node *instructionV2AINodeRuntime,
+	input []byte,
+	criteria, mode string,
+) (instructionV2AIResult, error) {
+	maxOutputTokens := node.MaxOutputTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = 1024
+	}
 	payload := map[string]any{
 		"model": node.Model,
 		"messages": []map[string]string{
@@ -67,8 +93,11 @@ func (r *InstructionV2AIReviewer) Review(
 			{"role": "user", "content": string(input)},
 		},
 		"temperature": 0,
-		"max_tokens":  300,
-		"response_format": map[string]any{
+		"max_tokens":  maxOutputTokens,
+	}
+	switch mode {
+	case "json_schema":
+		payload["response_format"] = map[string]any{
 			"type": "json_schema",
 			"json_schema": map[string]any{
 				"name":   "instruction_audit_v2_review",
@@ -85,7 +114,11 @@ func (r *InstructionV2AIReviewer) Review(
 					},
 				},
 			},
-		},
+		}
+	case "json_object":
+		payload["response_format"] = map[string]any{"type": "json_object"}
+	default:
+		return instructionV2AIResult{}, fmt.Errorf("%w: unsupported response mode", errInstructionV2AIUnavailable)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

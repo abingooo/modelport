@@ -46,14 +46,32 @@ func (r *InstructionV2Repository) PersistInstructionV2Event(ctx context.Context,
 		}
 	}
 	result := instructionV2PersistResult{EventID: eventID}
-	if write.Candidate != nil {
-		hashID, candidateErr := upsertInstructionV2Candidate(ctx, tx, eventID, *write.Candidate)
-		if candidateErr != nil {
-			return instructionV2PersistResult{}, candidateErr
+	if write.Trusted != nil {
+		hashID, trustedErr := upsertInstructionV2TrustedTx(ctx, tx, eventID, *write.Trusted, 0)
+		if trustedErr != nil {
+			return instructionV2PersistResult{}, trustedErr
 		}
 		result.HashID = &hashID
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE instruction_audit_v2_events SET matched_hash_id = $2 WHERE id = $1`, eventID, hashID); err != nil {
+			return instructionV2PersistResult{}, err
+		}
+	}
+	if write.Risk != nil {
+		riskID, riskErr := upsertInstructionV2RiskTx(ctx, tx, eventID, *write.Risk)
+		if riskErr != nil {
+			return instructionV2PersistResult{}, riskErr
+		}
+		result.RiskID = &riskID
+	}
+	if write.ReviewJob != nil {
+		jobID, jobErr := upsertInstructionV2ReviewJobTx(ctx, tx, eventID, *write.ReviewJob)
+		if jobErr != nil {
+			return instructionV2PersistResult{}, jobErr
+		}
+		result.JobID = &jobID
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE instruction_audit_v2_events SET review_job_id = $2 WHERE id = $1`, eventID, jobID); err != nil {
 			return instructionV2PersistResult{}, err
 		}
 	}
@@ -89,6 +107,10 @@ func insertInstructionV2Event(ctx context.Context, tx *sql.Tx, event Instruction
 	if event.Input1.SHA256 != "" {
 		input1Digest = event.Input1.SHA256
 	}
+	var selectedDigest any
+	if event.SelectedSHA256 != "" {
+		selectedDigest = event.SelectedSHA256
+	}
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_v2_events
 			(request_id, user_id, user_email_snapshot, api_key_id, api_key_name_snapshot,
@@ -97,12 +119,14 @@ func insertInstructionV2Event(ctx context.Context, tx *sql.Tx, event Instruction
 			 outcome, reason, instructions_state, instructions_sha256, instructions_bytes,
 			 instructions_partial, input1_state, input1_sha256, input1_bytes, input1_partial,
 			 matched_hash_id, ai_result, ai_reviewed_field, ai_sampled, audit_latency_ms,
-			 ai_latency_ms, body_bytes, config_version, evidence_status)
+			 ai_latency_ms, body_bytes, config_version, evidence_status,
+			 selected_field, selected_sha256, review_job_id)
 		VALUES
 			($1, NULLIF($2, 0), $3, NULLIF($4, 0), $5,
 			 $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
 			 $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
-			 $28, $29, $30, $31, $32, $33, $34, $35, $36)
+			 $28, $29, $30, $31, $32, $33, $34, $35, $36,
+			 $37, $38, $39)
 		RETURNING id`,
 		event.RequestID, pointerInt64Value(event.UserID), event.UserEmail,
 		pointerInt64Value(event.APIKeyID), event.APIKeyName, event.GroupID, event.GroupName,
@@ -113,72 +137,9 @@ func insertInstructionV2Event(ctx context.Context, tx *sql.Tx, event Instruction
 		event.Input1.State, input1Digest, event.Input1.Bytes, event.Input1.Partial,
 		event.MatchedHashID, event.AIResult, event.AIReviewedField, event.AISampled,
 		event.AuditLatencyMS, event.AILatencyMS, event.BodyBytes, event.ConfigVersion,
-		event.EvidenceStatus,
+		event.EvidenceStatus, event.SelectedField, selectedDigest, event.ReviewJobID,
 	).Scan(&eventID)
 	return eventID, err
-}
-
-func upsertInstructionV2Candidate(ctx context.Context, tx *sql.Tx, eventID int64, candidate instructionV2CandidateWrite) (int64, error) {
-	var hashID int64
-	err := tx.QueryRowContext(ctx, `
-		INSERT INTO instruction_audit_v2_hashes
-			(sha256, name, note, status, source, observed_field, content_bytes,
-			 raw_storage, raw_ciphertext, stored_bytes, ai_sampled, source_event_id,
-			 reviewer_node_id, reviewer_model, prompt_version, confidence, review_reason,
-			 review_category, candidate_expires_at)
-		VALUES ($1, $2, $3, 'candidate', 'ai_review', $4, $5, $6, $7, $8, $9, $10,
-		        $11, $12, $13, $14, $15, $16, $17)
-		ON CONFLICT (sha256) DO UPDATE
-		SET name = CASE WHEN instruction_audit_v2_hashes.name = '' THEN EXCLUDED.name ELSE instruction_audit_v2_hashes.name END,
-		    note = CASE WHEN instruction_audit_v2_hashes.note = '' THEN EXCLUDED.note ELSE instruction_audit_v2_hashes.note END,
-		    observed_field = EXCLUDED.observed_field,
-		    content_bytes = GREATEST(instruction_audit_v2_hashes.content_bytes, EXCLUDED.content_bytes),
-		    raw_storage = CASE WHEN instruction_audit_v2_hashes.raw_ciphertext IS NULL THEN EXCLUDED.raw_storage ELSE instruction_audit_v2_hashes.raw_storage END,
-		    raw_ciphertext = COALESCE(instruction_audit_v2_hashes.raw_ciphertext, EXCLUDED.raw_ciphertext),
-		    stored_bytes = CASE WHEN instruction_audit_v2_hashes.raw_ciphertext IS NULL THEN EXCLUDED.stored_bytes ELSE instruction_audit_v2_hashes.stored_bytes END,
-		    ai_sampled = instruction_audit_v2_hashes.ai_sampled OR EXCLUDED.ai_sampled,
-		    source_event_id = EXCLUDED.source_event_id,
-		    reviewer_node_id = EXCLUDED.reviewer_node_id,
-		    reviewer_model = EXCLUDED.reviewer_model,
-		    prompt_version = EXCLUDED.prompt_version,
-		    confidence = EXCLUDED.confidence,
-		    review_reason = EXCLUDED.review_reason,
-		    review_category = EXCLUDED.review_category,
-		    candidate_expires_at = CASE
-		        WHEN instruction_audit_v2_hashes.status = 'candidate' THEN EXCLUDED.candidate_expires_at
-		        ELSE instruction_audit_v2_hashes.candidate_expires_at
-		    END,
-		    updated_at = NOW()
-		WHERE instruction_audit_v2_hashes.status <> 'revoked'
-		RETURNING id`,
-		candidate.SHA256, candidate.Name, candidate.Note, candidate.ObservedField,
-		candidate.ContentBytes, candidate.RawStorage, candidate.RawCiphertext,
-		candidate.StoredBytes, candidate.AISampled, eventID, candidate.ReviewerNodeID,
-		candidate.ReviewerModel, candidate.PromptVersion, candidate.Confidence,
-		candidate.ReviewReason, candidate.ReviewCategory, candidate.CandidateExpiresAt,
-	).Scan(&hashID)
-	if err != nil {
-		return 0, err
-	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO instruction_audit_v2_hash_scopes
-			(hash_id, scope_id, status, source, candidate_expires_at)
-		VALUES ($1, $2, 'candidate', 'ai_review', $3)
-		ON CONFLICT (hash_id, scope_id) DO UPDATE
-		SET status = CASE
-		        WHEN instruction_audit_v2_hash_scopes.status = 'active' THEN 'active'
-		        ELSE 'candidate'
-		    END,
-		    source = CASE
-		        WHEN instruction_audit_v2_hash_scopes.status = 'active' THEN instruction_audit_v2_hash_scopes.source
-		        ELSE 'ai_review'
-		    END,
-		    candidate_expires_at = CASE
-		        WHEN instruction_audit_v2_hash_scopes.status = 'active' THEN NULL
-		        ELSE EXCLUDED.candidate_expires_at
-		    END,
-		    updated_at = NOW()`, hashID, candidate.ScopeID, candidate.CandidateExpiresAt)
-	return hashID, err
 }
 
 func (r *InstructionV2Repository) ListEvents(ctx context.Context, page, pageSize int, filter InstructionV2EventFilter) (InstructionV2EventPage, error) {
@@ -270,9 +231,9 @@ func (r *InstructionV2Repository) Statistics(ctx context.Context, filter Instruc
 		SELECT COUNT(*),
 		       COUNT(*) FILTER (WHERE outcome = 'hash_pass'),
 		       COUNT(*) FILTER (WHERE outcome = 'ai_pass'),
-		       COUNT(*) FILTER (WHERE outcome = 'blocked'),
+		       COUNT(*) FILTER (WHERE decision = 'block'),
 		       COUNT(*) FILTER (WHERE outcome IN ('empty_pass', 'user_allowlist_pass')),
-		       COUNT(*) FILTER (WHERE ai_result IN ('reject', 'uncertain', 'error', 'queue_full'))
+		       COUNT(*) FILTER (WHERE ai_result IN ('reject', 'uncertain', 'error', 'queue_full', 'timeout', 'invalid'))
 		FROM instruction_audit_v2_events e WHERE `+where, args...).Scan(
 		&statistics.Total, &statistics.HashPass, &statistics.AIPass, &statistics.Blocked,
 		&statistics.EmptyOrAllowlist, &statistics.AIFailures,
@@ -378,6 +339,7 @@ func instructionV2EventSelect() string {
 		       e.input1_sha256, e.input1_bytes, e.input1_partial, e.matched_hash_id,
 		       e.ai_result, e.ai_reviewed_field, e.ai_sampled, e.audit_latency_ms,
 		       e.ai_latency_ms, e.body_bytes, e.config_version, e.evidence_status,
+		       e.selected_field, e.selected_sha256, e.review_job_id,
 		       COALESCE((SELECT o.status FROM security_notification_outbox o
 		                 WHERE o.source_type = 'instruction_audit_v2' AND o.source_id = e.id
 		                   AND o.audience = 'user' ORDER BY o.id DESC LIMIT 1), 'not_requested'),
@@ -394,7 +356,7 @@ type instructionV2RowScanner interface {
 
 func scanInstructionV2Event(scanner instructionV2RowScanner) (InstructionV2Event, error) {
 	var item InstructionV2Event
-	var instructionsDigest, input1Digest sql.NullString
+	var instructionsDigest, input1Digest, selectedDigest sql.NullString
 	err := scanner.Scan(
 		&item.ID, &item.RequestID, &item.UserID, &item.UserEmail, &item.APIKeyID,
 		&item.APIKeyName, &item.GroupID, &item.GroupName, &item.ScopeID,
@@ -404,7 +366,8 @@ func scanInstructionV2Event(scanner instructionV2RowScanner) (InstructionV2Event
 		&item.Instructions.Partial, &item.Input1.State, &input1Digest, &item.Input1.Bytes,
 		&item.Input1.Partial, &item.MatchedHashID, &item.AIResult, &item.AIReviewedField,
 		&item.AISampled, &item.AuditLatencyMS, &item.AILatencyMS, &item.BodyBytes,
-		&item.ConfigVersion, &item.EvidenceStatus, &item.UserNotificationStatus,
+		&item.ConfigVersion, &item.EvidenceStatus, &item.SelectedField, &selectedDigest,
+		&item.ReviewJobID, &item.UserNotificationStatus,
 		&item.OpsNotificationStatus, &item.CreatedAt,
 	)
 	if err != nil {
@@ -415,6 +378,9 @@ func scanInstructionV2Event(scanner instructionV2RowScanner) (InstructionV2Event
 	}
 	if input1Digest.Valid {
 		item.Input1.SHA256 = strings.TrimSpace(input1Digest.String)
+	}
+	if selectedDigest.Valid {
+		item.SelectedSHA256 = strings.TrimSpace(selectedDigest.String)
 	}
 	return item, nil
 }

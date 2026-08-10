@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
+	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -149,7 +152,7 @@ func TestInstructionAuditResponsesUseGeneric403Envelope(t *testing.T) {
 		c, recorder := securityAuditErrorTestContext(t)
 		writeError(c)
 		require.Equal(t, http.StatusForbidden, recorder.Code)
-		require.JSONEq(t, `{"error":{"type":"request_rejected","message":"Request rejected by security policy."}}`, recorder.Body.String())
+		require.JSONEq(t, `{"error":{"type":"request_rejected","message":"`+securityaudit.InstructionClientMessage+`"}}`, recorder.Body.String())
 		body := recorder.Body.String()
 		require.NotContains(t, body, "instruction")
 		require.NotContains(t, body, "input1")
@@ -158,6 +161,39 @@ func TestInstructionAuditResponsesUseGeneric403Envelope(t *testing.T) {
 	}
 	require.Equal(t, int64(4403), int64(securityAuditWSCloseStatus(decision)))
 	require.Equal(t, securityaudit.InstructionErrorCodeRejected, securityAuditWSCloseReason(decision))
+}
+
+func TestInstructionAuditWebSocketUsesGenericEnvelope(t *testing.T) {
+	decision := &securityaudit.Decision{
+		Kind:          securityaudit.DecisionBlock,
+		HTTPStatus:    http.StatusForbidden,
+		ErrorCode:     securityaudit.InstructionErrorCodeRejected,
+		ClientMessage: securityaudit.InstructionClientMessage,
+		Instruction:   &securityaudit.InstructionDecision{Applicable: true, Allow: false},
+	}
+	serverErrors := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		connection, err := coderws.Accept(writer, request, nil)
+		if err != nil {
+			serverErrors <- err
+			return
+		}
+		defer connection.CloseNow()
+		writeSecurityAuditWSError(request.Context(), connection, decision)
+		serverErrors <- nil
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	require.NoError(t, err)
+	defer connection.CloseNow()
+	messageType, payload, err := connection.Read(ctx)
+	require.NoError(t, err)
+	require.Equal(t, coderws.MessageText, messageType)
+	require.JSONEq(t, `{"event_id":"evt_security_policy_rejected","type":"error","error":{"type":"request_rejected","message":"`+securityaudit.InstructionClientMessage+`"}}`, string(payload))
+	require.NoError(t, <-serverErrors)
 }
 
 func TestPromptGuardWebSocketCloseMappingGolden(t *testing.T) {
