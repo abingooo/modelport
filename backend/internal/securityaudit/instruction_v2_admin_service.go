@@ -265,36 +265,11 @@ func (s *InstructionV2Service) SaveAdminClientProfile(
 		if existing == nil {
 			return InstructionV2ClientProfile{}, instructionV2NotFoundError("客户端规则")
 		}
-		if existing.ImmutableInternal {
-			return InstructionV2ClientProfile{}, infraerrors.Conflict(
-				"instruction_audit_v2_immutable_client", "可信内部客户端规则不可修改",
+		request, err = normalizeInstructionV2ClientProfileUpdate(*existing, request)
+		if err != nil {
+			return InstructionV2ClientProfile{}, infraerrors.BadRequest(
+				"instruction_audit_v2_invalid_client", "客户端识别规则无效",
 			)
-		}
-		if existing.BuiltIn {
-			request.ProfileKey = existing.ProfileKey
-			request.Name = strings.TrimSpace(request.Name)
-			request.Description = strings.TrimSpace(request.Description)
-			candidate := InstructionV2ClientProfile{
-				ProfileKey: request.ProfileKey, Name: request.Name, Description: request.Description,
-				Matchers: request.Matchers, Priority: request.Priority, Enabled: request.Enabled,
-			}
-			if _, err := compileInstructionV2ClientProfile(candidate); err != nil || len(request.Name) > 120 || len(request.Description) > 500 {
-				return InstructionV2ClientProfile{}, infraerrors.BadRequest(
-					"instruction_audit_v2_invalid_client", "客户端识别规则无效",
-				)
-			}
-			if (request.ProfileKey == InstructionClientOther || request.ProfileKey == InstructionClientUnknown) && !request.Enabled {
-				return InstructionV2ClientProfile{}, infraerrors.BadRequest(
-					"instruction_audit_v2_required_client", "其他和未知客户端规则必须保持启用",
-				)
-			}
-		} else {
-			request, err = normalizeInstructionV2ClientProfileRequest(request)
-			if err != nil {
-				return InstructionV2ClientProfile{}, infraerrors.BadRequest(
-					"instruction_audit_v2_invalid_client", "客户端识别规则无效",
-				)
-			}
 		}
 	} else {
 		request, err = normalizeInstructionV2ClientProfileRequest(request)
@@ -1022,7 +997,7 @@ func mapInstructionV2RepositoryError(err error, resource string) error {
 	if errors.Is(err, errInstructionV2RevokedHash) {
 		return infraerrors.Conflict("instruction_audit_v2_hash_revoked", "已撤销的可信指令不能重新启用")
 	}
-	if errors.Is(err, errInstructionV2ImmutableProfile) || errors.Is(err, errInstructionV2BuiltInProfile) {
+	if errors.Is(err, errInstructionV2BuiltInProfile) {
 		return infraerrors.Conflict("instruction_audit_v2_client_protected", "系统内置客户端规则不能执行该操作")
 	}
 	if errors.Is(err, errInstructionV2ProfileInUse) {

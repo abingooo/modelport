@@ -66,7 +66,7 @@
               <p class="mt-1 font-mono text-xs text-primary-600 dark:text-primary-400">{{ client.profile_key }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              <button type="button" class="icon-btn" :disabled="client.immutable_internal" :title="client.immutable_internal ? t('admin.instructionAudit.v2.immutableClient') : t('common.edit')" @click="openClientForm(client)"><Icon :name="client.immutable_internal ? 'lock' : 'edit'" size="sm" /></button>
+              <button type="button" class="icon-btn" :title="t('common.edit')" @click="openClientForm(client)"><Icon name="edit" size="sm" /></button>
               <button v-if="!client.built_in" type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="clientToDelete = client"><Icon name="trash" size="sm" /></button>
             </div>
           </header>
@@ -171,24 +171,25 @@
           </label>
           <label class="min-w-0">
             <span class="input-label">{{ commonNameLabel }}</span>
-            <input v-model="clientForm.name" maxlength="120" class="input" />
+            <input v-model="clientForm.name" maxlength="120" class="input" :disabled="clientForm.immutableInternal" />
           </label>
         </div>
         <label class="block min-w-0">
           <span class="input-label">{{ t('admin.instructionAudit.v2.profileDescription') }}</span>
-          <input v-model="clientForm.description" maxlength="500" class="input" />
+          <input v-model="clientForm.description" maxlength="500" class="input" :disabled="clientForm.immutableInternal" />
         </label>
         <div class="grid gap-4 sm:grid-cols-2">
           <label>
             <span class="input-label">{{ t('admin.instructionAudit.v2.priority') }}</span>
-            <input v-model.number="clientForm.priority" type="number" min="0" max="100000" class="input" />
+            <input v-model.number="clientForm.priority" type="number" min="0" max="100000" class="input" :disabled="clientForm.immutableInternal" />
           </label>
           <label class="flex items-center justify-between gap-3 rounded-md border border-gray-200 px-3 py-3 dark:border-dark-600 sm:mt-6">
             <span class="text-sm font-medium text-gray-800 dark:text-gray-200">{{ t('common.enabled') }}</span>
             <input v-model="clientForm.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
           </label>
         </div>
-        <fieldset class="min-w-0">
+        <p v-if="clientForm.immutableInternal" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.immutableClient') }}</p>
+        <fieldset class="min-w-0" :disabled="clientForm.immutableInternal">
           <div class="flex items-center justify-between gap-3">
             <legend class="input-label">{{ t('admin.instructionAudit.v2.userAgentMatchers') }}</legend>
             <button type="button" class="btn btn-secondary btn-sm" @click="addMatcher"><Icon name="plus" size="sm" />{{ t('common.add') }}</button>
@@ -263,6 +264,7 @@ const clientForm = reactive({
   show: false,
   id: 0,
   builtIn: false,
+  immutableInternal: false,
   profileKey: '',
   name: '',
   description: '',
@@ -327,10 +329,9 @@ async function deleteScope() {
 }
 
 function openClientForm(client?: InstructionClientProfile) {
-  if (client?.immutable_internal) return
   Object.assign(clientForm, client
-    ? { show: true, id: client.id, builtIn: client.built_in, profileKey: client.profile_key, name: client.name, description: client.description, priority: client.priority, enabled: client.enabled, matchers: client.matchers.map((matcher) => ({ ...matcher })) }
-    : { show: true, id: 0, builtIn: false, profileKey: '', name: '', description: '', priority: 100, enabled: true, matchers: [] })
+    ? { show: true, id: client.id, builtIn: client.built_in, immutableInternal: client.immutable_internal, profileKey: client.profile_key, name: client.name, description: client.description, priority: client.priority, enabled: client.enabled, matchers: client.matchers.map((matcher) => ({ ...matcher })) }
+    : { show: true, id: 0, builtIn: false, immutableInternal: false, profileKey: '', name: '', description: '', priority: 100, enabled: true, matchers: [] })
 }
 
 function closeClientForm() {

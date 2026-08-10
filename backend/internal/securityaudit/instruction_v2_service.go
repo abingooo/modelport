@@ -19,13 +19,12 @@ import (
 )
 
 var (
-	errInstructionV2ConfigConflict   = errors.New("instruction audit v2 configuration conflict")
-	errInstructionV2ImmutableProfile = errors.New("immutable instruction audit v2 client profile")
-	errInstructionV2BuiltInProfile   = errors.New("built-in instruction audit v2 client profile cannot be deleted")
-	errInstructionV2ProfileInUse     = errors.New("instruction audit v2 client profile is in use")
-	errInstructionV2AINodeSlotInUse  = errors.New("instruction audit v2 AI node slot is in use")
-	errInstructionV2RevokedHash      = errors.New("revoked instruction audit v2 hash cannot be reactivated")
-	errInstructionV2ReviewLeaseLost  = errors.New("instruction audit v2 review lease lost")
+	errInstructionV2ConfigConflict  = errors.New("instruction audit v2 configuration conflict")
+	errInstructionV2BuiltInProfile  = errors.New("built-in instruction audit v2 client profile cannot be deleted")
+	errInstructionV2ProfileInUse    = errors.New("instruction audit v2 client profile is in use")
+	errInstructionV2AINodeSlotInUse = errors.New("instruction audit v2 AI node slot is in use")
+	errInstructionV2RevokedHash     = errors.New("revoked instruction audit v2 hash cannot be reactivated")
+	errInstructionV2ReviewLeaseLost = errors.New("instruction audit v2 review lease lost")
 )
 
 const (

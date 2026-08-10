@@ -507,26 +507,45 @@ func (r *InstructionV2Repository) SaveClientProfile(ctx context.Context, id int6
 		).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	} else {
 		var builtIn, immutable bool
-		var existingKey string
+		var existingKey, existingName, existingDescription string
+		var existingMatchers []byte
+		var existingPriority int
 		if err = tx.QueryRowContext(ctx, `
-			SELECT profile_key, built_in, immutable_internal
-			FROM instruction_audit_v2_client_profiles WHERE id = $1 FOR UPDATE`, id).Scan(&existingKey, &builtIn, &immutable); err != nil {
+			SELECT profile_key, name, description, matchers, priority, built_in, immutable_internal
+			FROM instruction_audit_v2_client_profiles WHERE id = $1 FOR UPDATE`, id).Scan(
+			&existingKey, &existingName, &existingDescription, &existingMatchers,
+			&existingPriority, &builtIn, &immutable,
+		); err != nil {
 			return InstructionV2ClientProfile{}, 0, err
 		}
 		if immutable {
-			return InstructionV2ClientProfile{}, 0, errInstructionV2ImmutableProfile
+			var immutableMatchers []InstructionV2ClientMatcher
+			if err = json.Unmarshal(existingMatchers, &immutableMatchers); err != nil {
+				return InstructionV2ClientProfile{}, 0, err
+			}
+			request = SaveInstructionV2ClientProfileRequest{
+				ProfileKey: existingKey, Name: existingName, Description: existingDescription,
+				Matchers: immutableMatchers, Priority: existingPriority, Enabled: request.Enabled,
+			}
+			err = tx.QueryRowContext(ctx, `
+				UPDATE instruction_audit_v2_client_profiles
+				SET enabled = $2, updated_by = NULLIF($3, 0), updated_at = NOW()
+				WHERE id = $1 RETURNING id, built_in, immutable_internal, created_at, updated_at`,
+				id, request.Enabled, actorID,
+			).Scan(&item.ID, &item.BuiltIn, &item.ImmutableInternal, &item.CreatedAt, &item.UpdatedAt)
+		} else {
+			if builtIn {
+				request.ProfileKey = existingKey
+			}
+			err = tx.QueryRowContext(ctx, `
+				UPDATE instruction_audit_v2_client_profiles
+				SET profile_key = $2, name = $3, description = $4, matchers = $5,
+				    priority = $6, enabled = $7, updated_by = NULLIF($8, 0), updated_at = NOW()
+				WHERE id = $1 RETURNING id, built_in, immutable_internal, created_at, updated_at`,
+				id, request.ProfileKey, request.Name, request.Description, matchers,
+				request.Priority, request.Enabled, actorID,
+			).Scan(&item.ID, &item.BuiltIn, &item.ImmutableInternal, &item.CreatedAt, &item.UpdatedAt)
 		}
-		if builtIn {
-			request.ProfileKey = existingKey
-		}
-		err = tx.QueryRowContext(ctx, `
-			UPDATE instruction_audit_v2_client_profiles
-			SET profile_key = $2, name = $3, description = $4, matchers = $5,
-			    priority = $6, enabled = $7, updated_by = NULLIF($8, 0), updated_at = NOW()
-			WHERE id = $1 RETURNING id, built_in, immutable_internal, created_at, updated_at`,
-			id, request.ProfileKey, request.Name, request.Description, matchers,
-			request.Priority, request.Enabled, actorID,
-		).Scan(&item.ID, &item.BuiltIn, &item.ImmutableInternal, &item.CreatedAt, &item.UpdatedAt)
 	}
 	if err != nil {
 		return InstructionV2ClientProfile{}, 0, err
