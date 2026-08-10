@@ -131,11 +131,7 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 					continue
 				}
 				idx[m.Name] = len(pg.Models)
-				pg.Models = append(pg.Models, PlazaModel{
-					Name:     m.Name,
-					Platform: m.Platform,
-					Pricing:  m.Pricing,
-				})
+				pg.Models = append(pg.Models, PlazaModel(m))
 			}
 		}
 	}
