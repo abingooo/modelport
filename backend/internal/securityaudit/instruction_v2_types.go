@@ -648,14 +648,6 @@ type instructionV2AIAttempt struct {
 	AttemptNo     int
 }
 
-type instructionV2AIOutcome struct {
-	Result        string
-	ReviewedField string
-	ApprovedField InstructionV2Field
-	Attempts      []instructionV2AIAttempt
-	Latency       time.Duration
-}
-
 type instructionV2PersistEvent struct {
 	Event     InstructionV2Event
 	Evidence  []instructionV2EvidenceWrite
@@ -754,15 +746,4 @@ type instructionV2PersistResult struct {
 	HashID  *int64
 	RiskID  *int64
 	JobID   *int64
-}
-
-type instructionV2AsyncJob struct {
-	request   Request
-	snapshot  *instructionV2Snapshot
-	profile   instructionV2ClientRuntime
-	scopes    []instructionV2ScopeRuntime
-	fields    instructionV2ParsedFields
-	bodyBytes int64
-	startedAt time.Time
-	weight    int64
 }
