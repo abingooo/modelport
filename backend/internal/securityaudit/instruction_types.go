@@ -11,7 +11,7 @@ const (
 	SettingKeyInstructionEvidenceRetentionDays = "instruction_audit_evidence_retention_days"
 	InstructionConfigInvalidationChannel       = "modelport:instruction_audit:config:invalidate"
 	InstructionErrorCodeRejected               = "request_rejected"
-	InstructionClientMessage                   = "Request rejected by security policy."
+	InstructionClientMessage                   = "Request rejected by security policy. 疑似破限，如有误判，请联系本站管理员。"
 	InstructionOutcomeBlocked                  = "blocked"
 	InstructionOutcomePolicyAllow              = "policy_allow"
 	InstructionOutcomeAIPass                   = "ai_pass"

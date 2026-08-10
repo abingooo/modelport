@@ -10,8 +10,13 @@ import type {
   InstructionGroupOption,
   InstructionHash,
   InstructionHashPage,
+  InstructionReviewJob,
+  InstructionReviewJobPage,
+  InstructionRiskAction,
+  InstructionRiskActionResult,
+  InstructionRiskHash,
+  InstructionRiskHashPage,
   InstructionScope,
-  InstructionSensitiveCapability,
   InstructionStatistics,
   InstructionUserAllowlistEntry,
   InstructionUserOption,
@@ -19,6 +24,7 @@ import type {
   SaveInstructionAINode,
   SaveInstructionClientProfile,
   SaveInstructionHash,
+  SaveInstructionRiskHash,
   SaveInstructionScope,
   UpdateInstructionHash,
   UpdateInstructionV2Config,
@@ -61,8 +67,8 @@ export const instructionAuditV2API = {
   async recordEventEvidenceCopy(id: number, fieldName: string): Promise<void> {
     await apiClient.post(`${basePath}/events/${id}/evidence-access`, { field_name: fieldName })
   },
-  async trustEvent(id: number, fields: string[], name = '', note = ''): Promise<{ hashes: InstructionHash[] }> {
-    const { data } = await apiClient.post<{ hashes: InstructionHash[] }>(`${basePath}/events/${id}/trust`, { fields, name, note })
+  async trustEvent(id: number, fields: string[], name = '', note = '', globalTrust = false): Promise<{ hashes: InstructionHash[] }> {
+    const { data } = await apiClient.post<{ hashes: InstructionHash[] }>(`${basePath}/events/${id}/trust`, { fields, name, note, global_trust: globalTrust })
     return data
   },
   async listHashes(params: { page: number; page_size: number; status?: string; q?: string }): Promise<InstructionHashPage> {
@@ -90,6 +96,50 @@ export const instructionAuditV2API = {
   },
   async recordHashRawCopy(id: number): Promise<void> {
     await apiClient.post(`${basePath}/hashes/${id}/raw-access`, {})
+  },
+  async listRiskHashes(params: { page: number; page_size: number; status?: string; q?: string }): Promise<InstructionRiskHashPage> {
+    const { data } = await apiClient.get<InstructionRiskHashPage>(`${basePath}/risk-hashes`, { params })
+    return data
+  },
+  async getRiskHash(id: number): Promise<InstructionRiskHash> {
+    const { data } = await apiClient.get<InstructionRiskHash>(`${basePath}/risk-hashes/${id}`)
+    return data
+  },
+  async createRiskHash(payload: SaveInstructionRiskHash): Promise<InstructionRiskHash> {
+    const { data } = await apiClient.post<InstructionRiskHash>(`${basePath}/risk-hashes`, payload)
+    return data
+  },
+  async updateRiskHash(id: number, action: InstructionRiskAction): Promise<InstructionRiskActionResult> {
+    const { data } = await apiClient.put<InstructionRiskActionResult>(`${basePath}/risk-hashes/${id}`, { action })
+    return data
+  },
+  async deleteRiskHash(id: number): Promise<void> {
+    await apiClient.delete(`${basePath}/risk-hashes/${id}`)
+  },
+  async revealRiskHashRaw(id: number): Promise<InstructionEvidenceReview> {
+    const { data } = await apiClient.get<InstructionEvidenceReview>(`${basePath}/risk-hashes/${id}/raw`)
+    return data
+  },
+  async recordRiskHashRawCopy(id: number): Promise<void> {
+    await apiClient.post(`${basePath}/risk-hashes/${id}/raw-access`, {})
+  },
+  async listReviewJobs(params: { page: number; page_size: number; status?: string; q?: string }): Promise<InstructionReviewJobPage> {
+    const { data } = await apiClient.get<InstructionReviewJobPage>(`${basePath}/review-jobs`, { params })
+    return data
+  },
+  async getReviewJob(id: number): Promise<InstructionReviewJob> {
+    const { data } = await apiClient.get<InstructionReviewJob>(`${basePath}/review-jobs/${id}`)
+    return data
+  },
+  async retryReviewJob(id: number): Promise<void> {
+    await apiClient.post(`${basePath}/review-jobs/${id}/retry`, {})
+  },
+  async revealReviewJobRaw(id: number): Promise<InstructionEvidenceReview> {
+    const { data } = await apiClient.get<InstructionEvidenceReview>(`${basePath}/review-jobs/${id}/raw`)
+    return data
+  },
+  async recordReviewJobRawCopy(id: number): Promise<void> {
+    await apiClient.post(`${basePath}/review-jobs/${id}/raw-access`, {})
   },
   async listScopes(): Promise<InstructionScope[]> {
     const { data } = await apiClient.get<InstructionScope[]>(`${basePath}/scopes`)
@@ -158,10 +208,6 @@ export const instructionAuditV2API = {
   },
   async testAINode(id: number): Promise<InstructionAINodeTestResult> {
     const { data } = await apiClient.post<InstructionAINodeTestResult>(`${basePath}/ai-nodes/${id}/test`, {})
-    return data
-  },
-  async getSensitiveCapability(): Promise<InstructionSensitiveCapability> {
-    const { data } = await apiClient.get<InstructionSensitiveCapability>(`${basePath}/sensitive-access/me`)
     return data
   },
 }

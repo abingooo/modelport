@@ -33,12 +33,12 @@ describe('instruction audit V2 API', () => {
     expect(await instructionAuditV2API.deleteEvents([3, 4])).toBe(2)
     await instructionAuditV2API.revealEventEvidence(3)
     await instructionAuditV2API.recordEventEvidenceCopy(3, 'instructions')
-    await instructionAuditV2API.trustEvent(3, ['instructions', 'input1'], 'trusted', 'reviewed')
+    await instructionAuditV2API.trustEvent(3, ['instructions', 'input1'], 'trusted', 'reviewed', false)
     await instructionAuditV2API.deleteEvent(3)
 
     expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/events/3/evidence')
     expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/events/3/evidence-access', { field_name: 'instructions' })
-    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/events/3/trust', { fields: ['instructions', 'input1'], name: 'trusted', note: 'reviewed' })
+    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/events/3/trust', { fields: ['instructions', 'input1'], name: 'trusted', note: 'reviewed', global_trust: false })
     expect(client.delete).toHaveBeenCalledWith('/admin/instruction-audit/events/3')
   })
 
@@ -64,5 +64,36 @@ describe('instruction audit V2 API', () => {
     expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/users', { params: { q: 'user@example.com' } })
     expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/user-allowlist', { user_id: 17, note: 'approved operator', enabled: true })
     expect(client.delete).toHaveBeenCalledWith('/admin/instruction-audit/user-allowlist/8')
+  })
+
+  it('manages global risk hashes and their protected plaintext', async () => {
+    const payload = { raw_content: 'blocked instruction', sha256: '', observed_field: 'instructions' as const, note: 'manual review' }
+    await instructionAuditV2API.listRiskHashes({ page: 1, page_size: 20, status: 'active', q: 'blocked' })
+    await instructionAuditV2API.createRiskHash(payload)
+    await instructionAuditV2API.updateRiskHash(11, 'confirm_safe')
+    await instructionAuditV2API.revealRiskHashRaw(11)
+    await instructionAuditV2API.recordRiskHashRawCopy(11)
+    await instructionAuditV2API.deleteRiskHash(11)
+
+    expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/risk-hashes', { params: { page: 1, page_size: 20, status: 'active', q: 'blocked' } })
+    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/risk-hashes', payload)
+    expect(client.put).toHaveBeenCalledWith('/admin/instruction-audit/risk-hashes/11', { action: 'confirm_safe' })
+    expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/risk-hashes/11/raw')
+    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/risk-hashes/11/raw-access', {})
+    expect(client.delete).toHaveBeenCalledWith('/admin/instruction-audit/risk-hashes/11')
+  })
+
+  it('lists, inspects, retries, and reveals durable review jobs', async () => {
+    await instructionAuditV2API.listReviewJobs({ page: 2, page_size: 10, status: 'retry', q: 'digest' })
+    await instructionAuditV2API.getReviewJob(13)
+    await instructionAuditV2API.retryReviewJob(13)
+    await instructionAuditV2API.revealReviewJobRaw(13)
+    await instructionAuditV2API.recordReviewJobRawCopy(13)
+
+    expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/review-jobs', { params: { page: 2, page_size: 10, status: 'retry', q: 'digest' } })
+    expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/review-jobs/13')
+    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/review-jobs/13/retry', {})
+    expect(client.get).toHaveBeenCalledWith('/admin/instruction-audit/review-jobs/13/raw')
+    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/review-jobs/13/raw-access', {})
   })
 })
