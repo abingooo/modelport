@@ -13,6 +13,44 @@ type countingInstructionV2Reviewer struct {
 	calls int
 }
 
+func TestInstructionV2ClientProfileUpdateAllowsEveryBuiltInRuleToBeDisabled(t *testing.T) {
+	for _, key := range []string{InstructionClientOther, InstructionClientUnknown} {
+		t.Run(key, func(t *testing.T) {
+			request, err := normalizeInstructionV2ClientProfileUpdate(
+				InstructionV2ClientProfile{ProfileKey: key, Name: key, BuiltIn: true, Enabled: true},
+				SaveInstructionV2ClientProfileRequest{ProfileKey: "ignored", Name: key, Enabled: false},
+			)
+			require.NoError(t, err)
+			require.Equal(t, key, request.ProfileKey)
+			require.False(t, request.Enabled)
+		})
+	}
+
+	existing := InstructionV2ClientProfile{
+		ProfileKey: InstructionClientModelPortInternal, Name: "ModelPort Internal",
+		Description: "trusted identity", Priority: 0, Enabled: true,
+		BuiltIn: true, ImmutableInternal: true,
+	}
+	request, err := normalizeInstructionV2ClientProfileUpdate(existing, SaveInstructionV2ClientProfileRequest{
+		ProfileKey: "tampered", Name: "tampered", Description: "tampered", Priority: 999,
+		Enabled: false, Matchers: []InstructionV2ClientMatcher{{Type: "prefix", Value: "tampered/"}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, existing.ProfileKey, request.ProfileKey)
+	require.Equal(t, existing.Name, request.Name)
+	require.Equal(t, existing.Description, request.Description)
+	require.Equal(t, existing.Priority, request.Priority)
+	require.Empty(t, request.Matchers)
+	require.False(t, request.Enabled)
+
+	_, _, err = normalizeInstructionV2ClientProfiles([]InstructionV2ClientProfile{
+		{ID: 1, ProfileKey: InstructionClientModelPortInternal, Name: "ModelPort Internal", Enabled: false, BuiltIn: true, ImmutableInternal: true},
+		{ID: 2, ProfileKey: InstructionClientOther, Name: "Other", Enabled: false, BuiltIn: true},
+		{ID: 3, ProfileKey: InstructionClientUnknown, Name: "Unknown", Enabled: false, BuiltIn: true},
+	})
+	require.NoError(t, err)
+}
+
 func (r *countingInstructionV2Reviewer) Review(
 	context.Context,
 	*instructionV2AINodeRuntime,

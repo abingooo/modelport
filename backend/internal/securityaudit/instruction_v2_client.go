@@ -28,7 +28,7 @@ func compileInstructionV2ClientProfile(profile InstructionV2ClientProfile) (inst
 		}
 		runtime.matchers = append(runtime.matchers, compiled)
 	}
-	if profile.ImmutableInternal && (profile.ProfileKey != InstructionClientModelPortInternal || len(profile.Matchers) != 0 || !profile.Enabled || !profile.BuiltIn) {
+	if profile.ImmutableInternal && (profile.ProfileKey != InstructionClientModelPortInternal || len(profile.Matchers) != 0 || !profile.BuiltIn) {
 		return instructionV2ClientRuntime{}, errors.New("invalid immutable internal client profile")
 	}
 	return runtime, nil
@@ -170,6 +170,33 @@ func normalizeInstructionV2ClientProfileRequest(request SaveInstructionV2ClientP
 	}
 	if request.ProfileKey == InstructionClientModelPortInternal || request.ProfileKey == InstructionClientOther || request.ProfileKey == InstructionClientUnknown {
 		return request, errors.New("reserved instruction audit client profile key")
+	}
+	return request, nil
+}
+
+func normalizeInstructionV2ClientProfileUpdate(
+	existing InstructionV2ClientProfile,
+	request SaveInstructionV2ClientProfileRequest,
+) (SaveInstructionV2ClientProfileRequest, error) {
+	if existing.ImmutableInternal {
+		return SaveInstructionV2ClientProfileRequest{
+			ProfileKey: existing.ProfileKey, Name: existing.Name,
+			Description: existing.Description, Matchers: append([]InstructionV2ClientMatcher(nil), existing.Matchers...),
+			Priority: existing.Priority, Enabled: request.Enabled,
+		}, nil
+	}
+	if !existing.BuiltIn {
+		return normalizeInstructionV2ClientProfileRequest(request)
+	}
+	request.ProfileKey = existing.ProfileKey
+	request.Name = strings.TrimSpace(request.Name)
+	request.Description = strings.TrimSpace(request.Description)
+	candidate := InstructionV2ClientProfile{
+		ProfileKey: request.ProfileKey, Name: request.Name, Description: request.Description,
+		Matchers: request.Matchers, Priority: request.Priority, Enabled: request.Enabled,
+	}
+	if _, err := compileInstructionV2ClientProfile(candidate); err != nil || len(request.Name) > 120 || len(request.Description) > 500 {
+		return request, errors.New("invalid instruction audit client profile")
 	}
 	return request, nil
 }

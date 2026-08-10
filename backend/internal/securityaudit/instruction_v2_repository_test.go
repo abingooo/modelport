@@ -180,6 +180,52 @@ func TestInstructionV2HashEmptyScopesMarshalAsArrays(t *testing.T) {
 	require.Equal(t, []any{}, decoded["scopes"])
 }
 
+func TestInstructionV2RepositoryUpdatesOnlyEnabledForImmutableClientProfile(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	createdAt := time.Date(2026, 8, 11, 1, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT profile_key, name, description, matchers, priority, built_in, immutable_internal.*FOR UPDATE`).
+		WithArgs(int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"profile_key", "name", "description", "matchers", "priority", "built_in", "immutable_internal",
+		}).AddRow(InstructionClientModelPortInternal, "ModelPort Internal", "trusted identity", []byte(`[]`), 0, true, true))
+	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_client_profiles.*SET enabled = \$2.*WHERE id = \$1`).
+		WithArgs(int64(5), false, int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "built_in", "immutable_internal", "created_at", "updated_at",
+		}).AddRow(int64(5), true, true, createdAt, updatedAt))
+	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_config.*RETURNING config_version`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"config_version"}).AddRow(int64(12)))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	item, version, err := NewInstructionV2Repository(db).SaveClientProfile(
+		context.Background(), 5,
+		SaveInstructionV2ClientProfileRequest{
+			ProfileKey: "tampered", Name: "tampered", Description: "tampered", Priority: 999,
+			Enabled: false, Matchers: []InstructionV2ClientMatcher{{Type: "prefix", Value: "tampered/"}},
+		},
+		7,
+	)
+	require.NoError(t, err)
+	require.Equal(t, int64(12), version)
+	require.Equal(t, InstructionClientModelPortInternal, item.ProfileKey)
+	require.Equal(t, "ModelPort Internal", item.Name)
+	require.Equal(t, "trusted identity", item.Description)
+	require.Zero(t, item.Priority)
+	require.Empty(t, item.Matchers)
+	require.False(t, item.Enabled)
+	require.True(t, item.ImmutableInternal)
+}
+
 func TestInstructionV2RepositoryRejectsDeletingReferencedClientProfile(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
