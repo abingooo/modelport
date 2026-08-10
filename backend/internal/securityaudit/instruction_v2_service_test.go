@@ -5,8 +5,28 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+type countingInstructionV2Reviewer struct {
+	calls int
+}
+
+func (r *countingInstructionV2Reviewer) Review(
+	context.Context,
+	*instructionV2AINodeRuntime,
+	string,
+	string,
+	string,
+	string,
+	bool,
+) (instructionV2AIResult, error) {
+	r.calls++
+	return instructionV2AIResult{
+		Result: "pass", Confidence: 0.99, Reason: "test", Category: "test",
+	}, nil
+}
 
 func TestInstructionV2ServiceUsesAuthenticatedGroupAndClientScope(t *testing.T) {
 	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeEnforce)
@@ -127,6 +147,92 @@ func TestInstructionV2ServiceRiskHashTakesPrecedence(t *testing.T) {
 	require.Equal(t, InstructionV2OutcomeRiskBlocked, decision.FinalOutcome)
 	require.Equal(t, "risk_hash_match", decision.Reason)
 	require.Equal(t, InstructionClientMessage, decision.ClientMessage)
+}
+
+func TestInstructionV2ServiceReusesReviewJobBeforeSyncAI(t *testing.T) {
+	tests := []struct {
+		name           string
+		mode           string
+		jobStatus      string
+		sourceDecision string
+		wantAllow      bool
+		wantReason     string
+		wantRequeue    bool
+	}{
+		{
+			name: "pending task reuses blocked sync result", mode: InstructionV2ModeEnforce,
+			jobStatus:      "pending",
+			sourceDecision: "block", wantAllow: false, wantReason: "async_review_pending",
+		},
+		{
+			name: "failed task requeues and reuses allowed sync result", mode: InstructionV2ModeEnforce,
+			jobStatus:      "failed",
+			sourceDecision: "allow", wantAllow: true, wantReason: "async_review_requeued",
+			wantRequeue: true,
+		},
+		{
+			name: "missing source decision fails closed", mode: InstructionV2ModeEnforce,
+			jobStatus: "retry", sourceDecision: "", wantAllow: false,
+			wantReason: "async_review_pending",
+		},
+		{
+			name: "observe mode overrides blocked source decision", mode: InstructionV2ModeObserve,
+			jobStatus: "processing", sourceDecision: "block", wantAllow: true,
+			wantReason: "async_review_pending",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			service, snapshot := newInstructionV2TestService(t, test.mode)
+			service.repository = NewInstructionV2Repository(db)
+			reviewer := &countingInstructionV2Reviewer{}
+			service.reviewer = reviewer
+			snapshot.AINodesBySlot["sync"] = &instructionV2AINodeRuntime{
+				InstructionV2AINode: InstructionV2AINode{
+					ID: 1, Name: "sync", TimeoutMS: 1000, MaxConcurrency: 1, Slot: "sync",
+				},
+				APIKey: "test-key", semaphore: make(chan struct{}, 1),
+			}
+			service.snapshot.Store(snapshot)
+			digest := instructionV2TestDigest("reuse review field")
+
+			mock.ExpectBegin()
+			mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
+				WithArgs(digest).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*FOR UPDATE OF job`).
+				WithArgs(digest).
+				WillReturnRows(sqlmock.NewRows([]string{"id", "status", "observe_only", "decision"}).
+					AddRow(int64(71), test.jobStatus, false, test.sourceDecision))
+			if test.wantRequeue {
+				mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET status = 'retry'.*WHERE id = \$1`).
+					WithArgs(int64(71)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+			mock.ExpectCommit()
+			mock.ExpectBegin()
+			mock.ExpectQuery(`(?s)INSERT INTO instruction_audit_v2_events.*RETURNING id`).
+				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(91)))
+			mock.ExpectCommit()
+			mock.ExpectClose()
+
+			decision := service.EvaluateInstruction(context.Background(), Request{
+				Protocol: instructionAuditProtocol, RequestID: "reuse-review-request",
+				GroupID:         instructionV2TestInt64Pointer(7),
+				InstructionBody: []byte(`{"instructions":"reuse review field"}`),
+			})
+
+			require.Equal(t, test.wantAllow, decision.Allow)
+			require.Equal(t, test.wantReason, decision.Reason)
+			require.Equal(t, InstructionV2OutcomeAIPending, decision.FinalOutcome)
+			require.Equal(t, int64(91), decision.EventID)
+			require.Zero(t, reviewer.calls)
+			require.NoError(t, db.Close())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
 }
 
 func TestInstructionV2ServiceRequiresConfiguredReviewSlot(t *testing.T) {

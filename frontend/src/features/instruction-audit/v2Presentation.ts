@@ -16,6 +16,8 @@ export const instructionEventReasonOptions = [
   'sync_ai_error',
   'sync_ai_timeout',
   'sync_ai_invalid',
+  'async_review_pending',
+  'async_review_requeued',
   'persistence_error',
 ] as const
 

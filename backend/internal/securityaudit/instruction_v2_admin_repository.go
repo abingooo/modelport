@@ -265,12 +265,17 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT h.id, h.sha256, h.name, h.note, h.status, h.source, h.observed_field,
-		       h.hash_algorithm, h.normalization_version, h.content_bytes, h.raw_storage,
-		       h.stored_bytes, h.ai_sampled, h.source_event_id, h.reviewer_node_id,
+		       h.hash_algorithm, h.normalization_version,
+		       CASE WHEN vault.id IS NULL THEN h.content_bytes ELSE vault.content_bytes END,
+		       CASE WHEN vault.id IS NULL THEN h.raw_storage ELSE 'full' END,
+		       CASE WHEN vault.id IS NULL THEN h.stored_bytes ELSE vault.stored_bytes END,
+		       h.ai_sampled, h.source_event_id, h.reviewer_node_id,
 		       h.reviewer_model, h.prompt_version, h.confidence, h.review_reason,
 		       h.review_category, h.candidate_expires_at, h.created_by, h.updated_by,
 		       h.created_at, h.updated_at, h.global_trust, h.content_vault_id
-		FROM instruction_audit_v2_hashes h WHERE `+whereSQL+`
+		FROM instruction_audit_v2_hashes h
+		LEFT JOIN instruction_audit_v2_content_vault vault ON vault.id = h.content_vault_id
+		WHERE `+whereSQL+`
 		ORDER BY h.created_at DESC, h.id DESC
 		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
 	if err != nil {
@@ -292,6 +297,7 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 			return InstructionV2HashPage{}, err
 		}
 		item.SHA256 = strings.TrimSpace(item.SHA256)
+		ensureInstructionV2HashCollections(&item)
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -362,6 +368,7 @@ func (r *InstructionV2Repository) GetHash(ctx context.Context, id int64) (Instru
 		return InstructionV2Hash{}, nil, err
 	}
 	item.SHA256 = strings.TrimSpace(item.SHA256)
+	ensureInstructionV2HashCollections(&item)
 	byID := map[int64]*InstructionV2Hash{item.ID: &item}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT hs.hash_id, s.id, s.group_id, g.name, s.client_profile_id,
@@ -383,6 +390,18 @@ func (r *InstructionV2Repository) GetHash(ctx context.Context, id int64) (Instru
 		return InstructionV2Hash{}, nil, err
 	}
 	return item, ciphertext, nil
+}
+
+func ensureInstructionV2HashCollections(item *InstructionV2Hash) {
+	if item == nil {
+		return
+	}
+	if item.ScopeIDs == nil {
+		item.ScopeIDs = make([]int64, 0)
+	}
+	if item.Scopes == nil {
+		item.Scopes = make([]InstructionV2HashScope, 0)
+	}
 }
 
 func (r *InstructionV2Repository) SaveManualHash(ctx context.Context, write instructionV2ManualHashWrite, actorID int64) (InstructionV2Hash, int64, error) {

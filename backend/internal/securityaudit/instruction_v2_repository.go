@@ -413,6 +413,10 @@ func (r *InstructionV2Repository) SaveAINode(ctx context.Context, id int64, requ
 		err = tx.QueryRowContext(ctx, query, args...).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	}
 	if err != nil {
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr != nil && pqErr.Code == "23505" && pqErr.Constraint == "uq_instruction_audit_v2_node_slot" {
+			return InstructionV2AINode{}, 0, errInstructionV2AINodeSlotInUse
+		}
 		return InstructionV2AINode{}, 0, err
 	}
 	version, err := r.bumpConfigVersion(ctx, tx, actorID)

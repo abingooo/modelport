@@ -15,7 +15,7 @@ export default {
         },
         reasons: {
           none: '无', global_trusted_hash_match: '命中全局可信哈希', scoped_trusted_hash_match: '命中当前范围可信哈希', risk_hash_match: '命中风险拦截哈希', fields_empty: '两个审核字段均为空', user_allowlist: '用户白名单放行',
-          invalid_json: 'JSON 请求格式无效', config_unavailable: '审核配置暂不可用', sync_ai_pass: '同步 AI 初筛通过', sync_ai_reject: '同步 AI 判定风险', sync_ai_uncertain: '同步 AI 无法确定', sync_ai_error: '同步 AI 调用失败', sync_ai_timeout: '同步 AI 审核超时', sync_ai_invalid: '同步 AI 返回格式无效', persistence_error: '审核结果写入失败',
+          invalid_json: 'JSON 请求格式无效', config_unavailable: '审核配置暂不可用', sync_ai_pass: '同步 AI 初筛通过', sync_ai_reject: '同步 AI 判定风险', sync_ai_uncertain: '同步 AI 无法确定', sync_ai_error: '同步 AI 调用失败', sync_ai_timeout: '同步 AI 审核超时', sync_ai_invalid: '同步 AI 返回格式无效', async_review_pending: '复用进行中的异步复核', async_review_requeued: '失败的异步复核已重新排队', persistence_error: '审核结果写入失败',
         },
         aiResults: { not_run: '未执行', pass: '通过', reject: '拒绝', uncertain: '不确定', error: '失败', timeout: '超时', invalid: '结果无效', queue_full: '队列已满' },
         fieldStates: { not_checked: '未检查', missing: '字段缺失', empty: '空字段', valid: '已提取', invalid: '格式无效' },

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 
@@ -230,7 +231,7 @@ func (s *InstructionV2Service) DeleteAdminAINode(ctx context.Context, id, actorI
 func (s *InstructionV2Service) TestAdminAINode(ctx context.Context, id int64) (InstructionV2AINodeTestResult, error) {
 	result, latency, err := s.TestAINode(ctx, id)
 	if err != nil {
-		return InstructionV2AINodeTestResult{}, mapInstructionV2RepositoryError(err, "AI 节点")
+		return InstructionV2AINodeTestResult{}, mapInstructionV2AINodeTestError(err)
 	}
 	return InstructionV2AINodeTestResult{
 		Result: result.Result, Confidence: result.Confidence, Reason: result.Reason,
@@ -1027,7 +1028,33 @@ func mapInstructionV2RepositoryError(err error, resource string) error {
 	if errors.Is(err, errInstructionV2ProfileInUse) {
 		return infraerrors.Conflict("instruction_audit_v2_client_in_use", "客户端规则仍被审核范围引用，请先删除关联范围")
 	}
+	if errors.Is(err, errInstructionV2AINodeSlotInUse) {
+		return infraerrors.Conflict("instruction_audit_v2_ai_slot_in_use", "该 AI 槽位已有节点，请编辑现有节点")
+	}
 	return err
+}
+
+func mapInstructionV2AINodeTestError(err error) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return instructionV2NotFoundError("AI 节点")
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return infraerrors.GatewayTimeout(
+			"instruction_audit_v2_ai_timeout", "AI 审核节点连接或响应超时，请检查网络或提高节点超时时间",
+		).WithCause(err)
+	}
+	if errors.Is(err, errInstructionV2AIInvalid) {
+		return infraerrors.New(
+			http.StatusBadGateway, "instruction_audit_v2_ai_invalid_response",
+			"AI 审核节点返回格式无效，请确认模型支持 JSON 对象输出",
+		).WithCause(err)
+	}
+	if errors.Is(err, errInstructionV2AIUnavailable) {
+		return infraerrors.ServiceUnavailable(
+			"instruction_audit_v2_ai_unavailable", "AI 审核节点不可用，请检查 Base URL、模型、API Key 和网络",
+		).WithCause(err)
+	}
+	return mapInstructionV2RepositoryError(err, "AI 节点")
 }
 
 func instructionV2NotFoundError(resource string) error {
