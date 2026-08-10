@@ -656,6 +656,7 @@ export default {
       tiered: 'Tiered'
     },
     source: {
+      channel: 'Channel pricing',
       name: 'Official reference source: {source}',
       withDate: 'Official reference: {source} · Updated {date}'
     },

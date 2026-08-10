@@ -661,6 +661,7 @@ export default {
       tiered: '阶梯定价'
     },
     source: {
+      channel: '渠道定价',
       name: '官方参考价来源：{source}',
       withDate: '官方参考价：{source} · 更新于 {date}'
     },

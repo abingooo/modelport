@@ -260,11 +260,14 @@ const currentModel = computed(() => currentOffer.value.model)
 const displayPricing = computed(() => currentModel.value.display_pricing)
 const isOfficialPricing = computed(() => selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID)
 const hasOfficialPricing = computed(() => plazaHasOfficialPricing(currentModel.value))
+const activePricing = computed(() =>
+  isOfficialPricing.value ? currentModel.value.pricing : displayPricing.value
+)
 const hasDisplayPricing = computed(() =>
-  isOfficialPricing.value ? hasOfficialPricing.value : displayPricing.value != null
+  isOfficialPricing.value ? hasOfficialPricing.value : activePricing.value != null
 )
 const billingMode = computed(() =>
-  isOfficialPricing.value ? BILLING_MODE_TOKEN : (plazaBillingMode(currentModel.value) as BillingMode)
+  plazaBillingMode(currentModel.value) as BillingMode
 )
 const providerLabel = computed(() => plazaProviderLabel(props.card.platform))
 const accentStyle = computed(() => ({ '--plaza-accent': platformAccentColor(props.card.platform) }))
@@ -318,9 +321,7 @@ const intervalPriceFields = computed<Array<{ key: TokenPriceKey; label: string }
   { key: 'cache_read_price', label: t('modelPlaza.table.cacheRead') }
 ])
 
-const tokenIntervals = computed(() =>
-  isOfficialPricing.value ? [] : (displayPricing.value?.intervals ?? [])
-)
+const tokenIntervals = computed(() => activePricing.value?.intervals ?? [])
 
 const tokenPriceCells = computed(() =>
   intervalPriceFields.value.map((field) => ({
@@ -331,8 +332,7 @@ const tokenPriceCells = computed(() =>
 )
 
 const requestPriceRows = computed(() => {
-  if (isOfficialPricing.value) return []
-  const pricing = displayPricing.value
+  const pricing = activePricing.value
   if (!pricing) return []
   const rows = pricing.intervals
     .filter((interval) => interval.per_request_price != null)
@@ -356,11 +356,7 @@ function selectGroup(value: string | number | boolean | null) {
 }
 
 function currentTokenPrice(key: TokenPriceKey): string {
-  if (isOfficialPricing.value) {
-    const officialValue = currentModel.value.official_pricing?.[key]
-    return officialValue == null ? '-' : formatPlazaPrice(officialValue, 1_000_000)
-  }
-  const value = displayPricing.value?.[key]
+  const value = activePricing.value?.[key]
   if (value != null) return currentPrice(value)
   if (tokenIntervals.value.some((interval) => interval[key] != null)) return t('modelPlaza.card.tiered')
   return '-'

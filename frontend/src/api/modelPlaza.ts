@@ -1,19 +1,19 @@
 /**
  * Model Plaza API（公开端点，可匿名访问）
- * 以分组为中心的模型价目：分组信息 + 模型渠道定价 + LiteLLM 官方参考价。
+ * 以分组为中心的模型价目：渠道官方基础价 + 应用分组和用户倍率后的展示价。
  * 带 token 请求时后端会额外返回专属分组与用户专属倍率。
  */
 
 import { apiClient } from './client'
 import type { UserSupportedModelPricing } from './channels'
 
-/** LiteLLM 官方参考价（USD per token，字段缺失 = 官方数据未覆盖）。 */
+/** 兼容旧客户端的渠道 token 官方价投影；完整官方价使用 PlazaModel.pricing。 */
 export interface PlazaOfficialPricing {
   input_price: number | null
   output_price: number | null
-  /** 5m 缓存写入（= LiteLLM cache_creation）。 */
+  /** 缓存写入价格。 */
   cache_write_price: number | null
-  /** 1h 缓存写入（LiteLLM cache_creation_above_1hr），多数模型缺失。 */
+  /** 旧版兼容字段；渠道定价不单独提供 1h 缓存写入价格。 */
   cache_write_1h_price?: number | null
   cache_read_price: number | null
 }
@@ -25,6 +25,7 @@ export interface PlazaModel {
   /** 后端按当前用户、分组、峰时及图片独立倍率计算后的展示价格。 */
   display_pricing: UserSupportedModelPricing | null
   effective_multiplier: number
+  /** @deprecated 使用 pricing；该字段仅保留旧客户端兼容。 */
   official_pricing: PlazaOfficialPricing | null
 }
 

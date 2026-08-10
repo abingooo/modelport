@@ -71,10 +71,7 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 			Name:     "claude-sonnet",
 			Platform: "anthropic",
 			Pricing: &service.ChannelModelPricing{
-				BillingMode: service.BillingModeToken,
-				InputPrice:  testPtr(3e-6),
-			},
-			OfficialPricing: &service.PlazaOfficialPricing{
+				BillingMode:    service.BillingModeToken,
 				InputPrice:     testPtr(3e-6),
 				CacheReadPrice: testPtr(3e-7),
 			},
@@ -111,6 +108,9 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	official := model["official_pricing"].(map[string]any)
 	require.Contains(t, official, "input_price")
 	require.Contains(t, official, "cache_read_price")
+	require.InDelta(t, 3e-6, official["input_price"].(float64), 1e-12, "官方价必须保留渠道原价")
+	display := model["display_pricing"].(map[string]any)
+	require.InDelta(t, 0, display["input_price"].(float64), 1e-12, "免费分组展示价应应用零倍率")
 	_, has1h := official["cache_write_1h_price"]
 	require.False(t, has1h, "1h 缓存写价为 nil 时应 omitempty")
 
@@ -148,6 +148,10 @@ func TestToModelPlazaGroupDTOAt_AppliesUserPeakAndImageMultipliers(t *testing.T)
 
 func TestToModelPlazaOfficialPricing_NilPassthrough(t *testing.T) {
 	require.Nil(t, toModelPlazaOfficialPricing(nil))
+	require.Nil(t, toModelPlazaOfficialPricing(&service.ChannelModelPricing{
+		BillingMode:     service.BillingModeImage,
+		PerRequestPrice: testPtr(0.04),
+	}))
 }
 
 func testPtr(v float64) *float64 { return &v }
