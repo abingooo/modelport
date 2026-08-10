@@ -31,7 +31,7 @@ const (
 	InstructionV2DefaultRawFullMaxBytes     = 4 << 20
 	InstructionV2ConfigInvalidationChannel  = "modelport:instruction_audit_v2:config:invalidate"
 	InstructionV2AIReviewPurposeHeader      = "instruction-audit-v2-review"
-	InstructionV2PromptWrapperVersion       = "instruction-audit-v2-wrapper-1"
+	InstructionV2PromptWrapperVersion       = "instruction-audit-v2-wrapper-2"
 	InstructionV2AsyncQueueCapacity         = 32768
 	InstructionV2AsyncWorkerMaximum         = 512
 	InstructionV2EventBatchSize             = 100
@@ -618,6 +618,18 @@ type instructionV2AIResult struct {
 	Category   string  `json:"category"`
 }
 
+type instructionV2Reviewer interface {
+	Review(
+		context.Context,
+		*instructionV2AINodeRuntime,
+		string,
+		string,
+		string,
+		string,
+		bool,
+	) (instructionV2AIResult, error)
+}
+
 type instructionV2AIAttempt struct {
 	NodeID        *int64
 	NodeName      string
@@ -721,6 +733,14 @@ type instructionV2ReviewJobWrite struct {
 	ObserveOnly    bool
 	Sampled        bool
 	SampleBytes    int
+}
+
+type instructionV2ReviewReuse struct {
+	JobID               int64
+	Status              string
+	SourceDecision      string
+	Requeued            bool
+	ResetForEnforcement bool
 }
 
 type instructionV2ClaimedReviewJob struct {

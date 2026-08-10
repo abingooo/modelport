@@ -32,6 +32,14 @@ import type {
 
 const basePath = '/admin/instruction-audit'
 
+function normalizeInstructionHash(hash: InstructionHash): InstructionHash {
+  return {
+    ...hash,
+    scope_ids: Array.isArray(hash.scope_ids) ? hash.scope_ids : [],
+    scopes: Array.isArray(hash.scopes) ? hash.scopes : [],
+  }
+}
+
 export const instructionAuditV2API = {
   async getConfig(): Promise<InstructionV2Config> {
     const { data } = await apiClient.get<InstructionV2Config>(`${basePath}/config`)
@@ -69,23 +77,23 @@ export const instructionAuditV2API = {
   },
   async trustEvent(id: number, fields: string[], name = '', note = '', globalTrust = false): Promise<{ hashes: InstructionHash[] }> {
     const { data } = await apiClient.post<{ hashes: InstructionHash[] }>(`${basePath}/events/${id}/trust`, { fields, name, note, global_trust: globalTrust })
-    return data
+    return { ...data, hashes: Array.isArray(data.hashes) ? data.hashes.map(normalizeInstructionHash) : [] }
   },
   async listHashes(params: { page: number; page_size: number; status?: string; q?: string }): Promise<InstructionHashPage> {
     const { data } = await apiClient.get<InstructionHashPage>(`${basePath}/hashes`, { params })
-    return data
+    return { ...data, items: Array.isArray(data.items) ? data.items.map(normalizeInstructionHash) : [] }
   },
   async getHash(id: number): Promise<InstructionHash> {
     const { data } = await apiClient.get<InstructionHash>(`${basePath}/hashes/${id}`)
-    return data
+    return normalizeInstructionHash(data)
   },
   async createHash(payload: SaveInstructionHash): Promise<InstructionHash> {
     const { data } = await apiClient.post<InstructionHash>(`${basePath}/hashes`, payload)
-    return data
+    return normalizeInstructionHash(data)
   },
   async updateHash(id: number, payload: UpdateInstructionHash): Promise<InstructionHash> {
     const { data } = await apiClient.put<InstructionHash>(`${basePath}/hashes/${id}`, payload)
-    return data
+    return normalizeInstructionHash(data)
   },
   async deleteHash(id: number): Promise<void> {
     await apiClient.delete(`${basePath}/hashes/${id}`)

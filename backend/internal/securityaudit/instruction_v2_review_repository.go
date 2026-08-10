@@ -219,6 +219,84 @@ func upsertInstructionV2ReviewJobTx(
 	return jobID, err
 }
 
+func (r *InstructionV2Repository) ResumeOrGetReviewJobBySHA(
+	ctx context.Context,
+	write instructionV2ReviewJobWrite,
+) (*instructionV2ReviewReuse, error) {
+	if strings.TrimSpace(write.Vault.SHA256) == "" {
+		return nil, errors.New("instruction audit review digest is empty")
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, write.Vault.SHA256); err != nil {
+		return nil, err
+	}
+	result := instructionV2ReviewReuse{}
+	var observeOnly bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT job.id, job.status, job.observe_only, COALESCE(event.decision, '')
+		FROM instruction_audit_v2_review_jobs job
+		LEFT JOIN instruction_audit_v2_events event ON event.id = job.source_event_id
+		WHERE job.sha256 = $1
+		FOR UPDATE OF job`, write.Vault.SHA256).Scan(
+		&result.JobID, &result.Status, &observeOnly, &result.SourceDecision,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if observeOnly && !write.ObserveOnly {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = $1`, result.JobID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE instruction_audit_v2_review_jobs
+			SET selected_field = $2, status = 'pending', final_result = '',
+			    pass_votes = 0, reject_votes = 0, retry_round = 0,
+			    next_attempt_at = NOW(), lease_owner = '', lease_expires_at = NULL,
+			    prompt_version = $3, review_criteria = $4, config_version = $5,
+			    observe_only = FALSE, sampled = $6, sample_bytes = $7,
+			    content_bytes = $8, last_error = '', completed_at = NULL,
+			    updated_at = NOW()
+			WHERE id = $1`, result.JobID, write.SelectedField, write.PromptVersion,
+			write.ReviewCriteria, write.ConfigVersion, write.Sampled,
+			write.SampleBytes, write.Vault.ContentBytes); err != nil {
+			return nil, err
+		}
+		result.Status = "pending"
+		result.ResetForEnforcement = true
+	} else if result.Status == "failed" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE instruction_audit_v2_review_jobs
+			SET status = 'retry', retry_round = 0, next_attempt_at = NOW(),
+			    lease_owner = '', lease_expires_at = NULL, last_error = '',
+			    completed_at = NULL, updated_at = NOW()
+			WHERE id = $1`, result.JobID); err != nil {
+			return nil, err
+		}
+		result.Status = "retry"
+		result.Requeued = true
+	} else if result.Status != "pending" && result.Status != "retry" && result.Status != "processing" {
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 func (r *InstructionV2Repository) ClaimReviewJob(
 	ctx context.Context,
 	owner string,

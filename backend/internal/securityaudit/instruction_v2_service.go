@@ -23,6 +23,7 @@ var (
 	errInstructionV2ImmutableProfile = errors.New("immutable instruction audit v2 client profile")
 	errInstructionV2BuiltInProfile   = errors.New("built-in instruction audit v2 client profile cannot be deleted")
 	errInstructionV2ProfileInUse     = errors.New("instruction audit v2 client profile is in use")
+	errInstructionV2AINodeSlotInUse  = errors.New("instruction audit v2 AI node slot is in use")
 	errInstructionV2RevokedHash      = errors.New("revoked instruction audit v2 hash cannot be reactivated")
 	errInstructionV2ReviewLeaseLost  = errors.New("instruction audit v2 review lease lost")
 )
@@ -39,7 +40,7 @@ type InstructionV2Service struct {
 	evidenceCipher  *InstructionEvidenceCipher
 	notifications   *service.SecurityNotificationService
 	secretEncryptor service.SecretEncryptor
-	reviewer        *InstructionV2AIReviewer
+	reviewer        instructionV2Reviewer
 	httpMaxBody     int64
 	wsMaxBody       int64
 
@@ -279,6 +280,9 @@ func (s *InstructionV2Service) EvaluateInstruction(ctx context.Context, request 
 		s.queuePassEvent(ctx, event)
 		return s.allowInstructionV2Decision(evaluation, event, reason)
 	}
+	if decision, reused := s.evaluateExistingInstructionV2Review(ctx, evaluation); reused {
+		return decision
+	}
 	return s.evaluateInstructionV2AI(ctx, evaluation)
 }
 
@@ -462,6 +466,91 @@ func (s *InstructionV2Service) evaluateInstructionV2AI(ctx context.Context, eval
 		return s.allowInstructionV2Decision(evaluation, event, event.Reason)
 	}
 	return s.blockInstructionV2Decision(evaluation, event, event.Reason)
+}
+
+func (s *InstructionV2Service) evaluateExistingInstructionV2Review(
+	ctx context.Context,
+	evaluation instructionV2EvaluationContext,
+) (*InstructionDecision, bool) {
+	if s.repository == nil {
+		return nil, false
+	}
+	prepared := prepareInstructionV2AISample(
+		evaluation.selectedField,
+		evaluation.snapshot.Config.AIInputMaxChars,
+	)
+	write := instructionV2ReviewJobWrite{
+		Vault: instructionV2VaultWrite{
+			SHA256:       prepared.SHA256,
+			ContentBytes: prepared.Bytes,
+		},
+		SelectedField:  evaluation.selectedFieldName,
+		PromptVersion:  evaluation.snapshot.PromptVersion,
+		ReviewCriteria: evaluation.snapshot.Config.ReviewCriteria,
+		ConfigVersion:  evaluation.snapshot.Config.ConfigVersion,
+		ObserveOnly:    evaluation.snapshot.Config.EffectiveMode == InstructionV2ModeObserve,
+		Sampled:        prepared.AISampled,
+		SampleBytes:    len([]byte(prepared.AISample)),
+	}
+	reuse, err := s.repository.ResumeOrGetReviewJobBySHA(ctx, write)
+	if err != nil {
+		slog.Warn(
+			"instruction_audit_v2.review_reuse_failed",
+			"sha256", prepared.SHA256,
+			"request_id", evaluation.request.RequestID,
+			"error", err,
+		)
+		return nil, false
+	}
+	if reuse == nil {
+		return nil, false
+	}
+	evaluation.selectedField = prepared
+	if evaluation.selectedFieldName == "instructions" {
+		evaluation.fields.Instructions = prepared
+	} else {
+		evaluation.fields.Input1 = prepared
+	}
+	reason := "async_review_pending"
+	if reuse.Requeued || reuse.ResetForEnforcement {
+		reason = "async_review_requeued"
+	}
+	decision := "block"
+	if evaluation.snapshot.Config.EffectiveMode == InstructionV2ModeObserve ||
+		(!reuse.ResetForEnforcement && reuse.SourceDecision == "allow") {
+		decision = "allow"
+	}
+	event := s.newInstructionV2Event(
+		evaluation,
+		decision,
+		InstructionV2OutcomeAIPending,
+		reason,
+	)
+	event.ReviewJobID = instructionV2Int64Pointer(reuse.JobID)
+	result, persistErr := s.persistCriticalEventWrite(ctx, instructionV2PersistEvent{Event: event})
+	if persistErr != nil {
+		slog.Error(
+			"instruction_audit_v2.review_reuse_event_persist_failed",
+			"request_id", evaluation.request.RequestID,
+			"review_job_id", reuse.JobID,
+			"error", persistErr,
+		)
+		failure := s.newInstructionV2Event(
+			evaluation,
+			"block",
+			InstructionV2OutcomeBlocked,
+			"persistence_error",
+		)
+		if evaluation.snapshot.Config.EffectiveMode == InstructionV2ModeObserve {
+			return s.allowInstructionV2Decision(evaluation, failure, "persistence_error"), true
+		}
+		return s.blockInstructionV2Decision(evaluation, failure, "persistence_error"), true
+	}
+	event.ID = result.EventID
+	if decision == "allow" {
+		return s.allowInstructionV2Decision(evaluation, event, reason), true
+	}
+	return s.blockInstructionV2Decision(evaluation, event, reason), true
 }
 
 func (s *InstructionV2Service) runInstructionV2Review(

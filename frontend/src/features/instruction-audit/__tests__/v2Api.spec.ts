@@ -56,6 +56,17 @@ describe('instruction audit V2 API', () => {
     expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/ai-nodes/6/test', {})
   })
 
+  it('normalizes null scope collections returned for global trusted hashes', async () => {
+    client.get.mockResolvedValueOnce({
+      data: { items: [{ id: 97, global_trust: true, scope_ids: null, scopes: null }], total: 1, page: 1, page_size: 20, pages: 1 },
+    })
+
+    const page = await instructionAuditV2API.listHashes({ page: 1, page_size: 20 })
+
+    expect(page.items[0].scope_ids).toEqual([])
+    expect(page.items[0].scopes).toEqual([])
+  })
+
   it('manages the global user allowlist without model bindings', async () => {
     await instructionAuditV2API.searchUsers('user@example.com')
     await instructionAuditV2API.saveUserAllowlist(17, 'approved operator')

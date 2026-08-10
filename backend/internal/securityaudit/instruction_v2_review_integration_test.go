@@ -193,6 +193,50 @@ func TestInstructionV2ReviewLeaseRejectsStaleWorker(t *testing.T) {
 	require.False(t, exhausted)
 }
 
+func TestInstructionV2ReviewFailedJobResumesWithoutDiscardingVotes(t *testing.T) {
+	db := openInstructionV2ReviewIntegrationDB(t)
+	repository := NewInstructionV2Repository(db)
+	ctx := context.Background()
+	field := newInstructionV2TextField("resume failed review", false)
+	result := persistInstructionV2ReviewTestJob(t, repository, field, false)
+	require.NotNil(t, result.JobID)
+
+	job, err := repository.ClaimReviewJob(ctx, "failed-worker", time.Minute)
+	require.NoError(t, err)
+	require.NotNil(t, job)
+	_, completed, err := repository.RecordReviewAttempts(ctx, job.ID, job.LeaseOwner, []InstructionV2ReviewAttempt{
+		reviewAttempt("async_1", "pass"),
+		reviewAttempt("async_2", "reject"),
+		reviewAttempt("async_3", "timeout"),
+	})
+	require.NoError(t, err)
+	require.False(t, completed)
+	exhausted, err := repository.ScheduleReviewRetry(ctx, job.ID, job.LeaseOwner, nil, "async_3 timeout")
+	require.NoError(t, err)
+	require.True(t, exhausted)
+
+	reused, err := repository.ResumeOrGetReviewJobBySHA(ctx, instructionV2ReviewJobWrite{
+		Vault: instructionV2VaultWrite{SHA256: field.SHA256, ContentBytes: field.Bytes},
+	})
+	require.NoError(t, err)
+	require.NotNil(t, reused)
+	require.Equal(t, job.ID, reused.JobID)
+	require.Equal(t, "retry", reused.Status)
+	require.True(t, reused.Requeued)
+
+	var status string
+	var retryRound, attemptCount int
+	require.NoError(t, db.QueryRow(`
+		SELECT status, retry_round FROM instruction_audit_v2_review_jobs WHERE id = $1`,
+		job.ID).Scan(&status, &retryRound))
+	require.Equal(t, "retry", status)
+	require.Zero(t, retryRound)
+	require.NoError(t, db.QueryRow(`
+		SELECT COUNT(*) FROM instruction_audit_v2_review_attempts WHERE job_id = $1`,
+		job.ID).Scan(&attemptCount))
+	require.Equal(t, 3, attemptCount)
+}
+
 func TestInstructionV2ReviewClaimsDifferentPendingJobs(t *testing.T) {
 	db := openInstructionV2ReviewIntegrationDB(t)
 	repository := NewInstructionV2Repository(db)
