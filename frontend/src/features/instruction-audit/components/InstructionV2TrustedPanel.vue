@@ -5,7 +5,7 @@
         <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.v2.trustedInstructions') }}</h2>
         <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.trustedInstructionsHint') }}</p>
       </div>
-      <button type="button" class="btn btn-primary shrink-0" :disabled="!scopes.length || !sensitiveAccess" @click="openCreate">
+      <button type="button" class="btn btn-primary shrink-0" @click="openCreate">
         <Icon name="plus" size="sm" />
         {{ t('admin.instructionAudit.v2.addTrusted') }}
       </button>
@@ -47,6 +47,7 @@
             <div class="flex min-w-0 flex-wrap items-center gap-2">
               <h3 class="min-w-0 break-words text-sm font-semibold text-gray-950 dark:text-white">{{ hash.name || t('admin.instructionAudit.v2.unnamedTrusted') }}</h3>
               <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="hashStatusPill(hash.status)">{{ hashStatusLabel(t, hash.status) }}</span>
+              <span v-if="hash.global_trust" class="rounded-full bg-cyan-100 px-2 py-0.5 text-[11px] font-semibold text-cyan-800 dark:bg-cyan-950/50 dark:text-cyan-200">{{ t('admin.instructionAudit.v2.globalTrust') }}</span>
             </div>
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">#{{ hash.id }} · {{ sourceLabel(t, hash.source) }} · {{ formatAuditDate(hash.created_at) }}</p>
           </div>
@@ -89,20 +90,17 @@
             <span v-for="scope in hash.scopes" :key="scope.scope_id" class="max-w-full truncate rounded bg-primary-50 px-2 py-1 text-[11px] text-primary-700 dark:bg-primary-950/40 dark:text-primary-300" :title="`${scope.group_name} / ${scope.client_profile_name}`">
               {{ scope.group_name }} · {{ scope.client_profile_name || t('admin.instructionAudit.v2.allClients') }}
             </span>
-            <span v-if="!hash.scopes.length" class="text-xs text-gray-400">{{ t('admin.instructionAudit.v2.noScopes') }}</span>
+            <span v-if="hash.global_trust" class="text-xs font-medium text-cyan-700 dark:text-cyan-300">{{ t('admin.instructionAudit.v2.globalTrustHint') }}</span>
+            <span v-else-if="!hash.scopes.length" class="text-xs text-gray-400">{{ t('admin.instructionAudit.v2.noScopes') }}</span>
           </div>
         </div>
 
         <p v-if="hash.note" class="break-words text-xs text-gray-500 dark:text-gray-400">{{ hash.note }}</p>
 
         <footer class="mt-auto flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 dark:border-dark-700">
-          <button type="button" class="btn btn-secondary btn-sm" :disabled="hash.raw_storage === 'unavailable' || !sensitiveAccess" @click="revealRaw(hash)">
-            <Icon :name="sensitiveAccess ? 'eye' : 'lock'" size="sm" />
+          <button type="button" class="btn btn-secondary btn-sm" :disabled="hash.raw_storage === 'unavailable'" @click="revealRaw(hash)">
+            <Icon name="eye" size="sm" />
             {{ t('admin.instructionAudit.v2.viewRaw') }}
-          </button>
-          <button v-if="hash.status === 'candidate'" type="button" class="btn btn-primary btn-sm" @click="promote(hash)">
-            <Icon name="check" size="sm" />
-            {{ t('admin.instructionAudit.v2.promote') }}
           </button>
         </footer>
       </article>
@@ -151,9 +149,17 @@
           <p class="mt-1 break-all font-mono text-xs text-gray-700 dark:text-gray-200">{{ form.sha256 }}</p>
         </div>
 
-        <fieldset class="min-w-0">
+        <label class="flex items-start gap-3 rounded-md border border-cyan-200 bg-cyan-50/60 p-3 dark:border-cyan-900/50 dark:bg-cyan-950/20">
+          <input v-model="form.globalTrust" type="checkbox" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span>
+            <span class="block text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.instructionAudit.v2.globalTrust') }}</span>
+            <span class="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.globalTrustWarning') }}</span>
+          </span>
+        </label>
+
+        <fieldset class="min-w-0" :disabled="form.globalTrust">
           <legend class="input-label">{{ t('admin.instructionAudit.v2.bindScopes') }}</legend>
-          <div class="mt-2 grid max-h-64 min-w-0 gap-2 overflow-y-auto rounded-md border border-gray-200 p-3 dark:border-dark-600 sm:grid-cols-2">
+          <div class="mt-2 grid max-h-64 min-w-0 gap-2 overflow-y-auto rounded-md border border-gray-200 p-3 transition dark:border-dark-600 sm:grid-cols-2" :class="{ 'opacity-45': form.globalTrust }">
             <label v-for="scope in scopes" :key="scope.id" class="flex min-w-0 cursor-pointer items-start gap-2 rounded px-2 py-2 hover:bg-gray-50 dark:hover:bg-dark-700">
               <input v-model="form.scopeIds" type="checkbox" :value="scope.id" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
               <span class="min-w-0">
@@ -171,7 +177,7 @@
       </form>
       <template #footer>
         <button type="button" class="btn btn-secondary" :disabled="saving" @click="closeForm">{{ t('common.cancel') }}</button>
-        <button type="button" class="btn btn-primary" :disabled="saving || !form.scopeIds.length || (!form.id && form.inputMode === 'raw' && !form.rawContent) || (!form.id && form.inputMode === 'digest' && form.sha256.length !== 64)" @click="saveHash">
+        <button type="button" class="btn btn-primary" :disabled="saving || (!form.globalTrust && !form.scopeIds.length) || (!form.id && form.inputMode === 'raw' && !form.rawContent) || (!form.id && form.inputMode === 'digest' && form.sha256.length !== 64)" @click="saveHash">
           <Icon name="check" size="sm" />{{ t('common.save') }}
         </button>
       </template>
@@ -190,7 +196,6 @@
     </BaseDialog>
 
     <ConfirmDialog :show="Boolean(hashToDelete)" :title="t('admin.instructionAudit.v2.deleteTrustedTitle')" :message="t('admin.instructionAudit.v2.deleteTrustedConfirm')" danger @confirm="deleteHash" @cancel="hashToDelete = null" />
-    <TotpStepUpDialog :controller="stepUp" />
   </section>
 </template>
 
@@ -200,10 +205,8 @@ import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Pagination from '@/components/common/Pagination.vue'
-import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import instructionAuditV2API from '../v2Api'
@@ -212,7 +215,6 @@ import { formatAuditBytes, formatAuditDate, hashStatusLabel, hashStatusPill, sou
 
 const props = defineProps<{
   scopes: InstructionScope[]
-  sensitiveAccess: boolean
   refreshKey: number
 }>()
 
@@ -220,7 +222,6 @@ const emit = defineEmits<{ (event: 'changed'): void }>()
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
-const stepUp = useStepUp()
 const page = reactive<InstructionHashPage>({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
 const loading = ref(false)
 const saving = ref(false)
@@ -231,7 +232,7 @@ const hashToDelete = ref<InstructionHash | null>(null)
 const rawHash = ref<InstructionHash | null>(null)
 const rawReview = ref<InstructionEvidenceReview | null>(null)
 const rawLoading = ref(false)
-const statusOptions: InstructionHashStatus[] = ['candidate', 'active', 'disabled', 'revoked']
+const statusOptions: InstructionHashStatus[] = ['active', 'disabled', 'revoked']
 const form = reactive({
   show: false,
   id: 0,
@@ -242,6 +243,7 @@ const form = reactive({
   note: '',
   status: 'active' as InstructionHashStatus,
   scopeIds: [] as number[],
+  globalTrust: false,
 })
 
 onMounted(loadHashes)
@@ -276,7 +278,7 @@ function changePageSize(value: number) {
 }
 
 function resetForm() {
-  Object.assign(form, { show: false, id: 0, inputMode: 'raw', rawContent: '', sha256: '', name: '', note: '', status: 'active', scopeIds: [] })
+  Object.assign(form, { show: false, id: 0, inputMode: 'raw', rawContent: '', sha256: '', name: '', note: '', status: 'active', scopeIds: [], globalTrust: false })
 }
 
 function openCreate() {
@@ -285,7 +287,7 @@ function openCreate() {
 }
 
 function openEdit(hash: InstructionHash) {
-  Object.assign(form, { show: true, id: hash.id, inputMode: 'digest', rawContent: '', sha256: hash.sha256, name: hash.name, note: hash.note, status: hash.status, scopeIds: [...hash.scope_ids] })
+  Object.assign(form, { show: true, id: hash.id, inputMode: 'digest', rawContent: '', sha256: hash.sha256, name: hash.name, note: hash.note, status: hash.status, scopeIds: [...hash.scope_ids], globalTrust: hash.global_trust })
 }
 
 function closeForm() {
@@ -293,54 +295,44 @@ function closeForm() {
 }
 
 async function saveHash() {
-  if (!form.scopeIds.length) return
+  if (!form.globalTrust && !form.scopeIds.length) return
   saving.value = true
   try {
     if (form.id) {
-      await stepUp.run(() => instructionAuditV2API.updateHash(form.id, { name: form.name, note: form.note, status: form.status, scope_ids: form.scopeIds, set_scopes: true }))
+      await instructionAuditV2API.updateHash(form.id, { name: form.name, note: form.note, status: form.status, scope_ids: form.globalTrust ? [] : form.scopeIds, set_scopes: true, global_trust: form.globalTrust })
     } else {
-      await stepUp.run(() => instructionAuditV2API.createHash({
+      await instructionAuditV2API.createHash({
         raw_content: form.inputMode === 'raw' ? form.rawContent : '',
         sha256: form.inputMode === 'digest' ? form.sha256.toLowerCase() : '',
         source: form.inputMode === 'raw' ? 'manual' : 'import',
         name: form.name,
         note: form.note,
         status: form.status,
-        scope_ids: form.scopeIds,
-      }))
+        scope_ids: form.globalTrust ? [] : form.scopeIds,
+        global_trust: form.globalTrust,
+      })
     }
     appStore.showSuccess(t('common.saved'))
     resetForm()
     emit('changed')
     await loadHashes()
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     saving.value = false
-  }
-}
-
-async function promote(hash: InstructionHash) {
-  try {
-    await stepUp.run(() => instructionAuditV2API.updateHash(hash.id, { status: 'active' }))
-    appStore.showSuccess(t('admin.instructionAudit.v2.promoted'))
-    emit('changed')
-    await loadHashes()
-  } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 
 async function deleteHash() {
   if (!hashToDelete.value) return
   try {
-    await stepUp.run(() => instructionAuditV2API.deleteHash(hashToDelete.value!.id))
+    await instructionAuditV2API.deleteHash(hashToDelete.value!.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.trustedDeleted'))
     hashToDelete.value = null
     emit('changed')
     await loadHashes()
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 
@@ -349,9 +341,9 @@ async function revealRaw(hash: InstructionHash) {
   rawReview.value = null
   rawLoading.value = true
   try {
-    rawReview.value = await stepUp.run(() => instructionAuditV2API.revealHashRaw(hash.id))
+    rawReview.value = await instructionAuditV2API.revealHashRaw(hash.id)
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
     closeRaw()
   } finally {
     rawLoading.value = false
@@ -362,10 +354,10 @@ async function copyRaw() {
   const field = rawReview.value?.fields[0]
   if (!rawHash.value || !field?.plaintext) return
   try {
-    await stepUp.run(() => instructionAuditV2API.recordHashRawCopy(rawHash.value!.id))
+    await instructionAuditV2API.recordHashRawCopy(rawHash.value!.id)
     await copyToClipboard(field.plaintext)
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 

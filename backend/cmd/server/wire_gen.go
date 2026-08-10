@@ -270,9 +270,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		return nil, err
 	}
 	instructionV2Service := securityaudit.ProvideInstructionV2Service(instructionV2Repository, redisClient, instructionEvidenceCipher, securityNotificationService, secretEncryptor, configConfig)
-	instructionRepository := securityaudit.NewInstructionRepository(db)
-	instructionService := securityaudit.ProvideInstructionService(instructionRepository, redisClient, emailService, instructionEvidenceCipher, securityNotificationService, secretEncryptor, configConfig)
-	instructionV2AdminHandler := securityaudit.NewInstructionV2AdminHandler(instructionV2Service, instructionService)
+	instructionV2AdminHandler := securityaudit.NewInstructionV2AdminHandler(instructionV2Service)
 	paymentHandler := admin.NewPaymentHandler(paymentService, paymentConfigService)
 	affiliateHandler := admin.NewAffiliateHandler(affiliateService, adminService)
 	complianceHandler := admin.NewComplianceHandler(settingService)

@@ -74,11 +74,7 @@
         </div>
       </section>
 
-      <div v-if="!sensitiveAccess" class="flex items-start gap-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
-        <Icon name="lock" size="md" class="mt-0.5 shrink-0" />
-        <span>{{ t('admin.instructionAudit.v2.sensitiveAccessRequired') }}</span>
-      </div>
-      <div v-else-if="evidenceError" class="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+      <div v-if="evidenceError" class="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
         {{ evidenceError }}
       </div>
 
@@ -148,6 +144,10 @@
             <span class="input-label">{{ t('common.name') }}</span>
             <input v-model="trustName" maxlength="160" class="input" :placeholder="t('admin.instructionAudit.v2.optionalName')" />
           </label>
+          <label class="flex shrink-0 items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+            <input v-model="globalTrust" type="checkbox" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+            {{ t('admin.instructionAudit.v2.globalTrust') }}
+          </label>
           <button type="button" class="btn btn-primary shrink-0" :disabled="trusting || !trustFields.length" @click="trustSelected">
             <Icon name="plus" size="sm" />
             {{ t('admin.instructionAudit.v2.addToTrusted') }}
@@ -160,17 +160,14 @@
       <button type="button" class="btn btn-secondary" @click="close">{{ t('common.close') }}</button>
     </template>
   </BaseDialog>
-  <TotpStepUpDialog :controller="stepUp" />
 </template>
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
-import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useClipboard } from '@/composables/useClipboard'
-import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import instructionAuditV2API from '../v2Api'
@@ -188,7 +185,6 @@ import {
 const props = defineProps<{
   show: boolean
   event: InstructionEvent | null
-  sensitiveAccess: boolean
 }>()
 
 const emit = defineEmits<{
@@ -199,13 +195,13 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const appStore = useAppStore()
 const { copyToClipboard } = useClipboard()
-const stepUp = useStepUp()
 const loading = ref(false)
 const detail = ref<InstructionEvent | null>(null)
 const evidence = ref<InstructionEvidenceReview | null>(null)
 const evidenceError = ref('')
 const trustFields = ref<string[]>([])
 const trustName = ref('')
+const globalTrust = ref(false)
 const trusting = ref(false)
 
 const displayFields = computed<InstructionEvidenceField[]>(() => evidence.value?.fields ?? [])
@@ -231,27 +227,26 @@ function evidenceDigestClass(field: InstructionEvidenceField): string {
 }
 
 watch(
-  () => [props.show, props.event?.id, props.sensitiveAccess] as const,
+  () => [props.show, props.event?.id] as const,
   async ([show, eventID]) => {
     detail.value = null
     evidence.value = null
     evidenceError.value = ''
     trustFields.value = []
     trustName.value = ''
+    globalTrust.value = false
     if (!show || !eventID) return
     loading.value = true
     try {
       detail.value = await instructionAuditV2API.getEvent(eventID)
-      if (props.sensitiveAccess) {
-        try {
-          evidence.value = await stepUp.run(() => instructionAuditV2API.revealEventEvidence(eventID))
-          trustFields.value = evidence.value.fields.map((field) => field.field_name)
-        } catch (error) {
-          if (!isStepUpCancelled(error)) evidenceError.value = extractApiErrorMessage(error, t('common.error'))
-        }
+      try {
+        evidence.value = await instructionAuditV2API.revealEventEvidence(eventID)
+        trustFields.value = evidence.value.fields.map((field) => field.field_name)
+      } catch (error) {
+        evidenceError.value = extractApiErrorMessage(error, t('common.error'))
       }
     } catch (error) {
-      if (!isStepUpCancelled(error)) appStore.showError(extractApiErrorMessage(error, t('common.error')))
+      appStore.showError(extractApiErrorMessage(error, t('common.error')))
       close()
     } finally {
       loading.value = false
@@ -269,10 +264,10 @@ function close() {
 async function copyEvidence(field: InstructionEvidenceField) {
   if (!detail.value || !field.plaintext) return
   try {
-    await stepUp.run(() => instructionAuditV2API.recordEventEvidenceCopy(detail.value!.id, field.field_name))
+    await instructionAuditV2API.recordEventEvidenceCopy(detail.value!.id, field.field_name)
     await copyToClipboard(field.plaintext)
   } catch (error) {
-    if (!isStepUpCancelled(error)) appStore.showError(extractApiErrorMessage(error, t('common.error')))
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
   }
 }
 
@@ -280,11 +275,11 @@ async function trustSelected() {
   if (!detail.value || !trustFields.value.length) return
   trusting.value = true
   try {
-    await stepUp.run(() => instructionAuditV2API.trustEvent(detail.value!.id, trustFields.value, trustName.value))
+    await instructionAuditV2API.trustEvent(detail.value!.id, trustFields.value, trustName.value, '', globalTrust.value)
     appStore.showSuccess(t('admin.instructionAudit.v2.trustCreated'))
     emit('trusted')
   } catch (error) {
-    if (!isStepUpCancelled(error)) appStore.showError(extractApiErrorMessage(error, t('common.error')))
+    appStore.showError(extractApiErrorMessage(error, t('common.error')))
   } finally {
     trusting.value = false
   }

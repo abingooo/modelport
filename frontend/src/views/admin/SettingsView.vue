@@ -10355,7 +10355,7 @@ async function requestInstructionAuditEnabled(enabled: boolean) {
   try {
     if (!instructionAuditOverview.value) return;
     const current = instructionAuditOverview.value;
-    instructionAuditOverview.value = await settingsStepUp.run(() => instructionAuditV2API.updateConfig({
+    instructionAuditOverview.value = await instructionAuditV2API.updateConfig({
       expected_config_version: current.config_version,
       mode: enabled ? "enforce" : "off",
       review_criteria: current.review_criteria,
@@ -10367,9 +10367,10 @@ async function requestInstructionAuditEnabled(enabled: boolean) {
       ai_cache_ttl_seconds: current.ai_cache_ttl_seconds,
       event_retention_days: current.event_retention_days,
       evidence_retention_days: current.evidence_retention_days,
-      candidate_retention_days: current.candidate_retention_days,
       raw_full_max_bytes: current.raw_full_max_bytes,
-    }));
+      allow_empty_fields: current.allow_empty_fields,
+      async_retry_schedule_seconds: current.async_retry_schedule_seconds,
+    });
     appStore.showSuccess(t("common.saved"));
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, "admin.instructionAudit.errors", t("common.error")));

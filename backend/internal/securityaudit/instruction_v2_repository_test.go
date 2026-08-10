@@ -65,10 +65,6 @@ func TestInstructionV2RepositoryCleanupDeletesExpiredEventNotificationsAtomicall
 	mock.ExpectExec(`(?s)DELETE FROM instruction_audit_v2_events.*created_at < NOW\(\) - \(\$1 \* INTERVAL '1 day'\)`).
 		WithArgs(30).
 		WillReturnResult(sqlmock.NewResult(0, 2))
-	mock.ExpectExec(`(?s)DELETE FROM instruction_audit_v2_hash_scopes.*status = 'candidate'.*candidate_expires_at <= NOW\(\)`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`(?s)DELETE FROM instruction_audit_v2_hashes h.*h.status = 'candidate'.*h.candidate_expires_at <= NOW\(\)`).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 

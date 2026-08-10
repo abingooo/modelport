@@ -1,5 +1,7 @@
 export type InstructionAuditMode = 'off' | 'observe' | 'enforce'
-export type InstructionHashStatus = 'candidate' | 'active' | 'disabled' | 'revoked'
+export type InstructionHashStatus = 'active' | 'disabled' | 'revoked'
+export type InstructionAINodeSlot = 'sync' | 'async_1' | 'async_2' | 'async_3'
+export type InstructionAIResponseMode = 'auto' | 'json_schema' | 'json_object'
 export type InstructionEventOutcome =
   | 'hash_pass'
   | 'ai_pass'
@@ -7,6 +9,8 @@ export type InstructionEventOutcome =
   | 'empty_pass'
   | 'user_allowlist_pass'
   | 'observe_allow'
+  | 'risk_hash_blocked'
+  | 'ai_review_pending'
 
 export interface InstructionV2Config {
   mode: InstructionAuditMode
@@ -21,8 +25,9 @@ export interface InstructionV2Config {
   ai_cache_ttl_seconds: number
   event_retention_days: number
   evidence_retention_days: number
-  candidate_retention_days: number
   raw_full_max_bytes: number
+  allow_empty_fields: boolean
+  async_retry_schedule_seconds: number[]
   config_version: number
   updated_by?: number | null
   updated_at: string
@@ -34,6 +39,8 @@ export interface InstructionV2Config {
   enabled_ai_node_count: number
   async_queue_depth: number
   async_queue_capacity: number
+  pending_review_job_count: number
+  active_risk_hash_count: number
   last_config_load_error: string
   last_config_loaded_at?: string | null
 }
@@ -50,8 +57,9 @@ export type UpdateInstructionV2Config = Pick<
   | 'ai_cache_ttl_seconds'
   | 'event_retention_days'
   | 'evidence_retention_days'
-  | 'candidate_retention_days'
   | 'raw_full_max_bytes'
+  | 'allow_empty_fields'
+  | 'async_retry_schedule_seconds'
 > & { expected_config_version: number }
 
 export interface InstructionClientMatcher {
@@ -138,7 +146,6 @@ export interface InstructionHashScope {
   client_profile_name: string
   status: InstructionHashStatus
   source: string
-  candidate_expires_at?: string | null
   created_at: string
   updated_at: string
 }
@@ -164,7 +171,8 @@ export interface InstructionHash {
   confidence?: number | null
   review_reason: string
   review_category: string
-  candidate_expires_at?: string | null
+  global_trust: boolean
+  content_vault_id?: number | null
   scope_ids: number[]
   scopes: InstructionHashScope[]
   created_at: string
@@ -187,6 +195,7 @@ export interface SaveInstructionHash {
   note: string
   status: InstructionHashStatus
   scope_ids: number[]
+  global_trust: boolean
 }
 
 export interface UpdateInstructionHash {
@@ -195,6 +204,7 @@ export interface UpdateInstructionHash {
   status?: InstructionHashStatus
   scope_ids?: number[]
   set_scopes?: boolean
+  global_trust?: boolean
 }
 
 export interface InstructionField {
@@ -213,7 +223,7 @@ export interface InstructionAIReview {
   reviewer_model: string
   field_name: 'instructions' | 'input1'
   sha256: string
-  result: 'pass' | 'reject' | 'uncertain' | 'error'
+  result: 'pass' | 'reject' | 'uncertain' | 'error' | 'timeout' | 'invalid'
   confidence: number
   reason: string
   category: string
@@ -248,7 +258,7 @@ export interface InstructionEvent {
   instructions: InstructionField
   input1: InstructionField
   matched_hash_id?: number | null
-  ai_result: 'not_run' | 'pass' | 'reject' | 'uncertain' | 'error' | 'queue_full'
+  ai_result: 'not_run' | 'pass' | 'reject' | 'uncertain' | 'error' | 'queue_full' | 'timeout' | 'invalid'
   ai_reviewed_field: string
   ai_sampled: boolean
   audit_latency_ms: number
@@ -260,6 +270,9 @@ export interface InstructionEvent {
   ops_notification_status: string
   created_at: string
   ai_reviews?: InstructionAIReview[]
+  selected_field: '' | 'instructions' | 'input1'
+  selected_sha256: string
+  review_job_id?: number | null
 }
 
 export interface InstructionEventPage {
@@ -307,7 +320,7 @@ export interface InstructionEvidenceField {
 }
 
 export interface InstructionEvidenceReview {
-  resource_type: 'event' | 'hash'
+  resource_type: 'event' | 'hash' | 'risk_hash' | 'review_job'
   resource_id: number
   fields: InstructionEvidenceField[]
 }
@@ -318,6 +331,9 @@ export interface InstructionAINode {
   base_url: string
   model: string
   priority: number
+  slot: InstructionAINodeSlot
+  response_mode: InstructionAIResponseMode
+  max_output_tokens: number
   enabled: boolean
   timeout_ms: number
   max_concurrency: number
@@ -334,6 +350,9 @@ export interface SaveInstructionAINode {
   api_key: string
   clear_api_key: boolean
   priority: number
+  slot: InstructionAINodeSlot
+  response_mode: InstructionAIResponseMode
+  max_output_tokens: number
   enabled: boolean
   timeout_ms: number
   max_concurrency: number
@@ -347,11 +366,100 @@ export interface InstructionAINodeTestResult {
   latency_ms: number
 }
 
-export interface InstructionSensitiveCapability {
-  user_id: number
-  has_access: boolean
-  can_manage: boolean
-  grant_id?: number | null
-  grant_source?: string
-  granted_at?: string
+export type InstructionRiskHashStatus = 'active' | 'disabled'
+export type InstructionRiskAction = 'confirm_risk' | 'confirm_safe' | 'disable' | 'enable'
+
+export interface InstructionRiskHash {
+  id: number
+  sha256: string
+  content_vault_id: number
+  observed_field: '' | 'instructions' | 'input1'
+  status: InstructionRiskHashStatus
+  source: 'sync_ai' | 'async_ai' | 'manual'
+  source_event_id?: number | null
+  reviewer_node_id?: number | null
+  reviewer_model: string
+  prompt_version: string
+  confidence?: number | null
+  review_reason: string
+  review_category: string
+  human_review_status: 'pending' | 'confirmed_risk'
+  reviewed_by?: number | null
+  reviewed_at?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface InstructionRiskHashPage {
+  items: InstructionRiskHash[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
+}
+
+export interface SaveInstructionRiskHash {
+  raw_content: string
+  sha256: string
+  observed_field: '' | 'instructions' | 'input1'
+  note: string
+}
+
+export interface InstructionRiskActionResult {
+  risk_hash?: InstructionRiskHash
+  trusted_hash?: InstructionHash
+}
+
+export type InstructionReviewJobStatus = 'pending' | 'processing' | 'retry' | 'completed' | 'failed'
+
+export interface InstructionReviewAttempt {
+  id: number
+  job_id: number
+  node_id?: number | null
+  node_slot: Exclude<InstructionAINodeSlot, 'sync'>
+  node_name: string
+  reviewer_model: string
+  attempt_no: number
+  result: 'pass' | 'reject' | 'uncertain' | 'error' | 'timeout' | 'invalid'
+  confidence: number
+  reason: string
+  category: string
+  prompt_version: string
+  sampled: boolean
+  latency_ms: number
+  created_at: string
+}
+
+export interface InstructionReviewJob {
+  id: number
+  sha256: string
+  content_vault_id: number
+  selected_field: 'instructions' | 'input1'
+  source_event_id?: number | null
+  status: InstructionReviewJobStatus
+  final_result: '' | 'pass' | 'reject'
+  pass_votes: number
+  reject_votes: number
+  retry_round: number
+  next_attempt_at: string
+  prompt_version: string
+  review_criteria: string
+  config_version: number
+  observe_only: boolean
+  sampled: boolean
+  sample_bytes: number
+  content_bytes: number
+  last_error: string
+  completed_at?: string | null
+  created_at: string
+  updated_at: string
+  attempts?: InstructionReviewAttempt[]
+}
+
+export interface InstructionReviewJobPage {
+  items: InstructionReviewJob[]
+  total: number
+  page: number
+  page_size: number
+  pages: number
 }

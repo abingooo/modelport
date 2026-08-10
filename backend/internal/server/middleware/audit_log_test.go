@@ -148,30 +148,48 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 
 func TestInstructionAuditMutationRoutesHaveStableActionsAndOmitBodies(t *testing.T) {
 	expected := map[string]string{
-		"PUT /api/v1/admin/instruction-audit/config":                 "admin.instruction_audit.config.update",
-		"POST /api/v1/admin/instruction-audit/hashes":                "admin.instruction_audit.hash.create",
-		"PUT /api/v1/admin/instruction-audit/hashes/:id":             "admin.instruction_audit.hash.update",
-		"DELETE /api/v1/admin/instruction-audit/hashes/:id":          "admin.instruction_audit.hash.delete",
-		"POST /api/v1/admin/instruction-audit/scopes":                "admin.instruction_audit.scope.create",
-		"PUT /api/v1/admin/instruction-audit/scopes/:id":             "admin.instruction_audit.scope.update",
-		"DELETE /api/v1/admin/instruction-audit/scopes/:id":          "admin.instruction_audit.scope.delete",
-		"POST /api/v1/admin/instruction-audit/client-profiles":       "admin.instruction_audit.client_profile.create",
-		"PUT /api/v1/admin/instruction-audit/client-profiles/:id":    "admin.instruction_audit.client_profile.update",
-		"DELETE /api/v1/admin/instruction-audit/client-profiles/:id": "admin.instruction_audit.client_profile.delete",
-		"POST /api/v1/admin/instruction-audit/user-allowlist":        "admin.instruction_audit.user_allowlist.create",
-		"DELETE /api/v1/admin/instruction-audit/user-allowlist/:id":  "admin.instruction_audit.user_allowlist.delete",
-		"POST /api/v1/admin/instruction-audit/ai-nodes":              "admin.instruction_audit.ai_node.create",
-		"PUT /api/v1/admin/instruction-audit/ai-nodes/:id":           "admin.instruction_audit.ai_node.update",
-		"DELETE /api/v1/admin/instruction-audit/ai-nodes/:id":        "admin.instruction_audit.ai_node.delete",
-		"POST /api/v1/admin/instruction-audit/ai-nodes/:id/test":     "admin.instruction_audit.ai_node.test",
-		"DELETE /api/v1/admin/instruction-audit/events/:id":          "admin.instruction_audit.event.delete",
-		"POST /api/v1/admin/instruction-audit/events/batch-delete":   "admin.instruction_audit.events.batch_delete",
-		"POST /api/v1/admin/instruction-audit/events/:id/trust":      "admin.instruction_audit.event.trust",
+		"PUT /api/v1/admin/instruction-audit/config":                      "admin.instruction_audit.config.update",
+		"POST /api/v1/admin/instruction-audit/hashes":                     "admin.instruction_audit.hash.create",
+		"PUT /api/v1/admin/instruction-audit/hashes/:id":                  "admin.instruction_audit.hash.update",
+		"DELETE /api/v1/admin/instruction-audit/hashes/:id":               "admin.instruction_audit.hash.delete",
+		"POST /api/v1/admin/instruction-audit/scopes":                     "admin.instruction_audit.scope.create",
+		"PUT /api/v1/admin/instruction-audit/scopes/:id":                  "admin.instruction_audit.scope.update",
+		"DELETE /api/v1/admin/instruction-audit/scopes/:id":               "admin.instruction_audit.scope.delete",
+		"POST /api/v1/admin/instruction-audit/client-profiles":            "admin.instruction_audit.client_profile.create",
+		"PUT /api/v1/admin/instruction-audit/client-profiles/:id":         "admin.instruction_audit.client_profile.update",
+		"DELETE /api/v1/admin/instruction-audit/client-profiles/:id":      "admin.instruction_audit.client_profile.delete",
+		"POST /api/v1/admin/instruction-audit/user-allowlist":             "admin.instruction_audit.user_allowlist.create",
+		"DELETE /api/v1/admin/instruction-audit/user-allowlist/:id":       "admin.instruction_audit.user_allowlist.delete",
+		"POST /api/v1/admin/instruction-audit/ai-nodes":                   "admin.instruction_audit.ai_node.create",
+		"PUT /api/v1/admin/instruction-audit/ai-nodes/:id":                "admin.instruction_audit.ai_node.update",
+		"DELETE /api/v1/admin/instruction-audit/ai-nodes/:id":             "admin.instruction_audit.ai_node.delete",
+		"POST /api/v1/admin/instruction-audit/ai-nodes/:id/test":          "admin.instruction_audit.ai_node.test",
+		"DELETE /api/v1/admin/instruction-audit/events/:id":               "admin.instruction_audit.event.delete",
+		"POST /api/v1/admin/instruction-audit/events/batch-delete":        "admin.instruction_audit.events.batch_delete",
+		"POST /api/v1/admin/instruction-audit/events/:id/trust":           "admin.instruction_audit.event.trust",
+		"POST /api/v1/admin/instruction-audit/risk-hashes":                "admin.instruction_audit.risk_hash.create",
+		"PUT /api/v1/admin/instruction-audit/risk-hashes/:id":             "admin.instruction_audit.risk_hash.update",
+		"DELETE /api/v1/admin/instruction-audit/risk-hashes/:id":          "admin.instruction_audit.risk_hash.delete",
+		"POST /api/v1/admin/instruction-audit/risk-hashes/:id/raw-access": "admin.instruction_audit.risk_hash_raw.copy",
+		"POST /api/v1/admin/instruction-audit/review-jobs/:id/retry":      "admin.instruction_audit.review_job.retry",
+		"POST /api/v1/admin/instruction-audit/review-jobs/:id/raw-access": "admin.instruction_audit.review_job_raw.copy",
 	}
 	for route, action := range expected {
 		require.Equal(t, action, auditActionOverrides[route])
 		_, omitted := auditBodyOmittedRoutes[route]
 		require.Truef(t, omitted, "%s must never persist hash-management request bodies", route)
+	}
+}
+
+func TestInstructionAuditSensitiveReadsHaveStableActions(t *testing.T) {
+	expected := map[string]string{
+		"GET /api/v1/admin/instruction-audit/hashes/:id/raw":      "admin.instruction_audit.hash_raw.read",
+		"GET /api/v1/admin/instruction-audit/risk-hashes/:id/raw": "admin.instruction_audit.risk_hash_raw.read",
+		"GET /api/v1/admin/instruction-audit/review-jobs/:id/raw": "admin.instruction_audit.review_job_raw.read",
+		"GET /api/v1/admin/instruction-audit/events/:id/evidence": "admin.instruction_audit.event_evidence.read",
+	}
+	for route, action := range expected {
+		require.Equal(t, action, auditSensitiveReads[route])
 	}
 }
 

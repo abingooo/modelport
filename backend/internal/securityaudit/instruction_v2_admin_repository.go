@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/lib/pq"
 )
@@ -270,7 +269,7 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 		       h.stored_bytes, h.ai_sampled, h.source_event_id, h.reviewer_node_id,
 		       h.reviewer_model, h.prompt_version, h.confidence, h.review_reason,
 		       h.review_category, h.candidate_expires_at, h.created_by, h.updated_by,
-		       h.created_at, h.updated_at
+		       h.created_at, h.updated_at, h.global_trust, h.content_vault_id
 		FROM instruction_audit_v2_hashes h WHERE `+whereSQL+`
 		ORDER BY h.created_at DESC, h.id DESC
 		LIMIT $`+fmt.Sprint(len(args)-1)+` OFFSET $`+fmt.Sprint(len(args)), args...)
@@ -287,7 +286,8 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 			&item.RawStorage, &item.StoredBytes, &item.AISampled, &item.SourceEventID,
 			&item.ReviewerNodeID, &item.ReviewerModel, &item.PromptVersion, &item.Confidence,
 			&item.ReviewReason, &item.ReviewCategory, &item.CandidateExpiresAt, &item.CreatedBy,
-			&item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt,
+			&item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt, &item.GlobalTrust,
+			&item.ContentVaultID,
 		); err != nil {
 			return InstructionV2HashPage{}, err
 		}
@@ -337,18 +337,26 @@ func (r *InstructionV2Repository) GetHash(ctx context.Context, id int64) (Instru
 	var item InstructionV2Hash
 	var ciphertext []byte
 	err := r.db.QueryRowContext(ctx, `
-		SELECT id, sha256, name, note, status, source, observed_field, hash_algorithm,
-		       normalization_version, content_bytes, raw_storage, raw_ciphertext, stored_bytes,
-		       ai_sampled, source_event_id, reviewer_node_id, reviewer_model, prompt_version,
-		       confidence, review_reason, review_category, candidate_expires_at,
-		       created_by, updated_by, created_at, updated_at
-		FROM instruction_audit_v2_hashes WHERE id = $1`, id).Scan(
+		SELECT h.id, h.sha256, h.name, h.note, h.status, h.source, h.observed_field,
+		       h.hash_algorithm, h.normalization_version,
+		       CASE WHEN vault.id IS NULL THEN h.content_bytes ELSE vault.content_bytes END,
+		       CASE WHEN vault.id IS NULL THEN h.raw_storage ELSE 'full' END,
+		       COALESCE(vault.raw_ciphertext, h.raw_ciphertext),
+		       CASE WHEN vault.id IS NULL THEN h.stored_bytes ELSE vault.stored_bytes END,
+		       h.ai_sampled, h.source_event_id, h.reviewer_node_id, h.reviewer_model,
+		       h.prompt_version, h.confidence, h.review_reason, h.review_category,
+		       h.candidate_expires_at, h.created_by, h.updated_by, h.created_at,
+		       h.updated_at, h.global_trust, h.content_vault_id
+		FROM instruction_audit_v2_hashes h
+		LEFT JOIN instruction_audit_v2_content_vault vault ON vault.id = h.content_vault_id
+		WHERE h.id = $1`, id).Scan(
 		&item.ID, &item.SHA256, &item.Name, &item.Note, &item.Status, &item.Source,
 		&item.ObservedField, &item.HashAlgorithm, &item.NormalizationVersion, &item.ContentBytes,
 		&item.RawStorage, &ciphertext, &item.StoredBytes, &item.AISampled, &item.SourceEventID,
 		&item.ReviewerNodeID, &item.ReviewerModel, &item.PromptVersion, &item.Confidence,
 		&item.ReviewReason, &item.ReviewCategory, &item.CandidateExpiresAt, &item.CreatedBy,
-		&item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt, &item.GlobalTrust,
+		&item.ContentVaultID,
 	)
 	if err != nil {
 		return InstructionV2Hash{}, nil, err
@@ -443,34 +451,52 @@ func saveInstructionV2ManualHashTx(
 	write instructionV2ManualHashWrite,
 	actorID int64,
 ) (int64, error) {
+	var activeRisk bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM instruction_audit_v2_risk_hashes
+			WHERE sha256 = $1 AND status = 'active'
+		)`, write.SHA256).Scan(&activeRisk); err != nil {
+		return 0, err
+	}
+	if activeRisk {
+		return 0, errors.New("instruction audit risk hash takes precedence")
+	}
+	var vaultID any
+	if len(write.RawCiphertext) > 0 {
+		id, err := upsertInstructionV2VaultTx(ctx, tx, instructionV2VaultWrite{
+			SHA256: write.SHA256, ObservedField: write.ObservedField,
+			RawCiphertext: write.RawCiphertext, ContentBytes: write.ContentBytes,
+			StoredBytes: write.StoredBytes,
+		})
+		if err != nil {
+			return 0, err
+		}
+		vaultID = id
+	}
 	var hashID int64
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_v2_hashes
-			(sha256, name, note, status, source, content_bytes, raw_storage, raw_ciphertext,
-			 stored_bytes, candidate_expires_at, created_by, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NULLIF($11, 0), NULLIF($11, 0))
+			(sha256, name, note, status, source, observed_field, content_bytes,
+			 raw_storage, raw_ciphertext, stored_bytes, candidate_expires_at,
+			 global_trust, content_vault_id, created_by, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'unavailable', NULL, 0, NULL,
+		        $8, $9, NULLIF($10, 0), NULLIF($10, 0))
 		ON CONFLICT (sha256) DO UPDATE
 		SET name = CASE WHEN EXCLUDED.name = '' THEN instruction_audit_v2_hashes.name ELSE EXCLUDED.name END,
 		    note = CASE WHEN EXCLUDED.note = '' THEN instruction_audit_v2_hashes.note ELSE EXCLUDED.note END,
-		    status = CASE
-		        WHEN instruction_audit_v2_hashes.status = 'active' AND EXCLUDED.status = 'candidate'
-		        THEN instruction_audit_v2_hashes.status
-		        ELSE EXCLUDED.status
-		    END,
-		    raw_storage = CASE WHEN EXCLUDED.raw_ciphertext IS NULL THEN instruction_audit_v2_hashes.raw_storage ELSE EXCLUDED.raw_storage END,
-		    raw_ciphertext = COALESCE(EXCLUDED.raw_ciphertext, instruction_audit_v2_hashes.raw_ciphertext),
-		    stored_bytes = CASE WHEN EXCLUDED.raw_ciphertext IS NULL THEN instruction_audit_v2_hashes.stored_bytes ELSE EXCLUDED.stored_bytes END,
+		    status = EXCLUDED.status,
+		    observed_field = CASE WHEN EXCLUDED.observed_field = ''
+		        THEN instruction_audit_v2_hashes.observed_field ELSE EXCLUDED.observed_field END,
 		    content_bytes = GREATEST(instruction_audit_v2_hashes.content_bytes, EXCLUDED.content_bytes),
-		    candidate_expires_at = CASE
-		        WHEN instruction_audit_v2_hashes.status = 'active' AND EXCLUDED.status = 'candidate'
-		        THEN instruction_audit_v2_hashes.candidate_expires_at
-		        ELSE EXCLUDED.candidate_expires_at
-		    END,
-		    updated_by = NULLIF($11, 0), updated_at = NOW()
+		    global_trust = EXCLUDED.global_trust,
+		    content_vault_id = COALESCE(EXCLUDED.content_vault_id,
+		        instruction_audit_v2_hashes.content_vault_id),
+		    candidate_expires_at = NULL,
+		    updated_by = NULLIF($10, 0), updated_at = NOW()
 		WHERE instruction_audit_v2_hashes.status <> 'revoked'
 		RETURNING id`, write.SHA256, write.Name, write.Note, write.Status, write.Source,
-		write.ContentBytes, write.RawStorage, write.RawCiphertext, write.StoredBytes,
-		write.CandidateExpiresAt, actorID).Scan(&hashID)
+		write.ObservedField, write.ContentBytes, write.GlobalTrust, vaultID, actorID).Scan(&hashID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, errInstructionV2RevokedHash
 	}
@@ -478,19 +504,18 @@ func saveInstructionV2ManualHashTx(
 		return 0, err
 	}
 	for _, scopeID := range write.ScopeIDs {
-		var expiresAt *time.Time
-		if write.Status == "candidate" {
-			expiresAt = write.CandidateExpiresAt
+		if write.GlobalTrust {
+			break
 		}
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO instruction_audit_v2_hash_scopes
 				(hash_id, scope_id, status, source, candidate_expires_at, created_by, updated_by)
-			VALUES ($1, $2, $3, $4, $5, NULLIF($6, 0), NULLIF($6, 0))
+			VALUES ($1, $2, $3, $4, NULL, NULLIF($5, 0), NULLIF($5, 0))
 			ON CONFLICT (hash_id, scope_id) DO UPDATE
 			SET status = EXCLUDED.status, source = EXCLUDED.source,
-			    candidate_expires_at = EXCLUDED.candidate_expires_at,
-			    updated_by = NULLIF($6, 0), updated_at = NOW()`,
-			hashID, scopeID, write.Status, write.Source, expiresAt, actorID)
+			    candidate_expires_at = NULL,
+			    updated_by = NULLIF($5, 0), updated_at = NOW()`,
+			hashID, scopeID, write.Status, write.Source, actorID)
 		if err != nil {
 			return 0, err
 		}
@@ -498,17 +523,19 @@ func saveInstructionV2ManualHashTx(
 	return hashID, nil
 }
 
-func (r *InstructionV2Repository) UpdateHash(ctx context.Context, id int64, request UpdateInstructionV2HashRequest, actorID int64, candidateRetentionDays int) (InstructionV2Hash, int64, error) {
-	if candidateRetentionDays < 1 {
-		candidateRetentionDays = InstructionV2DefaultCandidateDays
-	}
+func (r *InstructionV2Repository) UpdateHash(ctx context.Context, id int64, request UpdateInstructionV2HashRequest, actorID int64, _ int) (InstructionV2Hash, int64, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return InstructionV2Hash{}, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	var currentStatus, name, note string
-	err = tx.QueryRowContext(ctx, `SELECT status, name, note FROM instruction_audit_v2_hashes WHERE id = $1 FOR UPDATE`, id).Scan(&currentStatus, &name, &note)
+	var globalTrust bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT status, name, note, global_trust
+		FROM instruction_audit_v2_hashes WHERE id = $1 FOR UPDATE`, id).Scan(
+		&currentStatus, &name, &note, &globalTrust,
+	)
 	if err != nil {
 		return InstructionV2Hash{}, 0, err
 	}
@@ -525,39 +552,41 @@ func (r *InstructionV2Repository) UpdateHash(ctx context.Context, id int64, requ
 			return InstructionV2Hash{}, 0, errInstructionV2RevokedHash
 		}
 	}
+	if request.GlobalTrust != nil {
+		globalTrust = *request.GlobalTrust
+	}
 	_, err = tx.ExecContext(ctx, `
 		UPDATE instruction_audit_v2_hashes
-		SET name = $2, note = $3, status = $4,
-		    candidate_expires_at = CASE WHEN $4 = 'candidate' THEN COALESCE(candidate_expires_at, NOW() + ($6 * INTERVAL '1 day')) ELSE NULL END,
-		    updated_by = NULLIF($5, 0), updated_at = NOW()
-		WHERE id = $1`, id, name, note, nextStatus, actorID, candidateRetentionDays)
+		SET name = $2, note = $3, status = $4, global_trust = $5,
+		    candidate_expires_at = NULL,
+		    updated_by = NULLIF($6, 0), updated_at = NOW()
+		WHERE id = $1`, id, name, note, nextStatus, globalTrust, actorID)
 	if err != nil {
 		return InstructionV2Hash{}, 0, err
 	}
-	if request.SetScopes {
+	if globalTrust {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM instruction_audit_v2_hash_scopes WHERE hash_id = $1`, id); err != nil {
+			return InstructionV2Hash{}, 0, err
+		}
+	} else if request.SetScopes {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM instruction_audit_v2_hash_scopes WHERE hash_id = $1`, id); err != nil {
 			return InstructionV2Hash{}, 0, err
 		}
 		for _, scopeID := range request.ScopeIDs {
-			var expiresAt any
-			if nextStatus == "candidate" {
-				expiresAt = time.Now().UTC().Add(time.Duration(candidateRetentionDays) * 24 * time.Hour)
-			}
 			if _, err := tx.ExecContext(ctx, `
 				INSERT INTO instruction_audit_v2_hash_scopes
 					(hash_id, scope_id, status, source, candidate_expires_at, created_by, updated_by)
-				VALUES ($1, $2, $3, 'manual', $4, NULLIF($5, 0), NULLIF($5, 0))`,
-				id, scopeID, nextStatus, expiresAt, actorID); err != nil {
+				VALUES ($1, $2, $3, 'manual', NULL, NULLIF($4, 0), NULLIF($4, 0))`,
+				id, scopeID, nextStatus, actorID); err != nil {
 				return InstructionV2Hash{}, 0, err
 			}
 		}
 	} else if request.Status != nil {
 		_, err = tx.ExecContext(ctx, `
 			UPDATE instruction_audit_v2_hash_scopes
-			SET status = $2,
-			    candidate_expires_at = CASE WHEN $2 = 'candidate' THEN COALESCE(candidate_expires_at, NOW() + ($4 * INTERVAL '1 day')) ELSE NULL END,
+			SET status = $2, candidate_expires_at = NULL,
 			    updated_by = NULLIF($3, 0), updated_at = NOW()
-			WHERE hash_id = $1`, id, nextStatus, actorID, candidateRetentionDays)
+			WHERE hash_id = $1`, id, nextStatus, actorID)
 		if err != nil {
 			return InstructionV2Hash{}, 0, err
 		}
@@ -597,7 +626,20 @@ func (r *InstructionV2Repository) DeleteHash(ctx context.Context, id, actorID in
 func (r *InstructionV2Repository) GetEventEvidence(ctx context.Context, eventID int64) ([]instructionV2EvidenceWrite, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT field_name, sha256, storage_kind, ciphertext, content_bytes, stored_bytes, expires_at
-		FROM instruction_audit_v2_event_evidence WHERE event_id = $1 ORDER BY id`, eventID)
+		FROM instruction_audit_v2_event_evidence WHERE event_id = $1
+		UNION ALL
+		SELECT event.selected_field, vault.sha256, 'vault', vault.raw_ciphertext,
+		       vault.content_bytes, vault.stored_bytes, NOW() + INTERVAL '100 years'
+		FROM instruction_audit_v2_events event
+		JOIN instruction_audit_v2_content_vault vault
+		  ON vault.sha256 = event.selected_sha256
+		WHERE event.id = $1
+		  AND event.selected_field <> ''
+		  AND NOT EXISTS (
+		      SELECT 1 FROM instruction_audit_v2_event_evidence evidence
+		      WHERE evidence.event_id = event.id
+		  )
+		ORDER BY field_name`, eventID)
 	if err != nil {
 		return nil, err
 	}
@@ -647,18 +689,6 @@ func (r *InstructionV2Repository) Cleanup(ctx context.Context, config Instructio
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM instruction_audit_v2_events
 		WHERE created_at < NOW() - ($1 * INTERVAL '1 day')`, config.EventRetentionDays); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM instruction_audit_v2_hash_scopes
-		WHERE status = 'candidate' AND candidate_expires_at <= NOW()`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM instruction_audit_v2_hashes h
-		WHERE h.status = 'candidate'
-		  AND h.candidate_expires_at <= NOW()
-		  AND NOT EXISTS (SELECT 1 FROM instruction_audit_v2_hash_scopes hs WHERE hs.hash_id = h.id)`); err != nil {
 		return err
 	}
 	return tx.Commit()

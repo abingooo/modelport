@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -27,8 +26,8 @@ func (s *InstructionV2Service) AdminConfig(ctx context.Context) (InstructionV2Co
 	config.GatewayHTTPMaxBodyBytes = s.httpMaxBody
 	config.GatewayWSMaxBodyBytes = s.wsMaxBody
 	config.EvidenceEncryptionReady = s.evidenceCipher != nil && s.evidenceCipher.Available()
-	config.AsyncQueueDepth = len(s.asyncQueue)
-	config.AsyncQueueCapacity = cap(s.asyncQueue)
+	config.AsyncQueueDepth = int(config.PendingReviewJobCount)
+	config.AsyncQueueCapacity = 0
 	s.stateMu.RLock()
 	config.LastConfigLoadError = s.lastLoadError
 	s.stateMu.RUnlock()
@@ -60,9 +59,20 @@ func (s *InstructionV2Service) UpdateAdminConfig(
 				"instruction_audit_v2_scope_required", "启用指令审核前至少需要一个有效审核范围",
 			)
 		}
-		if current.EnabledAINodeCount == 0 {
+		nodes, nodeErr := s.repository.ListAINodes(ctx)
+		if nodeErr != nil {
+			return InstructionV2Config{}, nodeErr
+		}
+		enabledSlots := make(map[string]bool, 4)
+		for _, node := range nodes {
+			if node.Enabled && node.HasAPIKey {
+				enabledSlots[node.Slot] = true
+			}
+		}
+		if !enabledSlots["sync"] || !enabledSlots["async_1"] ||
+			!enabledSlots["async_2"] || !enabledSlots["async_3"] {
 			return InstructionV2Config{}, infraerrors.BadRequest(
-				"instruction_audit_v2_ai_node_required", "启用指令审核前至少需要一个可用 AI 节点",
+				"instruction_audit_v2_ai_nodes_required", "启用指令审核前必须配置同步节点和三个异步节点",
 			)
 		}
 		if s.evidenceCipher == nil || !s.evidenceCipher.Available() {
@@ -100,9 +110,14 @@ func validateInstructionV2ConfigRequest(request UpdateInstructionV2ConfigRequest
 		request.AICacheTTLSeconds < 0 || request.AICacheTTLSeconds > 86400 ||
 		request.EventRetentionDays < 1 || request.EventRetentionDays > 3650 ||
 		request.EvidenceRetentionDays < 1 || request.EvidenceRetentionDays > 365 ||
-		request.CandidateRetentionDays < 1 || request.CandidateRetentionDays > 365 ||
-		request.RawFullMaxBytes < 65536 || request.RawFullMaxBytes > instructionV2MaximumManualRawBytes {
+		request.RawFullMaxBytes < 65536 || request.RawFullMaxBytes > instructionV2MaximumManualRawBytes ||
+		len(request.AsyncRetrySchedule) < 1 || len(request.AsyncRetrySchedule) > 12 {
 		return infraerrors.BadRequest("instruction_audit_v2_invalid_config", "指令审核配置超出允许范围")
+	}
+	for _, delay := range request.AsyncRetrySchedule {
+		if delay < 1 || delay > 604800 {
+			return infraerrors.BadRequest("instruction_audit_v2_invalid_retry_schedule", "异步复核重试间隔无效")
+		}
 	}
 	return nil
 }
@@ -120,6 +135,14 @@ func (s *InstructionV2Service) SaveAdminAINode(
 	request.Name = strings.TrimSpace(request.Name)
 	request.Model = strings.TrimSpace(request.Model)
 	request.APIKey = strings.TrimSpace(request.APIKey)
+	request.Slot = strings.ToLower(strings.TrimSpace(request.Slot))
+	request.ResponseMode = strings.ToLower(strings.TrimSpace(request.ResponseMode))
+	if request.ResponseMode == "" {
+		request.ResponseMode = "auto"
+	}
+	if request.MaxOutputTokens == 0 {
+		request.MaxOutputTokens = 1024
+	}
 	normalizedURL, err := NormalizeBaseURL(request.BaseURL)
 	if err != nil {
 		return InstructionV2AINode{}, err
@@ -127,7 +150,10 @@ func (s *InstructionV2Service) SaveAdminAINode(
 	request.BaseURL = normalizedURL
 	if request.Name == "" || len([]rune(request.Name)) > 120 || request.Model == "" || len(request.Model) > 255 ||
 		request.Priority < 0 || request.Priority > 100000 || request.TimeoutMS < 100 || request.TimeoutMS > 30000 ||
-		request.MaxConcurrency < 1 || request.MaxConcurrency > 256 {
+		request.MaxConcurrency < 1 || request.MaxConcurrency > 256 ||
+		(request.Slot != "sync" && request.Slot != "async_1" && request.Slot != "async_2" && request.Slot != "async_3") ||
+		(request.ResponseMode != "auto" && request.ResponseMode != "json_schema" && request.ResponseMode != "json_object") ||
+		request.MaxOutputTokens < 128 || request.MaxOutputTokens > 8192 {
 		return InstructionV2AINode{}, infraerrors.BadRequest(
 			"instruction_audit_v2_invalid_ai_node", "AI 审核节点配置无效",
 		)
@@ -175,7 +201,7 @@ func (s *InstructionV2Service) SaveAdminAINode(
 			)
 		}
 	}
-	_, version, err := s.repository.SaveAINode(ctx, id, request, ciphertext, actorID)
+	saved, version, err := s.repository.SaveAINode(ctx, id, request, ciphertext, actorID)
 	if err != nil {
 		return InstructionV2AINode{}, mapInstructionV2RepositoryError(err, "AI 节点")
 	}
@@ -185,7 +211,7 @@ func (s *InstructionV2Service) SaveAdminAINode(
 		return InstructionV2AINode{}, err
 	}
 	for _, item := range items {
-		if (id > 0 && item.ID == id) || (id == 0 && item.Name == request.Name && item.Model == request.Model) {
+		if item.ID == saved.ID {
 			return item, nil
 		}
 	}
@@ -424,14 +450,14 @@ func (s *InstructionV2Service) prepareInstructionV2ManualHash(
 		)
 	}
 	scopeIDs, err := normalizeInstructionV2IDs(request.ScopeIDs, 200)
-	if err != nil || len(scopeIDs) == 0 {
+	if err != nil || (!request.GlobalTrust && len(scopeIDs) == 0) {
 		return instructionV2ManualHashWrite{}, infraerrors.BadRequest(
 			"instruction_audit_v2_scope_required", "可信指令至少需要一个审核范围",
 		)
 	}
 	write := instructionV2ManualHashWrite{
 		Name: request.Name, Note: request.Note, Status: request.Status, Source: request.Source,
-		RawStorage: "unavailable", ScopeIDs: scopeIDs,
+		RawStorage: "unavailable", ScopeIDs: scopeIDs, GlobalTrust: request.GlobalTrust,
 	}
 	if request.RawContent != "" {
 		if len([]byte(request.RawContent)) > instructionV2MaximumManualRawBytes {
@@ -445,17 +471,8 @@ func (s *InstructionV2Service) prepareInstructionV2ManualHash(
 				"instruction_audit_v2_digest_mismatch", "原文与 SHA-256 不一致",
 			)
 		}
-		config, configErr := s.AdminConfig(ctx)
-		if configErr != nil {
-			return instructionV2ManualHashWrite{}, configErr
-		}
 		plaintext := request.RawContent
 		write.RawStorage = "full"
-		if field.Bytes > int64(config.RawFullMaxBytes) {
-			prepared := prepareInstructionV2AISample(field, config.AIInputMaxChars)
-			plaintext = prepared.AISample
-			write.RawStorage = "sample"
-		}
 		if s.evidenceCipher == nil || !s.evidenceCipher.Available() {
 			return instructionV2ManualHashWrite{}, infraerrors.ServiceUnavailable(
 				"instruction_audit_v2_encryption_unavailable", "原文加密服务不可用",
@@ -477,14 +494,6 @@ func (s *InstructionV2Service) prepareInstructionV2ManualHash(
 		}
 		write.SHA256 = request.SHA256
 	}
-	if request.Status == "candidate" {
-		config, configErr := s.AdminConfig(ctx)
-		if configErr != nil {
-			return instructionV2ManualHashWrite{}, configErr
-		}
-		expiresAt := time.Now().UTC().Add(time.Duration(config.CandidateRetentionDays) * 24 * time.Hour)
-		write.CandidateExpiresAt = &expiresAt
-	}
 	return write, nil
 }
 
@@ -505,18 +514,15 @@ func (s *InstructionV2Service) UpdateAdminHash(
 	}
 	if request.SetScopes {
 		ids, err := normalizeInstructionV2IDs(request.ScopeIDs, 200)
-		if err != nil || len(ids) == 0 {
+		global := request.GlobalTrust != nil && *request.GlobalTrust
+		if err != nil || (!global && len(ids) == 0) {
 			return InstructionV2Hash{}, infraerrors.BadRequest(
 				"instruction_audit_v2_scope_required", "可信指令至少需要一个审核范围",
 			)
 		}
 		request.ScopeIDs = ids
 	}
-	candidateRetentionDays := InstructionV2DefaultCandidateDays
-	if snapshot := s.snapshot.Load(); snapshot != nil && snapshot.Config.CandidateRetentionDays > 0 {
-		candidateRetentionDays = snapshot.Config.CandidateRetentionDays
-	}
-	item, version, err := s.repository.UpdateHash(ctx, id, request, actorID, candidateRetentionDays)
+	item, version, err := s.repository.UpdateHash(ctx, id, request, actorID, 0)
 	if err != nil {
 		return InstructionV2Hash{}, mapInstructionV2RepositoryError(err, "可信指令")
 	}
@@ -531,6 +537,210 @@ func (s *InstructionV2Service) DeleteAdminHash(ctx context.Context, id, actorID 
 	}
 	s.refreshAfterMutation(ctx, version)
 	return nil
+}
+
+func (s *InstructionV2Service) ListAdminRiskHashes(
+	ctx context.Context,
+	page, pageSize int,
+	status, query string,
+) (InstructionV2RiskHashPage, error) {
+	page, pageSize = normalizeInstructionV2Page(page, pageSize)
+	status = strings.TrimSpace(status)
+	if status != "" && status != "active" && status != "disabled" {
+		return InstructionV2RiskHashPage{}, infraerrors.BadRequest(
+			"instruction_audit_v2_invalid_risk_status", "风险哈希状态无效",
+		)
+	}
+	return s.repository.ListRiskHashes(ctx, page, pageSize, status, query)
+}
+
+func (s *InstructionV2Service) GetAdminRiskHash(ctx context.Context, id int64) (InstructionV2RiskHash, error) {
+	item, _, err := s.repository.GetRiskHash(ctx, id)
+	if err != nil {
+		return InstructionV2RiskHash{}, mapInstructionV2RepositoryError(err, "风险哈希")
+	}
+	return item, nil
+}
+
+func (s *InstructionV2Service) CreateAdminRiskHash(
+	ctx context.Context,
+	request SaveInstructionV2RiskHashRequest,
+	actorID int64,
+) (InstructionV2RiskHash, error) {
+	request.SHA256 = strings.ToLower(strings.TrimSpace(request.SHA256))
+	request.ObservedField = strings.TrimSpace(request.ObservedField)
+	request.Note = strings.TrimSpace(request.Note)
+	if request.RawContent == "" || len([]byte(request.RawContent)) > instructionV2MaximumManualRawBytes ||
+		(request.ObservedField != "" && request.ObservedField != "instructions" && request.ObservedField != "input1") ||
+		len([]rune(request.Note)) > 1000 {
+		return InstructionV2RiskHash{}, infraerrors.BadRequest(
+			"instruction_audit_v2_invalid_risk_hash", "风险哈希配置无效",
+		)
+	}
+	field := newInstructionV2TextField(request.RawContent, false)
+	if request.SHA256 != "" && request.SHA256 != field.SHA256 {
+		return InstructionV2RiskHash{}, infraerrors.BadRequest(
+			"instruction_audit_v2_digest_mismatch", "原文与 SHA-256 不一致",
+		)
+	}
+	vault, err := s.prepareInstructionV2Vault(request.ObservedField, field)
+	if err != nil {
+		return InstructionV2RiskHash{}, infraerrors.ServiceUnavailable(
+			"instruction_audit_v2_encrypt_failed", "风险原文加密失败",
+		)
+	}
+	item, version, err := s.repository.SaveManualRiskHash(ctx, instructionV2RiskWrite{
+		Vault: vault, Source: "manual", ObservedField: request.ObservedField,
+		Confidence: 1, ReviewReason: request.Note, ReviewCategory: "manual",
+	}, actorID)
+	if err != nil {
+		return InstructionV2RiskHash{}, mapInstructionV2RepositoryError(err, "风险哈希")
+	}
+	s.refreshAfterMutation(ctx, version)
+	return item, nil
+}
+
+func (s *InstructionV2Service) UpdateAdminRiskHash(
+	ctx context.Context,
+	id int64,
+	request UpdateInstructionV2RiskHashRequest,
+	actorID int64,
+) (InstructionV2RiskActionResult, error) {
+	request.Action = strings.TrimSpace(request.Action)
+	if request.Action != "confirm_risk" && request.Action != "confirm_safe" &&
+		request.Action != "disable" && request.Action != "enable" {
+		return InstructionV2RiskActionResult{}, infraerrors.BadRequest(
+			"instruction_audit_v2_invalid_risk_action", "风险哈希操作无效",
+		)
+	}
+	risk, trusted, version, err := s.repository.UpdateRiskHash(ctx, id, request, actorID)
+	if err != nil {
+		return InstructionV2RiskActionResult{}, mapInstructionV2RepositoryError(err, "风险哈希")
+	}
+	s.refreshAfterMutation(ctx, version)
+	result := InstructionV2RiskActionResult{TrustedHash: trusted}
+	if trusted == nil {
+		result.RiskHash = &risk
+	}
+	return result, nil
+}
+
+func (s *InstructionV2Service) DeleteAdminRiskHash(ctx context.Context, id, actorID int64) error {
+	version, err := s.repository.DeleteRiskHash(ctx, id, actorID)
+	if err != nil {
+		return mapInstructionV2RepositoryError(err, "风险哈希")
+	}
+	s.refreshAfterMutation(ctx, version)
+	return nil
+}
+
+func (s *InstructionV2Service) RevealAdminRiskHashRaw(
+	ctx context.Context,
+	id int64,
+	access InstructionV2RawAccess,
+) (result InstructionV2EvidenceReview, resultErr error) {
+	access.Action = "reveal"
+	defer func() {
+		_ = s.repository.RecordRawAccess(ctx, "risk_hash", id, access, resultErr == nil, instructionV2RawErrorCode(resultErr))
+	}()
+	item, ciphertext, err := s.repository.GetRiskHash(ctx, id)
+	if err != nil {
+		return InstructionV2EvidenceReview{}, mapInstructionV2RepositoryError(err, "风险哈希")
+	}
+	plaintext, err := s.evidenceCipher.DecryptHashRaw(item.SHA256, ciphertext)
+	if err != nil {
+		return InstructionV2EvidenceReview{}, infraerrors.ServiceUnavailable(
+			"instruction_audit_v2_decrypt_failed", "风险原文解密失败",
+		)
+	}
+	digest := sha256.Sum256([]byte(plaintext))
+	return InstructionV2EvidenceReview{
+		ResourceType: "risk_hash", ResourceID: id,
+		Fields: []InstructionV2EvidenceField{{
+			FieldName: item.ObservedField, SHA256: item.SHA256, StorageKind: "full",
+			Plaintext: plaintext, ContentBytes: int64(len([]byte(plaintext))),
+			StoredBytes: len([]byte(plaintext)), DigestConsistent: hex.EncodeToString(digest[:]) == item.SHA256,
+		}},
+	}, nil
+}
+
+func (s *InstructionV2Service) RecordAdminRiskHashRawCopy(ctx context.Context, id int64, access InstructionV2RawAccess) error {
+	access.Action = "copy"
+	_, _, err := s.repository.GetRiskHash(ctx, id)
+	_ = s.repository.RecordRawAccess(ctx, "risk_hash", id, access, err == nil, instructionV2RawErrorCode(err))
+	return mapInstructionV2RepositoryError(err, "风险哈希")
+}
+
+func (s *InstructionV2Service) ListAdminReviewJobs(
+	ctx context.Context,
+	page, pageSize int,
+	status, query string,
+) (InstructionV2ReviewJobPage, error) {
+	page, pageSize = normalizeInstructionV2Page(page, pageSize)
+	status = strings.TrimSpace(status)
+	if status != "" && status != "pending" && status != "processing" &&
+		status != "retry" && status != "completed" && status != "failed" {
+		return InstructionV2ReviewJobPage{}, infraerrors.BadRequest(
+			"instruction_audit_v2_invalid_job_status", "复核任务状态无效",
+		)
+	}
+	return s.repository.ListReviewJobs(ctx, page, pageSize, status, query)
+}
+
+func (s *InstructionV2Service) GetAdminReviewJob(ctx context.Context, id int64) (InstructionV2ReviewJob, error) {
+	item, err := s.repository.GetReviewJob(ctx, id)
+	if err != nil {
+		return InstructionV2ReviewJob{}, mapInstructionV2RepositoryError(err, "复核任务")
+	}
+	return item, nil
+}
+
+func (s *InstructionV2Service) RetryAdminReviewJob(ctx context.Context, id int64) error {
+	if err := s.repository.RetryReviewJob(ctx, id); err != nil {
+		return mapInstructionV2RepositoryError(err, "可重试的复核任务")
+	}
+	return nil
+}
+
+func (s *InstructionV2Service) RevealAdminReviewJobRaw(
+	ctx context.Context,
+	id int64,
+	access InstructionV2RawAccess,
+) (result InstructionV2EvidenceReview, resultErr error) {
+	access.Action = "reveal"
+	defer func() {
+		_ = s.repository.RecordRawAccess(ctx, "review_job", id, access, resultErr == nil, instructionV2RawErrorCode(resultErr))
+	}()
+	job, err := s.repository.GetReviewJob(ctx, id)
+	if err != nil {
+		return InstructionV2EvidenceReview{}, mapInstructionV2RepositoryError(err, "复核任务")
+	}
+	ciphertext, err := s.repository.GetVaultCiphertext(ctx, job.ContentVaultID)
+	if err != nil {
+		return InstructionV2EvidenceReview{}, err
+	}
+	plaintext, err := s.evidenceCipher.DecryptHashRaw(job.SHA256, ciphertext)
+	if err != nil {
+		return InstructionV2EvidenceReview{}, infraerrors.ServiceUnavailable(
+			"instruction_audit_v2_decrypt_failed", "复核原文解密失败",
+		)
+	}
+	digest := sha256.Sum256([]byte(plaintext))
+	return InstructionV2EvidenceReview{
+		ResourceType: "review_job", ResourceID: id,
+		Fields: []InstructionV2EvidenceField{{
+			FieldName: job.SelectedField, SHA256: job.SHA256, StorageKind: "full",
+			Plaintext: plaintext, ContentBytes: job.ContentBytes,
+			StoredBytes: len([]byte(plaintext)), DigestConsistent: hex.EncodeToString(digest[:]) == job.SHA256,
+		}},
+	}, nil
+}
+
+func (s *InstructionV2Service) RecordAdminReviewJobRawCopy(ctx context.Context, id int64, access InstructionV2RawAccess) error {
+	access.Action = "copy"
+	_, err := s.repository.GetReviewJob(ctx, id)
+	_ = s.repository.RecordRawAccess(ctx, "review_job", id, access, err == nil, instructionV2RawErrorCode(err))
+	return mapInstructionV2RepositoryError(err, "复核任务")
 }
 
 func (s *InstructionV2Service) RevealAdminHashRaw(
@@ -634,14 +844,20 @@ func (s *InstructionV2Service) RevealAdminEventEvidence(
 	}
 	result = InstructionV2EvidenceReview{ResourceType: "event", ResourceID: id, Fields: make([]InstructionV2EvidenceField, 0, len(evidence))}
 	for _, item := range evidence {
-		plaintext, decryptErr := s.evidenceCipher.Decrypt(item.FieldName, item.SHA256, item.Ciphertext)
+		var plaintext string
+		var decryptErr error
+		if item.StorageKind == "vault" {
+			plaintext, decryptErr = s.evidenceCipher.DecryptHashRaw(item.SHA256, item.Ciphertext)
+		} else {
+			plaintext, decryptErr = s.evidenceCipher.Decrypt(item.FieldName, item.SHA256, item.Ciphertext)
+		}
 		if decryptErr != nil {
 			return InstructionV2EvidenceReview{}, infraerrors.ServiceUnavailable(
 				"instruction_audit_v2_decrypt_failed", "审核事件原文解密失败",
 			)
 		}
 		consistent := false
-		if item.StorageKind == "full" {
+		if item.StorageKind == "full" || item.StorageKind == "vault" {
 			digest := sha256.Sum256([]byte(plaintext))
 			consistent = hex.EncodeToString(digest[:]) == item.SHA256
 		}
@@ -740,8 +956,9 @@ func (s *InstructionV2Service) TrustAdminEvent(
 		}
 		writes = append(writes, instructionV2ManualHashWrite{
 			SHA256: item.SHA256, Name: itemName, Note: note, Status: "active", Source: "manual",
-			ContentBytes: item.ContentBytes, RawStorage: item.StorageKind, RawCiphertext: hashCiphertext,
-			StoredBytes: item.StoredBytes, ScopeIDs: []int64{*event.ScopeID},
+			ContentBytes: item.ContentBytes, RawStorage: "full", RawCiphertext: hashCiphertext,
+			StoredBytes: len([]byte(plaintext)), ScopeIDs: []int64{*event.ScopeID},
+			ObservedField: fieldName, GlobalTrust: request.GlobalTrust,
 		})
 	}
 	hashes, version, err := s.repository.SaveManualHashes(ctx, writes, actorID)
@@ -754,7 +971,7 @@ func (s *InstructionV2Service) TrustAdminEvent(
 
 func validInstructionV2HashStatus(status string) bool {
 	switch status {
-	case "candidate", "active", "disabled", "revoked":
+	case "active", "disabled", "revoked":
 		return true
 	default:
 		return false

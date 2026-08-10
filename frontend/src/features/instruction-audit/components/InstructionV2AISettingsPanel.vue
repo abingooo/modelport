@@ -46,50 +46,51 @@
           <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.v2.aiNodes') }}</h2>
           <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.aiNodesHint') }}</p>
         </div>
-        <button type="button" class="btn btn-primary shrink-0" @click="openNodeForm()"><Icon name="plus" size="sm" />{{ t('admin.instructionAudit.v2.addAINode') }}</button>
+        <span class="rounded-full bg-primary-50 px-3 py-1.5 text-xs font-semibold text-primary-700 dark:bg-primary-950/40 dark:text-primary-300">{{ t('admin.instructionAudit.v2.fixedNodeSlots') }}</span>
       </div>
 
-      <div v-if="nodes.length" class="node-grid">
-        <article v-for="node in nodes" :key="node.id" class="node-card">
+      <div class="node-grid">
+        <article v-for="slotCard in slotCards" :key="slotCard.slot" class="node-card">
           <header class="flex min-w-0 items-start justify-between gap-3">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
-                <h3 class="truncate text-sm font-semibold text-gray-950 dark:text-white">{{ node.name }}</h3>
-                <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="node.enabled ? 'bg-primary-100 text-primary-700 dark:bg-primary-950/60 dark:text-primary-200' : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-gray-300'">{{ node.enabled ? t('common.enabled') : t('common.disabled') }}</span>
+                <h3 class="text-sm font-semibold text-gray-950 dark:text-white">{{ slotCard.label }}</h3>
+                <span class="rounded-full bg-gray-100 px-2 py-0.5 font-mono text-[10px] text-gray-600 dark:bg-dark-700 dark:text-gray-300">{{ slotCard.slot }}</span>
+                <span v-if="slotCard.node" class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="slotCard.node.enabled ? 'bg-primary-100 text-primary-700 dark:bg-primary-950/60 dark:text-primary-200' : 'bg-gray-100 text-gray-500 dark:bg-dark-700 dark:text-gray-300'">{{ slotCard.node.enabled ? t('common.enabled') : t('common.disabled') }}</span>
               </div>
-              <p class="mt-1 font-mono text-xs text-primary-600 dark:text-primary-400">{{ node.model }}</p>
+              <p v-if="slotCard.node" class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400">{{ slotCard.node.name }} · <span class="font-mono text-primary-600 dark:text-primary-400">{{ slotCard.node.model }}</span></p>
+              <p v-else class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ t('admin.instructionAudit.v2.slotNotConfigured') }}</p>
             </div>
-            <div class="flex shrink-0 items-center gap-1">
-              <button type="button" class="icon-btn" :title="t('common.edit')" @click="openNodeForm(node)"><Icon name="edit" size="sm" /></button>
-              <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="nodeToDelete = node"><Icon name="trash" size="sm" /></button>
+            <div v-if="slotCard.node" class="flex shrink-0 items-center gap-1">
+              <button type="button" class="icon-btn" :title="t('common.edit')" @click="openNodeForm(slotCard.node, slotCard.slot)"><Icon name="edit" size="sm" /></button>
+              <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="nodeToDelete = slotCard.node"><Icon name="trash" size="sm" /></button>
             </div>
           </header>
+          <template v-if="slotCard.node">
           <div class="min-w-0 rounded-md bg-gray-50 px-3 py-2 dark:bg-dark-800/70">
             <p class="settings-label">Base URL</p>
-            <p class="mt-1 break-all font-mono text-[11px] text-gray-700 dark:text-gray-200">{{ node.base_url }}</p>
+            <p class="mt-1 break-all font-mono text-[11px] text-gray-700 dark:text-gray-200">{{ slotCard.node.base_url }}</p>
           </div>
           <dl class="grid grid-cols-2 gap-3">
-            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.priority') }}</dt><dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ node.priority }}</dd></div>
-            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.timeout') }}</dt><dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ node.timeout_ms }} ms</dd></div>
-            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.concurrency') }}</dt><dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ node.max_concurrency }}</dd></div>
-            <div><dt class="settings-label">API Key</dt><dd class="mt-1 text-sm" :class="node.has_api_key ? 'text-primary-700 dark:text-primary-300' : 'text-red-600 dark:text-red-300'">{{ node.has_api_key ? node.api_key_status : t('admin.instructionAudit.v2.notConfigured') }}</dd></div>
+            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.timeout') }}</dt><dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ slotCard.node.timeout_ms }} ms</dd></div>
+            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.concurrency') }}</dt><dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ slotCard.node.max_concurrency }}</dd></div>
+            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.responseMode') }}</dt><dd class="mt-1 font-mono text-xs text-gray-800 dark:text-gray-200">{{ slotCard.node.response_mode }}</dd></div>
+            <div><dt class="settings-label">{{ t('admin.instructionAudit.v2.maxOutputTokens') }}</dt><dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ slotCard.node.max_output_tokens }}</dd></div>
+            <div><dt class="settings-label">API Key</dt><dd class="mt-1 text-sm" :class="slotCard.node.has_api_key ? 'text-primary-700 dark:text-primary-300' : 'text-red-600 dark:text-red-300'">{{ slotCard.node.has_api_key ? slotCard.node.api_key_status : t('admin.instructionAudit.v2.notConfigured') }}</dd></div>
           </dl>
-          <div v-if="testResults[node.id]" class="rounded-md border px-3 py-2 text-xs" :class="testResults[node.id].result === 'pass' ? 'border-primary-200 bg-primary-50 text-primary-800 dark:border-primary-900/50 dark:bg-primary-950/20 dark:text-primary-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200'">
-            <p class="font-semibold">{{ aiResultLabel(t, testResults[node.id].result) }} · {{ Math.round(testResults[node.id].confidence * 100) }}% · {{ testResults[node.id].latency_ms }} ms</p>
-            <p class="mt-1 break-words">{{ testResults[node.id].reason }}</p>
+          <div v-if="testResults[slotCard.node.id]" class="rounded-md border px-3 py-2 text-xs" :class="testResults[slotCard.node.id].result === 'pass' ? 'border-primary-200 bg-primary-50 text-primary-800 dark:border-primary-900/50 dark:bg-primary-950/20 dark:text-primary-200' : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/20 dark:text-amber-200'">
+            <p class="font-semibold">{{ aiResultLabel(t, testResults[slotCard.node.id].result) }} · {{ Math.round(testResults[slotCard.node.id].confidence * 100) }}% · {{ testResults[slotCard.node.id].latency_ms }} ms</p>
+            <p class="mt-1 break-words">{{ testResults[slotCard.node.id].reason }}</p>
           </div>
           <footer class="mt-auto border-t border-gray-100 pt-3 dark:border-dark-700">
-            <button type="button" class="btn btn-secondary btn-sm w-full" :disabled="testingNodeId === node.id || !node.has_api_key" @click="testNode(node)">
-              <Icon name="beaker" size="sm" :class="{ 'animate-pulse': testingNodeId === node.id }" />
-              {{ testingNodeId === node.id ? t('admin.instructionAudit.v2.testing') : t('admin.instructionAudit.v2.testNode') }}
+            <button type="button" class="btn btn-secondary btn-sm w-full" :disabled="testingNodeId === slotCard.node.id || !slotCard.node.has_api_key" @click="testNode(slotCard.node)">
+              <Icon name="beaker" size="sm" :class="{ 'animate-pulse': testingNodeId === slotCard.node.id }" />
+              {{ testingNodeId === slotCard.node.id ? t('admin.instructionAudit.v2.testing') : t('admin.instructionAudit.v2.testNode') }}
             </button>
           </footer>
+          </template>
+          <button v-else type="button" class="btn btn-primary mt-auto w-full" @click="openNodeForm(undefined, slotCard.slot)"><Icon name="plus" size="sm" />{{ t('admin.instructionAudit.v2.configureSlot') }}</button>
         </article>
-      </div>
-      <div v-else class="flex min-h-52 flex-col items-center justify-center rounded-md border border-dashed border-gray-200 px-6 text-center dark:border-dark-600">
-        <Icon name="brain" size="xl" class="text-gray-300 dark:text-dark-500" />
-        <p class="mt-3 text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('admin.instructionAudit.v2.noAINodes') }}</p>
-        <p class="mt-1 max-w-lg text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.noAINodesHint') }}</p>
       </div>
     </div>
 
@@ -108,16 +109,24 @@
         <NumberField v-model="form.aiGlobalConcurrency" :label="t('admin.instructionAudit.v2.globalConcurrency')" :min="1" :max="512" />
         <NumberField v-model="form.aiQueueWaitMs" :label="t('admin.instructionAudit.v2.queueWait')" :min="0" :max="30000" suffix="ms" />
         <NumberField v-model="form.aiTotalTimeoutMs" :label="t('admin.instructionAudit.v2.totalTimeout')" :min="1000" :max="30000" suffix="ms" />
-        <NumberField v-model="form.aiCacheTtlSeconds" :label="t('admin.instructionAudit.v2.cacheTtl')" :min="0" :max="86400" suffix="s" />
         <NumberField v-model="form.eventRetentionDays" :label="t('admin.instructionAudit.v2.eventRetention')" :min="1" :max="3650" :suffix="t('admin.instructionAudit.v2.days')" />
         <NumberField v-model="form.evidenceRetentionDays" :label="t('admin.instructionAudit.v2.evidenceRetention')" :min="1" :max="365" :suffix="t('admin.instructionAudit.v2.days')" />
-        <NumberField v-model="form.candidateRetentionDays" :label="t('admin.instructionAudit.v2.candidateRetention')" :min="1" :max="365" :suffix="t('admin.instructionAudit.v2.days')" />
-        <NumberField v-model="form.rawFullMaxMiB" :label="t('admin.instructionAudit.v2.fullRawLimit')" :min="0.0625" :max="16" :step="0.0625" suffix="MiB" />
+        <label class="min-w-0 sm:col-span-2">
+          <span class="input-label">{{ t('admin.instructionAudit.v2.retrySchedule') }}</span>
+          <input v-model.trim="form.retrySchedule" class="input font-mono text-xs" placeholder="30, 120, 600, 3600, 21600" />
+        </label>
+        <label class="flex items-start gap-3 rounded-md border border-gray-200 px-3 py-3 dark:border-dark-600 sm:col-span-2">
+          <input v-model="form.allowEmptyFields" type="checkbox" class="mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span>
+            <span class="block text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.instructionAudit.v2.allowEmptyFields') }}</span>
+            <span class="mt-0.5 block text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.allowEmptyFieldsHint') }}</span>
+          </span>
+        </label>
       </div>
       <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <div class="settings-status"><p class="settings-label">HTTP {{ t('admin.instructionAudit.v2.gatewayLimit') }}</p><p class="mt-1.5 text-sm text-gray-800 dark:text-gray-200">{{ formatAuditBytes(config.gateway_http_max_body_bytes) }}</p></div>
         <div class="settings-status"><p class="settings-label">WebSocket {{ t('admin.instructionAudit.v2.gatewayLimit') }}</p><p class="mt-1.5 text-sm text-gray-800 dark:text-gray-200">{{ formatAuditBytes(config.gateway_ws_max_body_bytes) }}</p></div>
-        <div class="settings-status"><p class="settings-label">{{ t('admin.instructionAudit.v2.asyncQueue') }}</p><p class="mt-1.5 text-sm text-gray-800 dark:text-gray-200">{{ config.async_queue_depth }} / {{ config.async_queue_capacity }}</p></div>
+        <div class="settings-status"><p class="settings-label">{{ t('admin.instructionAudit.v2.pendingReviews') }}</p><p class="mt-1.5 text-sm text-gray-800 dark:text-gray-200">{{ config.pending_review_job_count }}</p></div>
         <div class="settings-status"><p class="settings-label">{{ t('admin.instructionAudit.v2.configVersion') }}</p><p class="mt-1.5 text-sm text-gray-800 dark:text-gray-200">v{{ config.config_version }}</p></div>
       </div>
       <div class="flex justify-end">
@@ -125,21 +134,24 @@
       </div>
     </div>
 
-    <InstructionSensitiveAccessPanel :capability="sensitiveCapability" :capability-loading="sensitiveLoading" :capability-error="sensitiveError" @refresh-capability="$emit('refresh-sensitive')" @access-denied="$emit('refresh-sensitive')" />
-
     <BaseDialog :show="nodeForm.show" :title="nodeForm.id ? t('admin.instructionAudit.v2.editAINode') : t('admin.instructionAudit.v2.addAINode')" width="wide" @close="closeNodeForm">
       <div class="min-w-0 space-y-4">
         <div class="grid min-w-0 gap-4 sm:grid-cols-2">
           <label class="min-w-0"><span class="input-label">{{ t('common.name') }}</span><input v-model="nodeForm.name" maxlength="120" class="input" /></label>
           <label class="min-w-0"><span class="input-label">{{ t('admin.instructionAudit.v2.model') }}</span><input v-model="nodeForm.model" maxlength="255" class="input font-mono" /></label>
         </div>
+        <div class="grid min-w-0 gap-4 sm:grid-cols-2">
+          <label><span class="input-label">{{ t('admin.instructionAudit.v2.nodeSlot') }}</span><input :value="nodeForm.slot" class="input bg-gray-50 font-mono dark:bg-dark-700" disabled /></label>
+          <label><span class="input-label">{{ t('admin.instructionAudit.v2.responseMode') }}</span><select v-model="nodeForm.responseMode" class="input"><option value="auto">auto</option><option value="json_schema">json_schema</option><option value="json_object">json_object</option></select></label>
+        </div>
         <label class="block min-w-0"><span class="input-label">Base URL</span><input v-model="nodeForm.baseUrl" class="input font-mono text-xs" placeholder="https://api.example.com/v1" /></label>
         <label class="block min-w-0"><span class="input-label">API Key</span><input v-model="nodeForm.apiKey" type="password" autocomplete="new-password" class="input font-mono" :placeholder="nodeForm.hasApiKey ? t('admin.instructionAudit.v2.keepExistingKey') : 'sk-...'" /></label>
         <label v-if="nodeForm.id && nodeForm.hasApiKey" class="flex items-center gap-2 text-sm text-red-600 dark:text-red-300"><input v-model="nodeForm.clearApiKey" type="checkbox" class="rounded border-gray-300 text-red-600" />{{ t('admin.instructionAudit.v2.clearExistingKey') }}</label>
-        <div class="grid min-w-0 gap-4 sm:grid-cols-3">
+        <div class="grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label><span class="input-label">{{ t('admin.instructionAudit.v2.priority') }}</span><input v-model.number="nodeForm.priority" type="number" min="0" max="100000" class="input" /></label>
           <label><span class="input-label">{{ t('admin.instructionAudit.v2.timeout') }} (ms)</span><input v-model.number="nodeForm.timeoutMs" type="number" min="100" max="30000" class="input" /></label>
           <label><span class="input-label">{{ t('admin.instructionAudit.v2.concurrency') }}</span><input v-model.number="nodeForm.maxConcurrency" type="number" min="1" max="256" class="input" /></label>
+          <label><span class="input-label">{{ t('admin.instructionAudit.v2.maxOutputTokens') }}</span><input v-model.number="nodeForm.maxOutputTokens" type="number" min="128" max="8192" class="input" /></label>
         </div>
         <label class="flex items-center justify-between gap-3 rounded-md border border-gray-200 px-3 py-3 dark:border-dark-600"><span class="text-sm font-medium text-gray-800 dark:text-gray-200">{{ t('common.enabled') }}</span><input v-model="nodeForm.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" /></label>
       </div>
@@ -150,7 +162,6 @@
     </BaseDialog>
 
     <ConfirmDialog :show="Boolean(nodeToDelete)" :title="t('admin.instructionAudit.v2.deleteAINodeTitle')" :message="t('admin.instructionAudit.v2.deleteAINodeConfirm')" danger @confirm="deleteNode" @cancel="nodeToDelete = null" />
-    <TotpStepUpDialog :controller="stepUp" />
   </section>
 </template>
 
@@ -159,18 +170,16 @@ import { computed, defineComponent, h, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
-import InstructionSensitiveAccessPanel from './InstructionSensitiveAccessPanel.vue'
 import instructionAuditV2API from '../v2Api'
 import type {
   InstructionAINode,
+  InstructionAINodeSlot,
+  InstructionAIResponseMode,
   InstructionAINodeTestResult,
   InstructionAuditMode,
-  InstructionSensitiveCapability,
   InstructionV2Config,
 } from '../v2Types'
 import { aiResultLabel, formatAuditBytes, modeLabel, modePill } from '../v2Presentation'
@@ -178,18 +187,13 @@ import { aiResultLabel, formatAuditBytes, modeLabel, modePill } from '../v2Prese
 const props = defineProps<{
   config: InstructionV2Config
   nodes: InstructionAINode[]
-  sensitiveCapability: InstructionSensitiveCapability | null
-  sensitiveLoading: boolean
-  sensitiveError: string
 }>()
 const emit = defineEmits<{
   (event: 'config-updated', config: InstructionV2Config): void
   (event: 'changed'): void
-  (event: 'refresh-sensitive'): void
 }>()
 const { t } = useI18n()
 const appStore = useAppStore()
-const stepUp = useStepUp()
 const savingConfig = ref(false)
 const savingNode = ref(false)
 const testingNodeId = ref(0)
@@ -206,10 +210,34 @@ const form = reactive({
   aiCacheTtlSeconds: 600,
   eventRetentionDays: 30,
   evidenceRetentionDays: 7,
-  candidateRetentionDays: 30,
   rawFullMaxMiB: 4,
+  allowEmptyFields: true,
+  retrySchedule: '30, 120, 600, 3600, 21600',
 })
-const nodeForm = reactive({ show: false, id: 0, hasApiKey: false, name: '', baseUrl: '', model: '', apiKey: '', clearApiKey: false, priority: 100, enabled: true, timeoutMs: 15000, maxConcurrency: 16 })
+const nodeForm = reactive({
+  show: false,
+  id: 0,
+  hasApiKey: false,
+  name: '',
+  baseUrl: '',
+  model: '',
+  apiKey: '',
+  clearApiKey: false,
+  priority: 100,
+  slot: 'sync' as InstructionAINodeSlot,
+  responseMode: 'auto' as InstructionAIResponseMode,
+  maxOutputTokens: 1024,
+  enabled: true,
+  timeoutMs: 15000,
+  maxConcurrency: 16,
+})
+
+const nodeSlots: InstructionAINodeSlot[] = ['sync', 'async_1', 'async_2', 'async_3']
+const slotCards = computed(() => nodeSlots.map((slot) => ({
+  slot,
+  label: t(`admin.instructionAudit.v2.nodeSlots.${slot}`),
+  node: props.nodes.find((node) => node.slot === slot),
+})))
 
 const modeOptions = computed(() => [
   { value: 'off' as const, label: modeLabel(t, 'off'), description: t('admin.instructionAudit.v2.modeOffHint') },
@@ -253,15 +281,21 @@ function syncForm() {
     aiCacheTtlSeconds: props.config.ai_cache_ttl_seconds,
     eventRetentionDays: props.config.event_retention_days,
     evidenceRetentionDays: props.config.evidence_retention_days,
-    candidateRetentionDays: props.config.candidate_retention_days,
     rawFullMaxMiB: props.config.raw_full_max_bytes / (1024 * 1024),
+    allowEmptyFields: props.config.allow_empty_fields,
+    retrySchedule: props.config.async_retry_schedule_seconds.join(', '),
   })
 }
 
 async function saveConfig() {
+  const retrySchedule = form.retrySchedule.split(',').map((value) => Number(value.trim())).filter((value) => Number.isFinite(value))
+  if (!retrySchedule.length || retrySchedule.some((value) => !Number.isInteger(value) || value < 1 || value > 604800)) {
+    appStore.showError(t('admin.instructionAudit.v2.invalidRetrySchedule'))
+    return
+  }
   savingConfig.value = true
   try {
-    const updated = await stepUp.run(() => instructionAuditV2API.updateConfig({
+    const updated = await instructionAuditV2API.updateConfig({
       expected_config_version: props.config.config_version,
       mode: form.mode,
       review_criteria: form.reviewCriteria,
@@ -273,22 +307,23 @@ async function saveConfig() {
       ai_cache_ttl_seconds: form.aiCacheTtlSeconds,
       event_retention_days: form.eventRetentionDays,
       evidence_retention_days: form.evidenceRetentionDays,
-      candidate_retention_days: form.candidateRetentionDays,
       raw_full_max_bytes: Math.round(form.rawFullMaxMiB * 1024 * 1024),
-    }))
+      allow_empty_fields: form.allowEmptyFields,
+      async_retry_schedule_seconds: retrySchedule,
+    })
     appStore.showSuccess(t('common.saved'))
     emit('config-updated', updated)
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     savingConfig.value = false
   }
 }
 
-function openNodeForm(node?: InstructionAINode) {
+function openNodeForm(node?: InstructionAINode, slot: InstructionAINodeSlot = 'sync') {
   Object.assign(nodeForm, node
-    ? { show: true, id: node.id, hasApiKey: node.has_api_key, name: node.name, baseUrl: node.base_url, model: node.model, apiKey: '', clearApiKey: false, priority: node.priority, enabled: node.enabled, timeoutMs: node.timeout_ms, maxConcurrency: node.max_concurrency }
-    : { show: true, id: 0, hasApiKey: false, name: '', baseUrl: '', model: '', apiKey: '', clearApiKey: false, priority: 100, enabled: true, timeoutMs: 15000, maxConcurrency: 16 })
+    ? { show: true, id: node.id, hasApiKey: node.has_api_key, name: node.name, baseUrl: node.base_url, model: node.model, apiKey: '', clearApiKey: false, priority: node.priority, slot: node.slot, responseMode: node.response_mode, maxOutputTokens: node.max_output_tokens, enabled: node.enabled, timeoutMs: node.timeout_ms, maxConcurrency: node.max_concurrency }
+    : { show: true, id: 0, hasApiKey: false, name: '', baseUrl: '', model: '', apiKey: '', clearApiKey: false, priority: nodeSlots.indexOf(slot) * 10, slot, responseMode: 'auto', maxOutputTokens: 1024, enabled: true, timeoutMs: 15000, maxConcurrency: 16 })
 }
 
 function closeNodeForm() {
@@ -298,22 +333,25 @@ function closeNodeForm() {
 async function saveNode() {
   savingNode.value = true
   try {
-    await stepUp.run(() => instructionAuditV2API.saveAINode(nodeForm.id || null, {
+    await instructionAuditV2API.saveAINode(nodeForm.id || null, {
       name: nodeForm.name,
       base_url: nodeForm.baseUrl,
       model: nodeForm.model,
       api_key: nodeForm.apiKey,
       clear_api_key: nodeForm.clearApiKey,
       priority: nodeForm.priority,
+      slot: nodeForm.slot,
+      response_mode: nodeForm.responseMode,
+      max_output_tokens: nodeForm.maxOutputTokens,
       enabled: nodeForm.enabled,
       timeout_ms: nodeForm.timeoutMs,
       max_concurrency: nodeForm.maxConcurrency,
-    }))
+    })
     appStore.showSuccess(t('common.saved'))
     nodeForm.show = false
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     savingNode.value = false
   }
@@ -322,22 +360,22 @@ async function saveNode() {
 async function deleteNode() {
   if (!nodeToDelete.value) return
   try {
-    await stepUp.run(() => instructionAuditV2API.deleteAINode(nodeToDelete.value!.id))
+    await instructionAuditV2API.deleteAINode(nodeToDelete.value!.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.aiNodeDeleted'))
     nodeToDelete.value = null
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 
 async function testNode(node: InstructionAINode) {
   testingNodeId.value = node.id
   try {
-    testResults[node.id] = await stepUp.run(() => instructionAuditV2API.testAINode(node.id))
+    testResults[node.id] = await instructionAuditV2API.testAINode(node.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.nodeTestCompleted'))
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     testingNodeId.value = 0
   }

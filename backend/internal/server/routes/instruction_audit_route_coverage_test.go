@@ -75,7 +75,7 @@ func TestInstructionAuditAdminRoutesRejectUnauthenticatedAndNonAdminRequests(t *
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handlers := &handler.Handlers{Admin: &handler.AdminHandlers{
-		InstructionAudit: securityaudit.NewInstructionV2AdminHandler(nil, nil),
+		InstructionAudit: securityaudit.NewInstructionV2AdminHandler(nil),
 	}}
 	adminAuth := servermiddleware.AdminAuthMiddleware(func(c *gin.Context) {
 		if c.GetHeader("Authorization") == "" {
@@ -126,30 +126,35 @@ func TestInstructionAuditAdminRoutesExposeGroupAndClientScopes(t *testing.T) {
 	require.NotContains(t, routes, `instructionAudit.GET("/group-bindings"`)
 }
 
-func TestInstructionAuditSensitiveRoutesRequireGrantBeforeForcedStepUp(t *testing.T) {
+func TestInstructionAuditRoutesRemoveModuleSpecificSensitiveAuthorization(t *testing.T) {
 	source, err := os.ReadFile("admin.go")
 	require.NoError(t, err)
 	routes := string(source)
+	start := strings.Index(routes, "func registerInstructionAuditRoutes")
+	require.NotEqual(t, -1, start)
+	end := strings.Index(routes[start:], "func registerLotteryRoutes")
+	require.NotEqual(t, -1, end)
+	instructionRoutes := routes[start : start+end]
 	for _, route := range []string{
-		`instructionAudit.POST("/hashes", sensitiveForced(`,
-		`instructionAudit.GET("/hashes/:id/raw", sensitiveForced(`,
-		`instructionAudit.POST("/hashes/:id/raw-access", sensitiveForced(`,
-		`instructionAudit.GET("/events/:id/evidence", sensitiveForced(`,
-		`instructionAudit.POST("/events/:id/evidence-access", sensitiveForced(`,
-		`instructionAudit.POST("/events/:id/trust", sensitiveForced(`,
+		`instructionAudit.POST("/hashes", h.Admin.InstructionAudit.CreateHash)`,
+		`instructionAudit.GET("/hashes/:id/raw", h.Admin.InstructionAudit.RevealHashRaw)`,
+		`instructionAudit.GET("/risk-hashes", h.Admin.InstructionAudit.ListRiskHashes)`,
+		`instructionAudit.GET("/review-jobs", h.Admin.InstructionAudit.ListReviewJobs)`,
 	} {
-		require.Contains(t, routes, route)
+		require.Contains(t, instructionRoutes, route)
 	}
-	sensitiveHelper := routes[strings.Index(routes, "sensitiveForced :="):]
-	requireInstructionSourceOrder(t, sensitiveHelper,
-		"gin.HandlerFunc(sensitiveAccess)", "middleware.ForceStepUp")
-	requireInstructionSourceOrder(t, sensitiveHelper,
-		"middleware.ForceStepUp", "gin.HandlerFunc(stepUpAuth)")
-	require.Contains(t, routes, `instructionAudit.GET("/sensitive-access/me", h.Admin.InstructionAudit.GetInstructionSensitiveAccessMe)`)
+	require.NotContains(t, instructionRoutes, "sensitive-access")
+	require.NotContains(t, instructionRoutes, "ForceStepUp")
+	require.NotContains(t, instructionRoutes, "stepUpAuth")
 	handlerSource, err := os.ReadFile("../../securityaudit/instruction_v2_handler.go")
 	require.NoError(t, err)
 	handlers := string(handlerSource)
-	for _, marker := range []string{"func (h *InstructionV2AdminHandler) RevealEventEvidence", "func (h *InstructionV2AdminHandler) RevealHashRaw"} {
+	for _, marker := range []string{
+		"func (h *InstructionV2AdminHandler) RevealEventEvidence",
+		"func (h *InstructionV2AdminHandler) RevealHashRaw",
+		"func (h *InstructionV2AdminHandler) RevealRiskHashRaw",
+		"func (h *InstructionV2AdminHandler) RevealReviewJobRaw",
+	} {
 		start := strings.Index(handlers, marker)
 		require.NotEqual(t, -1, start)
 		window := handlers[start:min(len(handlers), start+1800)]

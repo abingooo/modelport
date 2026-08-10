@@ -215,7 +215,6 @@
     <ConfirmDialog :show="Boolean(scopeToDelete)" :title="t('admin.instructionAudit.v2.deleteScopeTitle')" :message="t('admin.instructionAudit.v2.deleteScopeConfirm')" danger @confirm="deleteScope" @cancel="scopeToDelete = null" />
     <ConfirmDialog :show="Boolean(clientToDelete)" :title="t('admin.instructionAudit.v2.deleteClientTitle')" :message="t('admin.instructionAudit.v2.deleteClientConfirm')" danger @confirm="deleteClient" @cancel="clientToDelete = null" />
     <ConfirmDialog :show="Boolean(allowlistToDelete)" :title="t('admin.instructionAudit.v2.deleteAllowlistTitle')" :message="t('admin.instructionAudit.v2.deleteAllowlistConfirm')" danger @confirm="deleteAllowlist" @cancel="allowlistToDelete = null" />
-    <TotpStepUpDialog :controller="stepUp" />
   </section>
 </template>
 
@@ -224,9 +223,7 @@ import { computed, defineComponent, h, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
-import { isStepUpCancelled, useStepUp } from '@/composables/useStepUp'
 import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import instructionAuditV2API from '../v2Api'
@@ -251,7 +248,6 @@ const props = defineProps<{
 const emit = defineEmits<{ (event: 'changed'): void }>()
 const { t } = useI18n()
 const appStore = useAppStore()
-const stepUp = useStepUp()
 const activeSection = ref<Section>('scopes')
 const saving = ref(false)
 const scopeToDelete = ref<InstructionScope | null>(null)
@@ -307,12 +303,12 @@ function closeScopeForm() {
 async function saveScope() {
   saving.value = true
   try {
-    await stepUp.run(() => instructionAuditV2API.saveScope(scopeForm.id || null, { group_id: scopeForm.groupId, client_profile_id: scopeForm.clientProfileId || null, enabled: scopeForm.enabled }))
+    await instructionAuditV2API.saveScope(scopeForm.id || null, { group_id: scopeForm.groupId, client_profile_id: scopeForm.clientProfileId || null, enabled: scopeForm.enabled })
     appStore.showSuccess(t('common.saved'))
     scopeForm.show = false
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     saving.value = false
   }
@@ -321,12 +317,12 @@ async function saveScope() {
 async function deleteScope() {
   if (!scopeToDelete.value) return
   try {
-    await stepUp.run(() => instructionAuditV2API.deleteScope(scopeToDelete.value!.id))
+    await instructionAuditV2API.deleteScope(scopeToDelete.value!.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.scopeDeleted'))
     scopeToDelete.value = null
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 
@@ -348,19 +344,19 @@ function addMatcher() {
 async function saveClient() {
   saving.value = true
   try {
-    await stepUp.run(() => instructionAuditV2API.saveClientProfile(clientForm.id || null, {
+    await instructionAuditV2API.saveClientProfile(clientForm.id || null, {
       profile_key: clientForm.profileKey,
       name: clientForm.name,
       description: clientForm.description,
       priority: clientForm.priority,
       enabled: clientForm.enabled,
       matchers: clientForm.matchers.filter((matcher) => matcher.value.trim()).map((matcher) => ({ ...matcher, value: matcher.value.trim() })),
-    }))
+    })
     appStore.showSuccess(t('common.saved'))
     clientForm.show = false
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     saving.value = false
   }
@@ -369,12 +365,12 @@ async function saveClient() {
 async function deleteClient() {
   if (!clientToDelete.value) return
   try {
-    await stepUp.run(() => instructionAuditV2API.deleteClientProfile(clientToDelete.value!.id))
+    await instructionAuditV2API.deleteClientProfile(clientToDelete.value!.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.clientDeleted'))
     clientToDelete.value = null
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 
@@ -394,7 +390,7 @@ async function addAllowlist() {
   if (!selectedUserId.value) return
   saving.value = true
   try {
-    await stepUp.run(() => instructionAuditV2API.saveUserAllowlist(selectedUserId.value, allowlistNote.value))
+    await instructionAuditV2API.saveUserAllowlist(selectedUserId.value, allowlistNote.value)
     appStore.showSuccess(t('admin.instructionAudit.v2.allowlistAdded'))
     selectedUserId.value = 0
     allowlistNote.value = ''
@@ -402,7 +398,7 @@ async function addAllowlist() {
     userSearch.value = ''
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     saving.value = false
   }
@@ -411,12 +407,12 @@ async function addAllowlist() {
 async function deleteAllowlist() {
   if (!allowlistToDelete.value) return
   try {
-    await stepUp.run(() => instructionAuditV2API.deleteUserAllowlist(allowlistToDelete.value!.id))
+    await instructionAuditV2API.deleteUserAllowlist(allowlistToDelete.value!.id)
     appStore.showSuccess(t('admin.instructionAudit.v2.allowlistDeleted'))
     allowlistToDelete.value = null
     emit('changed')
   } catch (caught) {
-    if (!isStepUpCancelled(caught)) appStore.showError(extractApiErrorMessage(caught, t('common.error')))
+    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
 }
 </script>

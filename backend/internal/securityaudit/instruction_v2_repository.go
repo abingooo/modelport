@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 type InstructionV2Repository struct {
@@ -42,8 +43,11 @@ func (r *InstructionV2Repository) LoadSnapshot(ctx context.Context, decryptor se
 	snapshot := &instructionV2Snapshot{
 		Config: config, Profiles: compiledProfiles, ProfilesByKey: profilesByKey,
 		ScopesByGroup: make(map[int64][]instructionV2ScopeRuntime),
-		Hashes:        make(map[string]instructionV2HashRuntime), AllowedUsers: make(map[int64]struct{}),
-		LoadedAt: time.Now().UTC(),
+		Hashes:        make(map[string]instructionV2HashRuntime),
+		RiskHashes:    make(map[string]instructionV2RiskRuntime),
+		AllowedUsers:  make(map[int64]struct{}),
+		AINodesBySlot: make(map[string]*instructionV2AINodeRuntime),
+		LoadedAt:      time.Now().UTC(),
 	}
 	if config.RiskControlEnabled {
 		snapshot.Config.EffectiveMode = config.Mode
@@ -59,6 +63,9 @@ func (r *InstructionV2Repository) LoadSnapshot(ctx context.Context, decryptor se
 	if err := r.loadRuntimeHashes(ctx, snapshot); err != nil {
 		return nil, err
 	}
+	if err := r.loadRuntimeRiskHashes(ctx, snapshot); err != nil {
+		return nil, err
+	}
 	if err := r.loadRuntimeAllowlist(ctx, snapshot); err != nil {
 		return nil, err
 	}
@@ -71,18 +78,21 @@ func (r *InstructionV2Repository) LoadSnapshot(ctx context.Context, decryptor se
 func (r *InstructionV2Repository) getConfig(ctx context.Context) (InstructionV2Config, error) {
 	var config InstructionV2Config
 	var riskControl string
+	var retrySchedule pq.Int64Array
 	err := r.db.QueryRowContext(ctx, `
 		SELECT c.mode, c.review_criteria, c.confidence_threshold, c.ai_input_max_chars,
 		       c.ai_global_concurrency, c.ai_queue_wait_ms, c.ai_total_timeout_ms,
 		       c.ai_cache_ttl_seconds, c.event_retention_days, c.evidence_retention_days,
-		       c.candidate_retention_days, c.raw_full_max_bytes, c.config_version,
+		       c.candidate_retention_days, c.raw_full_max_bytes, c.allow_empty_fields,
+		       c.async_retry_schedule_seconds, c.config_version,
 		       c.updated_by, c.updated_at,
 		       COALESCE((SELECT value FROM settings WHERE key = $1), 'false')
 		FROM instruction_audit_v2_config c WHERE c.id = 1`, SettingKeyRiskControl).Scan(
 		&config.Mode, &config.ReviewCriteria, &config.ConfidenceThreshold, &config.AIInputMaxChars,
 		&config.AIGlobalConcurrency, &config.AIQueueWaitMS, &config.AITotalTimeoutMS,
 		&config.AICacheTTLSeconds, &config.EventRetentionDays, &config.EvidenceRetentionDays,
-		&config.CandidateRetentionDays, &config.RawFullMaxBytes, &config.ConfigVersion,
+		&config.CandidateRetentionDays, &config.RawFullMaxBytes, &config.AllowEmptyFields,
+		&retrySchedule, &config.ConfigVersion,
 		&config.UpdatedBy, &config.UpdatedAt, &riskControl,
 	)
 	if err != nil {
@@ -93,7 +103,24 @@ func (r *InstructionV2Repository) getConfig(ctx context.Context) (InstructionV2C
 	if config.RiskControlEnabled {
 		config.EffectiveMode = config.Mode
 	}
+	config.AsyncRetrySchedule = instructionV2RetryScheduleFromDB(retrySchedule)
 	return config, nil
+}
+
+func instructionV2RetryScheduleFromDB(values []int64) []int {
+	result := make([]int, len(values))
+	for index, value := range values {
+		result[index] = int(value)
+	}
+	return result
+}
+
+func instructionV2RetryScheduleToDB(values []int) pq.Int64Array {
+	result := make(pq.Int64Array, len(values))
+	for index, value := range values {
+		result[index] = int64(value)
+	}
+	return result
 }
 
 func (r *InstructionV2Repository) GetConfig(ctx context.Context) (InstructionV2Config, error) {
@@ -107,11 +134,21 @@ func (r *InstructionV2Repository) GetConfig(ctx context.Context) (InstructionV2C
 			 JOIN groups g ON g.id = s.group_id AND g.deleted_at IS NULL AND g.status = 'active'
 			 LEFT JOIN instruction_audit_v2_client_profiles p ON p.id = s.client_profile_id
 			 WHERE s.enabled AND (s.client_profile_id IS NULL OR p.enabled)),
-			(SELECT COUNT(DISTINCT h.id) FROM instruction_audit_v2_hashes h
-			 JOIN instruction_audit_v2_hash_scopes hs ON hs.hash_id = h.id
-			 WHERE h.status = 'active' AND hs.status = 'active'),
-			(SELECT COUNT(*) FROM instruction_audit_v2_ai_nodes WHERE enabled)
-	`).Scan(&config.ActiveScopeCount, &config.ActiveHashCount, &config.EnabledAINodeCount)
+			(SELECT COUNT(*) FROM instruction_audit_v2_hashes h
+			 WHERE h.status = 'active' AND (
+			   h.global_trust OR EXISTS (
+			     SELECT 1 FROM instruction_audit_v2_hash_scopes hs
+			     WHERE hs.hash_id = h.id AND hs.status = 'active'
+			   )
+			 )),
+			(SELECT COUNT(*) FROM instruction_audit_v2_ai_nodes WHERE enabled),
+			(SELECT COUNT(*) FROM instruction_audit_v2_review_jobs
+			 WHERE status IN ('pending', 'processing', 'retry')),
+			(SELECT COUNT(*) FROM instruction_audit_v2_risk_hashes WHERE status = 'active')
+	`).Scan(
+		&config.ActiveScopeCount, &config.ActiveHashCount, &config.EnabledAINodeCount,
+		&config.PendingReviewJobCount, &config.ActiveRiskHashCount,
+	)
 	return config, err
 }
 
@@ -128,14 +165,16 @@ func (r *InstructionV2Repository) UpdateConfig(ctx context.Context, request Upda
 		    ai_input_max_chars = $5, ai_global_concurrency = $6, ai_queue_wait_ms = $7,
 		    ai_total_timeout_ms = $8, ai_cache_ttl_seconds = $9,
 		    event_retention_days = $10, evidence_retention_days = $11,
-		    candidate_retention_days = $12, raw_full_max_bytes = $13,
-		    config_version = config_version + 1, updated_by = NULLIF($14, 0), updated_at = NOW()
+		    raw_full_max_bytes = $12, allow_empty_fields = $13,
+		    async_retry_schedule_seconds = $14,
+		    config_version = config_version + 1, updated_by = NULLIF($15, 0), updated_at = NOW()
 		WHERE id = 1 AND config_version = $1
 		RETURNING config_version`,
 		request.ExpectedConfigVersion, request.Mode, request.ReviewCriteria, request.ConfidenceThreshold,
 		request.AIInputMaxChars, request.AIGlobalConcurrency, request.AIQueueWaitMS,
 		request.AITotalTimeoutMS, request.AICacheTTLSeconds, request.EventRetentionDays,
-		request.EvidenceRetentionDays, request.CandidateRetentionDays, request.RawFullMaxBytes, actorID,
+		request.EvidenceRetentionDays, request.RawFullMaxBytes,
+		request.AllowEmptyFields, instructionV2RetryScheduleToDB(request.AsyncRetrySchedule), actorID,
 	).Scan(&nextVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return InstructionV2Config{}, errInstructionV2ConfigConflict
@@ -178,29 +217,54 @@ func (r *InstructionV2Repository) loadRuntimeScopes(ctx context.Context, snapsho
 
 func (r *InstructionV2Repository) loadRuntimeHashes(ctx context.Context, snapshot *instructionV2Snapshot) error {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT h.id, h.sha256, hs.scope_id
+		SELECT h.id, h.sha256, h.global_trust, hs.scope_id
 		FROM instruction_audit_v2_hashes h
-		JOIN instruction_audit_v2_hash_scopes hs ON hs.hash_id = h.id AND hs.status = 'active'
-		JOIN instruction_audit_v2_scopes s ON s.id = hs.scope_id AND s.enabled
+		LEFT JOIN instruction_audit_v2_hash_scopes hs ON hs.hash_id = h.id AND hs.status = 'active'
+		LEFT JOIN instruction_audit_v2_scopes s ON s.id = hs.scope_id AND s.enabled
 		WHERE h.status = 'active'
-		ORDER BY h.id, hs.scope_id`)
+		  AND (h.global_trust OR s.id IS NOT NULL)
+		ORDER BY h.id, hs.scope_id NULLS FIRST`)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var hashID, scopeID int64
+		var hashID int64
+		var scopeID sql.NullInt64
 		var digest string
-		if err := rows.Scan(&hashID, &digest, &scopeID); err != nil {
+		var global bool
+		if err := rows.Scan(&hashID, &digest, &global, &scopeID); err != nil {
 			return err
 		}
 		digest = strings.TrimSpace(digest)
 		hash := snapshot.Hashes[digest]
 		if hash.ScopeIDs == nil {
-			hash = instructionV2HashRuntime{ID: hashID, SHA256: digest, ScopeIDs: make(map[int64]struct{})}
+			hash = instructionV2HashRuntime{ID: hashID, SHA256: digest, ScopeIDs: make(map[int64]struct{}), Global: global}
 		}
-		hash.ScopeIDs[scopeID] = struct{}{}
+		hash.Global = hash.Global || global
+		if scopeID.Valid {
+			hash.ScopeIDs[scopeID.Int64] = struct{}{}
+		}
 		snapshot.Hashes[digest] = hash
+	}
+	return rows.Err()
+}
+
+func (r *InstructionV2Repository) loadRuntimeRiskHashes(ctx context.Context, snapshot *instructionV2Snapshot) error {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, sha256 FROM instruction_audit_v2_risk_hashes
+		WHERE status = 'active' ORDER BY id`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var item instructionV2RiskRuntime
+		if err := rows.Scan(&item.ID, &item.SHA256); err != nil {
+			return err
+		}
+		item.SHA256 = strings.TrimSpace(item.SHA256)
+		snapshot.RiskHashes[item.SHA256] = item
 	}
 	return rows.Err()
 }
@@ -223,9 +287,13 @@ func (r *InstructionV2Repository) loadRuntimeAllowlist(ctx context.Context, snap
 
 func (r *InstructionV2Repository) loadRuntimeAINodes(ctx context.Context, snapshot *instructionV2Snapshot, decryptor service.SecretEncryptor) error {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, base_url, model, api_key_ciphertext, priority, enabled,
-		       timeout_ms, max_concurrency, created_by, updated_by, created_at, updated_at
-		FROM instruction_audit_v2_ai_nodes WHERE enabled ORDER BY priority, id`)
+		SELECT id, name, base_url, model, api_key_ciphertext, priority, slot,
+		       response_mode, max_output_tokens, enabled, timeout_ms, max_concurrency,
+		       created_by, updated_by, created_at, updated_at
+		FROM instruction_audit_v2_ai_nodes
+		WHERE enabled AND slot <> ''
+		ORDER BY CASE slot WHEN 'sync' THEN 0 WHEN 'async_1' THEN 1
+		         WHEN 'async_2' THEN 2 ELSE 3 END, id`)
 	if err != nil {
 		return err
 	}
@@ -235,7 +303,8 @@ func (r *InstructionV2Repository) loadRuntimeAINodes(ctx context.Context, snapsh
 		var ciphertext string
 		if err := rows.Scan(
 			&node.ID, &node.Name, &node.BaseURL, &node.Model, &ciphertext, &node.Priority,
-			&node.Enabled, &node.TimeoutMS, &node.MaxConcurrency, &node.CreatedBy, &node.UpdatedBy,
+			&node.Slot, &node.ResponseMode, &node.MaxOutputTokens, &node.Enabled,
+			&node.TimeoutMS, &node.MaxConcurrency, &node.CreatedBy, &node.UpdatedBy,
 			&node.CreatedAt, &node.UpdatedAt,
 		); err != nil {
 			return err
@@ -252,6 +321,7 @@ func (r *InstructionV2Repository) loadRuntimeAINodes(ctx context.Context, snapsh
 		node.APIKeyStatus = "configured"
 		node.semaphore = make(chan struct{}, node.MaxConcurrency)
 		snapshot.AINodes = append(snapshot.AINodes, &node)
+		snapshot.AINodesBySlot[node.Slot] = &node
 	}
 	return rows.Err()
 }
@@ -278,7 +348,8 @@ func (r *InstructionV2Repository) bumpConfigVersion(ctx context.Context, tx *sql
 
 func (r *InstructionV2Repository) ListAINodes(ctx context.Context) ([]InstructionV2AINode, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, name, base_url, model, priority, enabled, timeout_ms, max_concurrency,
+		SELECT id, name, base_url, model, priority, slot, response_mode, max_output_tokens,
+		       enabled, timeout_ms, max_concurrency,
 		       api_key_ciphertext <> '', created_by, updated_by, created_at, updated_at
 		FROM instruction_audit_v2_ai_nodes ORDER BY priority, id`)
 	if err != nil {
@@ -289,7 +360,8 @@ func (r *InstructionV2Repository) ListAINodes(ctx context.Context) ([]Instructio
 	for rows.Next() {
 		var item InstructionV2AINode
 		if err := rows.Scan(
-			&item.ID, &item.Name, &item.BaseURL, &item.Model, &item.Priority, &item.Enabled,
+			&item.ID, &item.Name, &item.BaseURL, &item.Model, &item.Priority,
+			&item.Slot, &item.ResponseMode, &item.MaxOutputTokens, &item.Enabled,
 			&item.TimeoutMS, &item.MaxConcurrency, &item.HasAPIKey, &item.CreatedBy, &item.UpdatedBy,
 			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
@@ -316,20 +388,25 @@ func (r *InstructionV2Repository) SaveAINode(ctx context.Context, id int64, requ
 		err = tx.QueryRowContext(ctx, `
 			INSERT INTO instruction_audit_v2_ai_nodes
 				(name, base_url, model, api_key_ciphertext, priority, enabled, timeout_ms,
-				 max_concurrency, created_by, updated_by)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULLIF($9, 0), NULLIF($9, 0))
+				 max_concurrency, slot, response_mode, max_output_tokens, created_by, updated_by)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+			        NULLIF($12, 0), NULLIF($12, 0))
 			RETURNING id, created_at, updated_at`,
 			request.Name, request.BaseURL, request.Model, ciphertext, request.Priority, request.Enabled,
-			request.TimeoutMS, request.MaxConcurrency, actorID,
+			request.TimeoutMS, request.MaxConcurrency, request.Slot, request.ResponseMode,
+			request.MaxOutputTokens, actorID,
 		).Scan(&item.ID, &item.CreatedAt, &item.UpdatedAt)
 	} else {
 		query := `
 			UPDATE instruction_audit_v2_ai_nodes
 			SET name = $2, base_url = $3, model = $4, priority = $5, enabled = $6,
-			    timeout_ms = $7, max_concurrency = $8, updated_by = NULLIF($9, 0), updated_at = NOW()`
-		args := []any{id, request.Name, request.BaseURL, request.Model, request.Priority, request.Enabled, request.TimeoutMS, request.MaxConcurrency, actorID}
+			    timeout_ms = $7, max_concurrency = $8, slot = $9, response_mode = $10,
+			    max_output_tokens = $11, updated_by = NULLIF($12, 0), updated_at = NOW()`
+		args := []any{id, request.Name, request.BaseURL, request.Model, request.Priority, request.Enabled,
+			request.TimeoutMS, request.MaxConcurrency, request.Slot, request.ResponseMode,
+			request.MaxOutputTokens, actorID}
 		if request.ClearAPIKey || ciphertext != "" {
-			query += ", api_key_ciphertext = $10"
+			query += ", api_key_ciphertext = $13"
 			args = append(args, ciphertext)
 		}
 		query += " WHERE id = $1 RETURNING id, created_at, updated_at"
@@ -347,6 +424,7 @@ func (r *InstructionV2Repository) SaveAINode(ctx context.Context, id int64, requ
 	}
 	item.Name, item.BaseURL, item.Model = request.Name, request.BaseURL, request.Model
 	item.Priority, item.Enabled, item.TimeoutMS, item.MaxConcurrency = request.Priority, request.Enabled, request.TimeoutMS, request.MaxConcurrency
+	item.Slot, item.ResponseMode, item.MaxOutputTokens = request.Slot, request.ResponseMode, request.MaxOutputTokens
 	item.HasAPIKey = ciphertext != "" || (!request.ClearAPIKey && id > 0)
 	if item.HasAPIKey {
 		item.APIKeyStatus = "configured"

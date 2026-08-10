@@ -2,9 +2,6 @@ package securityaudit
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -46,7 +43,7 @@ func TestInstructionV2ServiceUsesAuthenticatedGroupAndClientScope(t *testing.T) 
 			require.Equal(t, test.applicable, decision.Applicable)
 			if test.applicable {
 				require.Equal(t, test.outcome, decision.FinalOutcome)
-				require.Equal(t, "instructions_hash_match", decision.Reason)
+				require.Equal(t, "scoped_trusted_hash_match", decision.Reason)
 			}
 		})
 	}
@@ -64,15 +61,13 @@ func TestInstructionV2ServiceChecksHashBeforeAI(t *testing.T) {
 		Protocol:        instructionAuditProtocol,
 		GroupID:         instructionV2TestInt64Pointer(7),
 		UserAgent:       "curl/8.0",
-		InstructionBody: []byte(`{"instructions":"not trusted","input":[{}, {"content":[{"type":"input_text","text":"trusted input1"}]}]}`),
+		InstructionBody: []byte(`{"input":[{}, {"content":[{"type":"input_text","text":"trusted input1"}]}]}`),
 	})
 
 	require.True(t, decision.Allow)
 	require.True(t, decision.Applicable)
 	require.Equal(t, InstructionV2OutcomeHashPass, decision.FinalOutcome)
-	require.Equal(t, "input1_hash_match", decision.Reason)
-	require.Len(t, service.asyncQueue, 0, "a hash match must not enqueue AI review")
-	require.Len(t, service.passQueue, 1)
+	require.Equal(t, "scoped_trusted_hash_match", decision.Reason)
 }
 
 func TestInstructionV2ServiceAllowsConfiguredExceptionsBeforeAI(t *testing.T) {
@@ -100,43 +95,48 @@ func TestInstructionV2ServiceAllowsConfiguredExceptionsBeforeAI(t *testing.T) {
 	require.Equal(t, "fields_empty", empty.Reason)
 }
 
-func TestInstructionV2ServiceObserveModeQueuesReviewWithoutBlocking(t *testing.T) {
-	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeObserve)
+func TestInstructionV2ServiceSelectsExactlyOneField(t *testing.T) {
+	instructions := newInstructionV2TextField("primary instructions", false)
+	input1 := newInstructionV2TextField("fallback input", false)
+
+	name, field := selectInstructionV2Field(instructionV2ParsedFields{Instructions: instructions, Input1: input1})
+	require.Equal(t, "instructions", name)
+	require.Equal(t, instructions.SHA256, field.SHA256)
+
+	name, field = selectInstructionV2Field(instructionV2ParsedFields{
+		Instructions: InstructionV2Field{State: "invalid"},
+		Input1:       input1,
+	})
+	require.Equal(t, "input1", name)
+	require.Equal(t, input1.SHA256, field.SHA256)
+}
+
+func TestInstructionV2ServiceRiskHashTakesPrecedence(t *testing.T) {
+	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeEnforce)
+	digest := instructionV2TestDigest("same content")
+	snapshot.Hashes[digest] = instructionV2HashRuntime{ID: 10, SHA256: digest, Global: true}
+	snapshot.RiskHashes[digest] = instructionV2RiskRuntime{ID: 20, SHA256: digest}
 	service.snapshot.Store(snapshot)
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol:        instructionAuditProtocol,
-		RequestID:       "observe-1",
-		GroupID:         instructionV2TestInt64Pointer(7),
-		InstructionBody: []byte(`{"instructions":"new template"}`),
+		Protocol: instructionAuditProtocol, GroupID: instructionV2TestInt64Pointer(7),
+		InstructionBody: []byte(`{"instructions":"same content"}`),
 	})
 
-	require.True(t, decision.Allow)
-	require.True(t, decision.Applicable)
-	require.Equal(t, "observe_ai_queued", decision.Reason)
-	require.Len(t, service.asyncQueue, 1)
-	require.Len(t, service.passQueue, 0)
+	require.False(t, decision.Allow)
+	require.Equal(t, InstructionV2OutcomeRiskBlocked, decision.FinalOutcome)
+	require.Equal(t, "risk_hash_match", decision.Reason)
+	require.Equal(t, InstructionClientMessage, decision.ClientMessage)
 }
 
-func TestInstructionV2ServiceAIFailsOverAllConfiguredNodes(t *testing.T) {
+func TestInstructionV2ServiceRequiresConfiguredReviewSlot(t *testing.T) {
 	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeEnforce)
-	snapshot.AINodes = []*instructionV2AINodeRuntime{
-		newInstructionV2UnavailableNode(1, "first"),
-		newInstructionV2UnavailableNode(2, "second"),
-	}
 	field := prepareInstructionV2AISample(newInstructionV2TextField("review me", false), 64000)
-	evaluation := instructionV2EvaluationContext{
-		snapshot: snapshot,
-		scope:    snapshot.ScopesByGroup[7][0],
-		profile:  snapshot.ProfilesByKey[InstructionClientOther],
-		fields:   instructionV2ParsedFields{Instructions: field, Input1: InstructionV2Field{State: "missing"}},
-	}
 
-	outcome := service.reviewInstructionV2FieldsShared(context.Background(), evaluation)
-	require.Equal(t, "error", outcome.Result)
-	require.Len(t, outcome.Attempts, 2)
-	require.Equal(t, int64(1), *outcome.Attempts[0].NodeID)
-	require.Equal(t, int64(2), *outcome.Attempts[1].NodeID)
+	attempt := service.runInstructionV2Review(context.Background(), snapshot, "instructions", field, "sync")
+
+	require.Equal(t, "error", attempt.Result)
+	require.Equal(t, "technical_error", attempt.Category)
 }
 
 func TestInstructionV2ServiceRejectsAIWhenGlobalQueueIsFull(t *testing.T) {
@@ -144,98 +144,25 @@ func TestInstructionV2ServiceRejectsAIWhenGlobalQueueIsFull(t *testing.T) {
 	snapshot.Config.AIQueueWaitMS = 0
 	snapshot.GlobalSemaphore = make(chan struct{}, 1)
 	snapshot.GlobalSemaphore <- struct{}{}
+	node := newInstructionV2UnavailableNode(1, "sync")
+	snapshot.AINodesBySlot["sync"] = node
 	field := prepareInstructionV2AISample(newInstructionV2TextField("review me", false), 64000)
-	evaluation := instructionV2EvaluationContext{
-		snapshot: snapshot,
-		scope:    snapshot.ScopesByGroup[7][0],
-		profile:  snapshot.ProfilesByKey[InstructionClientOther],
-		fields:   instructionV2ParsedFields{Instructions: field, Input1: InstructionV2Field{State: "missing"}},
-	}
 
-	outcome := service.reviewInstructionV2FieldsShared(context.Background(), evaluation)
-	require.Equal(t, "queue_full", outcome.Result)
+	attempt := service.runInstructionV2Review(context.Background(), snapshot, "instructions", field, "sync")
+
+	require.Equal(t, "error", attempt.Result)
+	require.Contains(t, attempt.Reason, "queue")
 }
 
-func TestInstructionV2ServiceReviewsInput1AfterInstructionsReject(t *testing.T) {
-	requestedFields := make([]string, 0, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		var payload struct {
-			Messages []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		require.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
-		require.NotEmpty(t, payload.Messages)
-		var reviewInput struct {
-			Field string `json:"field"`
-		}
-		require.NoError(t, json.Unmarshal([]byte(payload.Messages[len(payload.Messages)-1].Content), &reviewInput))
-		requestedFields = append(requestedFields, reviewInput.Field)
-		result := "reject"
-		if reviewInput.Field == "input1" {
-			result = "pass"
-		}
-		content, err := json.Marshal(map[string]any{
-			"result": result, "confidence": 0.99, "reason": "test result", "category": "test",
-		})
-		require.NoError(t, err)
-		response := map[string]any{"choices": []any{map[string]any{"message": map[string]any{"content": string(content)}}}}
-		writer.Header().Set("Content-Type", "application/json")
-		require.NoError(t, json.NewEncoder(writer).Encode(response))
-	}))
-	t.Cleanup(server.Close)
+func TestInstructionV2ConfidenceThresholdConvertsLowConfidenceDecision(t *testing.T) {
+	attempt := instructionV2AIAttempt{Result: "pass", Confidence: 0.79, Reason: "looks safe", Category: "benign"}
+	applyInstructionV2ConfidenceThreshold(&attempt, 0.8)
+	require.Equal(t, "uncertain", attempt.Result)
+	require.Equal(t, "low_confidence", attempt.Category)
 
-	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeEnforce)
-	snapshot.AINodes = []*instructionV2AINodeRuntime{{
-		InstructionV2AINode: InstructionV2AINode{
-			ID: 1, Name: "reviewer", BaseURL: server.URL, Model: "reviewer",
-			TimeoutMS: 1000, MaxConcurrency: 1, Enabled: true,
-		},
-		APIKey: "test-key", semaphore: make(chan struct{}, 1),
-	}}
-	evaluation := instructionV2EvaluationContext{
-		snapshot: snapshot,
-		scope:    snapshot.ScopesByGroup[7][0],
-		profile:  snapshot.ProfilesByKey[InstructionClientOther],
-		fields: instructionV2ParsedFields{
-			Instructions: prepareInstructionV2AISample(newInstructionV2TextField("reject this", false), 64000),
-			Input1:       prepareInstructionV2AISample(newInstructionV2TextField("trusted fallback", false), 64000),
-		},
-	}
-
-	outcome := service.reviewInstructionV2FieldsShared(context.Background(), evaluation)
-
-	require.Equal(t, "pass", outcome.Result)
-	require.Equal(t, "input1", outcome.ReviewedField)
-	require.Equal(t, []string{"instructions", "input1"}, requestedFields)
-	require.Len(t, outcome.Attempts, 2)
-}
-
-func TestInstructionV2ObserveQueueDoesNotRetainRequestBodies(t *testing.T) {
-	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeObserve)
-	groupID := int64(7)
-	evaluation := instructionV2EvaluationContext{
-		request: Request{
-			GroupID: &groupID,
-			Body:    []byte("large gateway body"), InstructionBody: []byte("large instruction body"),
-		},
-		snapshot: snapshot,
-		profile:  snapshot.ProfilesByKey[InstructionClientOther],
-		scopes:   snapshot.ScopesByGroup[7], scope: snapshot.ScopesByGroup[7][0],
-		fields: instructionV2ParsedFields{
-			Instructions: prepareInstructionV2AISample(newInstructionV2TextField("review me", false), 64000),
-			Input1:       InstructionV2Field{State: "missing"},
-		},
-	}
-
-	require.True(t, service.enqueueObserveJob(evaluation))
-	job := <-service.asyncQueue
-	require.Nil(t, job.request.Body)
-	require.Nil(t, job.request.InstructionBody)
-	require.NotSame(t, evaluation.request.GroupID, job.request.GroupID)
-	require.Equal(t, []byte("large gateway body"), evaluation.request.Body)
-	require.Equal(t, []byte("large instruction body"), evaluation.request.InstructionBody)
+	highConfidence := instructionV2AIAttempt{Result: "reject", Confidence: 0.95}
+	applyInstructionV2ConfidenceThreshold(&highConfidence, 0.8)
+	require.Equal(t, "reject", highConfidence.Result)
 }
 
 func TestReuseInstructionV2SemaphoresPreservesInFlightLimits(t *testing.T) {
@@ -306,7 +233,7 @@ func newInstructionV2TestService(t *testing.T, mode string) (*InstructionV2Servi
 		Config: InstructionV2Config{
 			Mode: mode, EffectiveMode: mode, ConfigVersion: 1,
 			AIInputMaxChars: 64000, AIQueueWaitMS: 10, AITotalTimeoutMS: 1000,
-			RawFullMaxBytes: 4 << 20,
+			RawFullMaxBytes: 4 << 20, AllowEmptyFields: true,
 		},
 		PromptVersion: "test-v1",
 		Profiles:      profiles,
@@ -316,14 +243,15 @@ func newInstructionV2TestService(t *testing.T, mode string) (*InstructionV2Servi
 			8: {{ID: 102, GroupID: 8, ClientProfileID: &codexID, ClientProfileKey: InstructionClientCodexCLI}},
 		},
 		Hashes:          map[string]instructionV2HashRuntime{},
+		RiskHashes:      map[string]instructionV2RiskRuntime{},
 		AllowedUsers:    map[int64]struct{}{},
+		AINodesBySlot:   map[string]*instructionV2AINodeRuntime{},
 		GlobalSemaphore: make(chan struct{}, InstructionV2DefaultGlobalConcurrency),
 		LoadedAt:        time.Now().UTC(),
 	}
 	return &InstructionV2Service{
-		reviewer:   NewInstructionV2AIReviewer(),
-		asyncQueue: make(chan instructionV2AsyncJob, 8),
-		passQueue:  make(chan InstructionV2Event, 8),
+		reviewer:  NewInstructionV2AIReviewer(),
+		passQueue: make(chan InstructionV2Event, 8),
 	}, snapshot
 }
 
@@ -331,7 +259,7 @@ func newInstructionV2UnavailableNode(id int64, name string) *instructionV2AINode
 	return &instructionV2AINodeRuntime{
 		InstructionV2AINode: InstructionV2AINode{
 			ID: id, Name: name, BaseURL: "://invalid", Model: "reviewer",
-			TimeoutMS: 50, MaxConcurrency: 1, Enabled: true,
+			TimeoutMS: 50, MaxConcurrency: 1, Enabled: true, Slot: name,
 		},
 		APIKey:    "test-key",
 		semaphore: make(chan struct{}, 1),

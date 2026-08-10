@@ -17,6 +17,8 @@ const (
 	InstructionV2OutcomeEmptyPass     = "empty_pass"
 	InstructionV2OutcomeAllowlistPass = "user_allowlist_pass"
 	InstructionV2OutcomeObserveAllow  = "observe_allow"
+	InstructionV2OutcomeRiskBlocked   = "risk_hash_blocked"
+	InstructionV2OutcomeAIPending     = "ai_review_pending"
 
 	InstructionV2DefaultAIInputChars        = 64000
 	InstructionV2DefaultGlobalConcurrency   = 64
@@ -26,7 +28,6 @@ const (
 	InstructionV2DefaultCacheTTLSeconds     = 600
 	InstructionV2DefaultEventRetentionDays  = 30
 	InstructionV2DefaultEvidenceDays        = 7
-	InstructionV2DefaultCandidateDays       = 30
 	InstructionV2DefaultRawFullMaxBytes     = 4 << 20
 	InstructionV2ConfigInvalidationChannel  = "modelport:instruction_audit_v2:config:invalidate"
 	InstructionV2AIReviewPurposeHeader      = "instruction-audit-v2-review"
@@ -36,6 +37,10 @@ const (
 	InstructionV2EventBatchSize             = 100
 	InstructionV2EventBatchFlushInterval    = 100 * time.Millisecond
 	InstructionV2ConfigurationRefreshPeriod = 10 * time.Second
+	InstructionV2ReviewPollInterval         = time.Second
+	InstructionV2ReviewLeaseDuration        = 2 * time.Minute
+	InstructionV2ReviewBatchSize            = 16
+	InstructionV2ReviewWorkerCount          = 4
 )
 
 type InstructionV2Engine interface {
@@ -57,8 +62,10 @@ type InstructionV2Config struct {
 	AICacheTTLSeconds       int        `json:"ai_cache_ttl_seconds"`
 	EventRetentionDays      int        `json:"event_retention_days"`
 	EvidenceRetentionDays   int        `json:"evidence_retention_days"`
-	CandidateRetentionDays  int        `json:"candidate_retention_days"`
+	CandidateRetentionDays  int        `json:"-"`
 	RawFullMaxBytes         int        `json:"raw_full_max_bytes"`
+	AllowEmptyFields        bool       `json:"allow_empty_fields"`
+	AsyncRetrySchedule      []int      `json:"async_retry_schedule_seconds"`
 	ConfigVersion           int64      `json:"config_version"`
 	UpdatedBy               *int64     `json:"updated_by,omitempty"`
 	UpdatedAt               time.Time  `json:"updated_at"`
@@ -70,41 +77,47 @@ type InstructionV2Config struct {
 	EnabledAINodeCount      int64      `json:"enabled_ai_node_count"`
 	AsyncQueueDepth         int        `json:"async_queue_depth"`
 	AsyncQueueCapacity      int        `json:"async_queue_capacity"`
+	PendingReviewJobCount   int64      `json:"pending_review_job_count"`
+	ActiveRiskHashCount     int64      `json:"active_risk_hash_count"`
 	LastConfigLoadError     string     `json:"last_config_load_error"`
 	LastConfigLoadedAt      *time.Time `json:"last_config_loaded_at,omitempty"`
 }
 
 type UpdateInstructionV2ConfigRequest struct {
-	ExpectedConfigVersion  int64   `json:"expected_config_version" binding:"required"`
-	Mode                   string  `json:"mode"`
-	ReviewCriteria         string  `json:"review_criteria"`
-	ConfidenceThreshold    float64 `json:"confidence_threshold"`
-	AIInputMaxChars        int     `json:"ai_input_max_chars"`
-	AIGlobalConcurrency    int     `json:"ai_global_concurrency"`
-	AIQueueWaitMS          int     `json:"ai_queue_wait_ms"`
-	AITotalTimeoutMS       int     `json:"ai_total_timeout_ms"`
-	AICacheTTLSeconds      int     `json:"ai_cache_ttl_seconds"`
-	EventRetentionDays     int     `json:"event_retention_days"`
-	EvidenceRetentionDays  int     `json:"evidence_retention_days"`
-	CandidateRetentionDays int     `json:"candidate_retention_days"`
-	RawFullMaxBytes        int     `json:"raw_full_max_bytes"`
+	ExpectedConfigVersion int64   `json:"expected_config_version" binding:"required"`
+	Mode                  string  `json:"mode"`
+	ReviewCriteria        string  `json:"review_criteria"`
+	ConfidenceThreshold   float64 `json:"confidence_threshold"`
+	AIInputMaxChars       int     `json:"ai_input_max_chars"`
+	AIGlobalConcurrency   int     `json:"ai_global_concurrency"`
+	AIQueueWaitMS         int     `json:"ai_queue_wait_ms"`
+	AITotalTimeoutMS      int     `json:"ai_total_timeout_ms"`
+	AICacheTTLSeconds     int     `json:"ai_cache_ttl_seconds"`
+	EventRetentionDays    int     `json:"event_retention_days"`
+	EvidenceRetentionDays int     `json:"evidence_retention_days"`
+	RawFullMaxBytes       int     `json:"raw_full_max_bytes"`
+	AllowEmptyFields      bool    `json:"allow_empty_fields"`
+	AsyncRetrySchedule    []int   `json:"async_retry_schedule_seconds"`
 }
 
 type InstructionV2AINode struct {
-	ID             int64     `json:"id"`
-	Name           string    `json:"name"`
-	BaseURL        string    `json:"base_url"`
-	Model          string    `json:"model"`
-	Priority       int       `json:"priority"`
-	Enabled        bool      `json:"enabled"`
-	TimeoutMS      int       `json:"timeout_ms"`
-	MaxConcurrency int       `json:"max_concurrency"`
-	HasAPIKey      bool      `json:"has_api_key"`
-	APIKeyStatus   string    `json:"api_key_status"`
-	CreatedBy      *int64    `json:"created_by,omitempty"`
-	UpdatedBy      *int64    `json:"updated_by,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              int64     `json:"id"`
+	Name            string    `json:"name"`
+	BaseURL         string    `json:"base_url"`
+	Model           string    `json:"model"`
+	Priority        int       `json:"priority"`
+	Slot            string    `json:"slot"`
+	ResponseMode    string    `json:"response_mode"`
+	MaxOutputTokens int       `json:"max_output_tokens"`
+	Enabled         bool      `json:"enabled"`
+	TimeoutMS       int       `json:"timeout_ms"`
+	MaxConcurrency  int       `json:"max_concurrency"`
+	HasAPIKey       bool      `json:"has_api_key"`
+	APIKeyStatus    string    `json:"api_key_status"`
+	CreatedBy       *int64    `json:"created_by,omitempty"`
+	UpdatedBy       *int64    `json:"updated_by,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type InstructionV2AINodeTestResult struct {
@@ -116,15 +129,18 @@ type InstructionV2AINodeTestResult struct {
 }
 
 type SaveInstructionV2AINodeRequest struct {
-	Name           string `json:"name"`
-	BaseURL        string `json:"base_url"`
-	Model          string `json:"model"`
-	APIKey         string `json:"api_key"`
-	ClearAPIKey    bool   `json:"clear_api_key"`
-	Priority       int    `json:"priority"`
-	Enabled        bool   `json:"enabled"`
-	TimeoutMS      int    `json:"timeout_ms"`
-	MaxConcurrency int    `json:"max_concurrency"`
+	Name            string `json:"name"`
+	BaseURL         string `json:"base_url"`
+	Model           string `json:"model"`
+	APIKey          string `json:"api_key"`
+	ClearAPIKey     bool   `json:"clear_api_key"`
+	Priority        int    `json:"priority"`
+	Slot            string `json:"slot"`
+	ResponseMode    string `json:"response_mode"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+	Enabled         bool   `json:"enabled"`
+	TimeoutMS       int    `json:"timeout_ms"`
+	MaxConcurrency  int    `json:"max_concurrency"`
 }
 
 type InstructionV2ClientMatcher struct {
@@ -226,7 +242,9 @@ type InstructionV2Hash struct {
 	Confidence           *float64                 `json:"confidence,omitempty"`
 	ReviewReason         string                   `json:"review_reason"`
 	ReviewCategory       string                   `json:"review_category"`
-	CandidateExpiresAt   *time.Time               `json:"candidate_expires_at,omitempty"`
+	CandidateExpiresAt   *time.Time               `json:"-"`
+	GlobalTrust          bool                     `json:"global_trust"`
+	ContentVaultID       *int64                   `json:"content_vault_id,omitempty"`
 	ScopeIDs             []int64                  `json:"scope_ids"`
 	Scopes               []InstructionV2HashScope `json:"scopes"`
 	CreatedBy            *int64                   `json:"created_by,omitempty"`
@@ -244,27 +262,29 @@ type InstructionV2HashScope struct {
 	ClientProfileName  string     `json:"client_profile_name"`
 	Status             string     `json:"status"`
 	Source             string     `json:"source"`
-	CandidateExpiresAt *time.Time `json:"candidate_expires_at,omitempty"`
+	CandidateExpiresAt *time.Time `json:"-"`
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type SaveInstructionV2HashRequest struct {
-	RawContent string  `json:"raw_content"`
-	SHA256     string  `json:"sha256"`
-	Source     string  `json:"source"`
-	Name       string  `json:"name"`
-	Note       string  `json:"note"`
-	Status     string  `json:"status"`
-	ScopeIDs   []int64 `json:"scope_ids"`
+	RawContent  string  `json:"raw_content"`
+	SHA256      string  `json:"sha256"`
+	Source      string  `json:"source"`
+	Name        string  `json:"name"`
+	Note        string  `json:"note"`
+	Status      string  `json:"status"`
+	ScopeIDs    []int64 `json:"scope_ids"`
+	GlobalTrust bool    `json:"global_trust"`
 }
 
 type UpdateInstructionV2HashRequest struct {
-	Name      *string `json:"name"`
-	Note      *string `json:"note"`
-	Status    *string `json:"status"`
-	ScopeIDs  []int64 `json:"scope_ids"`
-	SetScopes bool    `json:"set_scopes"`
+	Name        *string `json:"name"`
+	Note        *string `json:"note"`
+	Status      *string `json:"status"`
+	ScopeIDs    []int64 `json:"scope_ids"`
+	SetScopes   bool    `json:"set_scopes"`
+	GlobalTrust *bool   `json:"global_trust"`
 }
 
 type InstructionV2HashPage struct {
@@ -273,6 +293,108 @@ type InstructionV2HashPage struct {
 	Page     int                 `json:"page"`
 	PageSize int                 `json:"page_size"`
 	Pages    int                 `json:"pages"`
+}
+
+type InstructionV2RiskHash struct {
+	ID                int64      `json:"id"`
+	SHA256            string     `json:"sha256"`
+	ContentVaultID    int64      `json:"content_vault_id"`
+	ObservedField     string     `json:"observed_field"`
+	Status            string     `json:"status"`
+	Source            string     `json:"source"`
+	SourceEventID     *int64     `json:"source_event_id,omitempty"`
+	ReviewerNodeID    *int64     `json:"reviewer_node_id,omitempty"`
+	ReviewerModel     string     `json:"reviewer_model"`
+	PromptVersion     string     `json:"prompt_version"`
+	Confidence        *float64   `json:"confidence,omitempty"`
+	ReviewReason      string     `json:"review_reason"`
+	ReviewCategory    string     `json:"review_category"`
+	HumanReviewStatus string     `json:"human_review_status"`
+	ReviewedBy        *int64     `json:"reviewed_by,omitempty"`
+	ReviewedAt        *time.Time `json:"reviewed_at,omitempty"`
+	CreatedBy         *int64     `json:"created_by,omitempty"`
+	UpdatedBy         *int64     `json:"updated_by,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+type InstructionV2RiskHashPage struct {
+	Items    []InstructionV2RiskHash `json:"items"`
+	Total    int64                   `json:"total"`
+	Page     int                     `json:"page"`
+	PageSize int                     `json:"page_size"`
+	Pages    int                     `json:"pages"`
+}
+
+type SaveInstructionV2RiskHashRequest struct {
+	RawContent    string `json:"raw_content"`
+	SHA256        string `json:"sha256"`
+	ObservedField string `json:"observed_field"`
+	Note          string `json:"note"`
+}
+
+type UpdateInstructionV2RiskHashRequest struct {
+	Status string `json:"status"`
+	Action string `json:"action"`
+	Name   string `json:"name"`
+	Note   string `json:"note"`
+}
+
+type InstructionV2RiskActionResult struct {
+	RiskHash    *InstructionV2RiskHash `json:"risk_hash,omitempty"`
+	TrustedHash *InstructionV2Hash     `json:"trusted_hash,omitempty"`
+}
+
+type InstructionV2ReviewJob struct {
+	ID             int64                        `json:"id"`
+	SHA256         string                       `json:"sha256"`
+	ContentVaultID int64                        `json:"content_vault_id"`
+	SelectedField  string                       `json:"selected_field"`
+	SourceEventID  *int64                       `json:"source_event_id,omitempty"`
+	Status         string                       `json:"status"`
+	FinalResult    string                       `json:"final_result"`
+	PassVotes      int                          `json:"pass_votes"`
+	RejectVotes    int                          `json:"reject_votes"`
+	RetryRound     int                          `json:"retry_round"`
+	NextAttemptAt  time.Time                    `json:"next_attempt_at"`
+	PromptVersion  string                       `json:"prompt_version"`
+	ReviewCriteria string                       `json:"review_criteria"`
+	ConfigVersion  int64                        `json:"config_version"`
+	ObserveOnly    bool                         `json:"observe_only"`
+	Sampled        bool                         `json:"sampled"`
+	SampleBytes    int                          `json:"sample_bytes"`
+	ContentBytes   int64                        `json:"content_bytes"`
+	LastError      string                       `json:"last_error"`
+	CompletedAt    *time.Time                   `json:"completed_at,omitempty"`
+	CreatedAt      time.Time                    `json:"created_at"`
+	UpdatedAt      time.Time                    `json:"updated_at"`
+	Attempts       []InstructionV2ReviewAttempt `json:"attempts,omitempty"`
+}
+
+type InstructionV2ReviewAttempt struct {
+	ID            int64     `json:"id"`
+	JobID         int64     `json:"job_id"`
+	NodeID        *int64    `json:"node_id,omitempty"`
+	NodeSlot      string    `json:"node_slot"`
+	NodeName      string    `json:"node_name"`
+	ReviewerModel string    `json:"reviewer_model"`
+	AttemptNo     int       `json:"attempt_no"`
+	Result        string    `json:"result"`
+	Confidence    float64   `json:"confidence"`
+	Reason        string    `json:"reason"`
+	Category      string    `json:"category"`
+	PromptVersion string    `json:"prompt_version"`
+	Sampled       bool      `json:"sampled"`
+	LatencyMS     int       `json:"latency_ms"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type InstructionV2ReviewJobPage struct {
+	Items    []InstructionV2ReviewJob `json:"items"`
+	Total    int64                    `json:"total"`
+	Page     int                      `json:"page"`
+	PageSize int                      `json:"page_size"`
+	Pages    int                      `json:"pages"`
 }
 
 type InstructionV2Field struct {
@@ -321,6 +443,9 @@ type InstructionV2Event struct {
 	OpsNotificationStatus  string                  `json:"ops_notification_status"`
 	CreatedAt              time.Time               `json:"created_at"`
 	AIReviews              []InstructionV2AIReview `json:"ai_reviews,omitempty"`
+	SelectedField          string                  `json:"selected_field"`
+	SelectedSHA256         string                  `json:"selected_sha256"`
+	ReviewJobID            *int64                  `json:"review_job_id,omitempty"`
 }
 
 type InstructionV2AIReview struct {
@@ -406,9 +531,10 @@ type InstructionV2DeleteRequest struct {
 }
 
 type InstructionV2TrustEventRequest struct {
-	Fields []string `json:"fields"`
-	Name   string   `json:"name"`
-	Note   string   `json:"note"`
+	Fields      []string `json:"fields"`
+	Name        string   `json:"name"`
+	Note        string   `json:"note"`
+	GlobalTrust bool     `json:"global_trust"`
 }
 
 type InstructionV2TrustEventResult struct {
@@ -443,6 +569,12 @@ type instructionV2HashRuntime struct {
 	ID       int64
 	SHA256   string
 	ScopeIDs map[int64]struct{}
+	Global   bool
+}
+
+type instructionV2RiskRuntime struct {
+	ID     int64
+	SHA256 string
 }
 
 type instructionV2AINodeRuntime struct {
@@ -458,21 +590,25 @@ type instructionV2Snapshot struct {
 	ProfilesByKey   map[string]instructionV2ClientRuntime
 	ScopesByGroup   map[int64][]instructionV2ScopeRuntime
 	Hashes          map[string]instructionV2HashRuntime
+	RiskHashes      map[string]instructionV2RiskRuntime
 	AllowedUsers    map[int64]struct{}
 	AINodes         []*instructionV2AINodeRuntime
+	AINodesBySlot   map[string]*instructionV2AINodeRuntime
 	GlobalSemaphore chan struct{}
 	LoadedAt        time.Time
 }
 
 type instructionV2EvaluationContext struct {
-	request   Request
-	snapshot  *instructionV2Snapshot
-	profile   instructionV2ClientRuntime
-	scopes    []instructionV2ScopeRuntime
-	scope     instructionV2ScopeRuntime
-	fields    instructionV2ParsedFields
-	bodyBytes int64
-	startedAt time.Time
+	request           Request
+	snapshot          *instructionV2Snapshot
+	profile           instructionV2ClientRuntime
+	scopes            []instructionV2ScopeRuntime
+	scope             instructionV2ScopeRuntime
+	fields            instructionV2ParsedFields
+	selectedField     InstructionV2Field
+	selectedFieldName string
+	bodyBytes         int64
+	startedAt         time.Time
 }
 
 type instructionV2AIResult struct {
@@ -496,6 +632,8 @@ type instructionV2AIAttempt struct {
 	Sampled       bool
 	Cached        bool
 	LatencyMS     int
+	NodeSlot      string
+	AttemptNo     int
 }
 
 type instructionV2AIOutcome struct {
@@ -510,7 +648,9 @@ type instructionV2PersistEvent struct {
 	Event     InstructionV2Event
 	Evidence  []instructionV2EvidenceWrite
 	Reviews   []instructionV2AIAttempt
-	Candidate *instructionV2CandidateWrite
+	Risk      *instructionV2RiskWrite
+	Trusted   *instructionV2TrustedWrite
+	ReviewJob *instructionV2ReviewJobWrite
 }
 
 type instructionV2EvidenceWrite struct {
@@ -524,42 +664,76 @@ type instructionV2EvidenceWrite struct {
 }
 
 type instructionV2ManualHashWrite struct {
-	SHA256             string
-	Name               string
-	Note               string
-	Status             string
-	Source             string
-	ContentBytes       int64
-	RawStorage         string
-	RawCiphertext      []byte
-	StoredBytes        int
-	ScopeIDs           []int64
-	CandidateExpiresAt *time.Time
+	SHA256        string
+	Name          string
+	Note          string
+	Status        string
+	Source        string
+	ContentBytes  int64
+	RawStorage    string
+	RawCiphertext []byte
+	StoredBytes   int
+	ScopeIDs      []int64
+	GlobalTrust   bool
+	ObservedField string
 }
 
-type instructionV2CandidateWrite struct {
-	SHA256             string
-	Name               string
-	Note               string
-	ObservedField      string
-	ContentBytes       int64
-	RawStorage         string
-	RawCiphertext      []byte
-	StoredBytes        int
-	AISampled          bool
-	ScopeID            int64
-	ReviewerNodeID     *int64
-	ReviewerModel      string
-	PromptVersion      string
-	Confidence         float64
-	ReviewReason       string
-	ReviewCategory     string
-	CandidateExpiresAt time.Time
+type instructionV2VaultWrite struct {
+	SHA256        string
+	ObservedField string
+	RawCiphertext []byte
+	ContentBytes  int64
+	StoredBytes   int
+}
+
+type instructionV2RiskWrite struct {
+	Vault          instructionV2VaultWrite
+	Source         string
+	ObservedField  string
+	ReviewerNodeID *int64
+	ReviewerModel  string
+	PromptVersion  string
+	Confidence     float64
+	ReviewReason   string
+	ReviewCategory string
+}
+
+type instructionV2TrustedWrite struct {
+	Vault          instructionV2VaultWrite
+	Source         string
+	ObservedField  string
+	ReviewerNodeID *int64
+	ReviewerModel  string
+	PromptVersion  string
+	Confidence     float64
+	ReviewReason   string
+	ReviewCategory string
+	GlobalTrust    bool
+	ScopeIDs       []int64
+}
+
+type instructionV2ReviewJobWrite struct {
+	Vault          instructionV2VaultWrite
+	SelectedField  string
+	PromptVersion  string
+	ReviewCriteria string
+	ConfigVersion  int64
+	ObserveOnly    bool
+	Sampled        bool
+	SampleBytes    int
+}
+
+type instructionV2ClaimedReviewJob struct {
+	InstructionV2ReviewJob
+	Ciphertext []byte
+	LeaseOwner string
 }
 
 type instructionV2PersistResult struct {
 	EventID int64
 	HashID  *int64
+	RiskID  *int64
+	JobID   *int64
 }
 
 type instructionV2AsyncJob struct {
