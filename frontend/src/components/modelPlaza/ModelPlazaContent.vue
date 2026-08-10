@@ -304,7 +304,6 @@ const filtersActive = computed(
 function selectGroup(value: PlazaGroupFilterValue) {
   selectedGroupId.value = value
   writeStorage(groupStorageKey(selectedPlatform.value), String(value))
-  if (value === PLAZA_OFFICIAL_GROUP_ID) selectedBillingMode.value = 'token'
 }
 
 function selectPlatform(value: string) {
@@ -322,14 +321,18 @@ function selectSortMode(value: PlazaSortMode) {
 const pricingSourceLabel = computed(() => {
   const response = props.response
   if (!response?.official_pricing_source) return ''
+  const source =
+    response.official_pricing_source === 'channel'
+      ? t('modelPlaza.source.channel')
+      : response.official_pricing_source
   const updatedAt = response.official_pricing_updated_at
     ? new Intl.DateTimeFormat(locale.value, { year: 'numeric', month: 'short', day: 'numeric' }).format(
         new Date(response.official_pricing_updated_at)
       )
     : ''
   return updatedAt
-    ? t('modelPlaza.source.withDate', { source: response.official_pricing_source, date: updatedAt })
-    : t('modelPlaza.source.name', { source: response.official_pricing_source })
+    ? t('modelPlaza.source.withDate', { source, date: updatedAt })
+    : t('modelPlaza.source.name', { source })
 })
 </script>
 

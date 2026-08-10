@@ -37,7 +37,8 @@ func NewModelPlazaHandler(
 	}
 }
 
-// modelPlazaOfficialPricing LiteLLM 官方参考价（USD per token）。
+// modelPlazaOfficialPricing 保留旧版模型广场 API 的 token 官方价投影。
+// 数据来自渠道原始定价；新版客户端直接使用完整的 pricing 字段。
 type modelPlazaOfficialPricing struct {
 	InputPrice        *float64 `json:"input_price"`
 	OutputPrice       *float64 `json:"output_price"`
@@ -135,16 +136,11 @@ func (h *ModelPlazaHandler) Get(c *gin.Context) {
 	for i := range visible {
 		out = append(out, toModelPlazaGroupDTO(&visible[i], userRates))
 	}
-	officialUpdatedAt := ""
-	if updatedAt := h.channelService.PlazaOfficialPricingUpdatedAt(); !updatedAt.IsZero() {
-		officialUpdatedAt = updatedAt.UTC().Format(time.RFC3339)
-	}
 	response.Success(c, modelPlazaResponse{
-		Description:              rt.Description,
-		Currency:                 "CNY",
-		OfficialPricingSource:    "LiteLLM",
-		OfficialPricingUpdatedAt: officialUpdatedAt,
-		Groups:                   out,
+		Description:           rt.Description,
+		Currency:              "CNY",
+		OfficialPricingSource: "channel",
+		Groups:                out,
 	})
 }
 
@@ -208,7 +204,7 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 			Pricing:             toUserPricing(m.Pricing),
 			DisplayPricing:      toDisplayPricing(m.Pricing, effectiveMultiplier),
 			EffectiveMultiplier: effectiveMultiplier,
-			OfficialPricing:     toModelPlazaOfficialPricing(m.OfficialPricing),
+			OfficialPricing:     toModelPlazaOfficialPricing(m.Pricing),
 		})
 	}
 	dto := modelPlazaGroup{
@@ -273,16 +269,21 @@ func scaledPrice(value *float64, multiplier float64) *float64 {
 	return &scaled
 }
 
-// toModelPlazaOfficialPricing 转换官方参考价；nil 透传（前端显示 "-"）。
-func toModelPlazaOfficialPricing(p *service.PlazaOfficialPricing) *modelPlazaOfficialPricing {
+// toModelPlazaOfficialPricing 将渠道原始 token 定价投影到旧版官方价字段。
+// 完整的分层、图片和按次官方价由 pricing 字段承载。
+func toModelPlazaOfficialPricing(p *service.ChannelModelPricing) *modelPlazaOfficialPricing {
 	if p == nil {
 		return nil
 	}
-	return &modelPlazaOfficialPricing{
-		InputPrice:        p.InputPrice,
-		OutputPrice:       p.OutputPrice,
-		CacheWritePrice:   p.CacheWritePrice,
-		CacheWrite1hPrice: p.CacheWrite1hPrice,
-		CacheReadPrice:    p.CacheReadPrice,
+	result := &modelPlazaOfficialPricing{
+		InputPrice:      p.InputPrice,
+		OutputPrice:     p.OutputPrice,
+		CacheWritePrice: p.CacheWritePrice,
+		CacheReadPrice:  p.CacheReadPrice,
 	}
+	if result.InputPrice == nil && result.OutputPrice == nil &&
+		result.CacheWritePrice == nil && result.CacheReadPrice == nil {
+		return nil
+	}
+	return result
 }

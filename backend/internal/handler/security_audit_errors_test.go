@@ -178,7 +178,7 @@ func TestInstructionAuditWebSocketUsesGenericEnvelope(t *testing.T) {
 			serverErrors <- err
 			return
 		}
-		defer connection.CloseNow()
+		defer func() { _ = connection.CloseNow() }()
 		writeSecurityAuditWSError(request.Context(), connection, decision)
 		serverErrors <- nil
 	}))
@@ -188,7 +188,7 @@ func TestInstructionAuditWebSocketUsesGenericEnvelope(t *testing.T) {
 	defer cancel()
 	connection, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	require.NoError(t, err)
-	defer connection.CloseNow()
+	defer func() { _ = connection.CloseNow() }()
 	messageType, payload, err := connection.Read(ctx)
 	require.NoError(t, err)
 	require.Equal(t, coderws.MessageText, messageType)

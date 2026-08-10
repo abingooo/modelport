@@ -58,16 +58,31 @@ describe('model plaza presentation', () => {
     expect(plazaProviderLabel('unknown')).toBe('unknown')
   })
 
-  it('detects models with official token pricing', () => {
+  it('detects channel pricing as official pricing for every billing mode', () => {
     const pricedModel = model('gpt-test', 'openai', 1)
-    pricedModel.official_pricing = {
+    pricedModel.pricing = {
+      billing_mode: 'token',
       input_price: 2.5e-6,
       output_price: 1.5e-5,
       cache_write_price: null,
-      cache_read_price: 2.5e-7
+      cache_read_price: 2.5e-7,
+      image_input_price: null,
+      image_output_price: null,
+      per_request_price: null,
+      intervals: []
+    }
+    const imageModel = model('image-test', 'openai', 1)
+    imageModel.pricing = {
+      ...pricedModel.pricing,
+      billing_mode: 'image',
+      input_price: null,
+      output_price: null,
+      cache_read_price: null,
+      per_request_price: 0.04
     }
 
     expect(plazaHasOfficialPricing(pricedModel)).toBe(true)
+    expect(plazaHasOfficialPricing(imageModel)).toBe(true)
     expect(plazaHasOfficialPricing(model('no-price', 'openai', 1))).toBe(false)
   })
 
@@ -102,5 +117,8 @@ describe('model plaza presentation', () => {
       'gpt-unavailable'
     ])
     expect(plazaModelSortPrice(expensive)).toBe(8e-6)
+
+    expensive.pricing = { ...expensive.display_pricing, output_price: 10e-6 }
+    expect(plazaModelSortPrice(expensive, true)).toBe(10e-6)
   })
 })

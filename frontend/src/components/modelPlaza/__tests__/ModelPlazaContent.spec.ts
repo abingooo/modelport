@@ -22,7 +22,17 @@ function model(name: string, platform: string): PlazaModel {
   return {
     name,
     platform,
-    pricing: null,
+    pricing: {
+      billing_mode: 'token',
+      input_price: 1e-6,
+      output_price: 2e-6,
+      cache_write_price: null,
+      cache_read_price: null,
+      image_input_price: null,
+      image_output_price: null,
+      per_request_price: null,
+      intervals: []
+    },
     display_pricing: null,
     effective_multiplier: 1,
     official_pricing: {
@@ -58,7 +68,7 @@ function group(id: number, name: string, platform: string): ModelPlazaGroup {
 const response: ModelPlazaResponse = {
   description: '',
   currency: 'CNY',
-  official_pricing_source: 'LiteLLM',
+  official_pricing_source: 'channel',
   groups: [group(82, 'OpenAI Group', 'openai'), group(83, 'Grok Group', 'grok')]
 }
 

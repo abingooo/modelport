@@ -4,26 +4,15 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 )
 
-// PlazaOfficialPricing 模型广场展示用的 LiteLLM 官方参考价（USD per token）。
-// 字段为 nil 表示官方数据中该项缺失（0 视为未配置）。
-type PlazaOfficialPricing struct {
-	InputPrice        *float64
-	OutputPrice       *float64
-	CacheWritePrice   *float64 // 5m 缓存写入（= LiteLLM cache_creation）
-	CacheWrite1hPrice *float64 // 1h 缓存写入（LiteLLM cache_creation_above_1hr）
-	CacheReadPrice    *float64
-}
-
-// PlazaModel 模型广场中单个模型条目：渠道定价 + 官方参考价。
+// PlazaModel 模型广场中单个模型条目。Pricing 是渠道配置的官方基础价；
+// handler 会按分组和用户倍率另行生成实际展示价。
 type PlazaModel struct {
-	Name            string
-	Platform        string
-	Pricing         *ChannelModelPricing
-	OfficialPricing *PlazaOfficialPricing
+	Name     string
+	Platform string
+	Pricing  *ChannelModelPricing
 }
 
 // PlazaGroup 模型广场中以分组为顶层的条目。
@@ -64,11 +53,10 @@ func (g *PlazaGroup) PeakMultiplierAt(now time.Time) float64 {
 
 // ListPlazaGroups 返回模型广场数据：每个活跃分组附带其可用模型与定价。
 //
-// 聚合口径与 ListAvailable 一致（Active 渠道、SupportedModels ∪ 全局定价回落、
-// 平台隔离），仅把顶层从渠道换成分组：
-//   - 渠道按 lower(name) 排序后遍历，保证同名模型去重结果确定；
-//   - 同分组同名模型「先见者胜」，仅当已存条目无定价而新条目有定价时升级替换；
-//   - 每个模型附带 LiteLLM 官方参考价（查不到为 nil）；
+// 模型广场只展示 Active 渠道中明确配置且允许用户查看的渠道定价，不使用全局
+// LiteLLM 价格回落：
+//   - 渠道按创建时间升序遍历（同时间按 ID），同名模型由最早渠道兜底；
+//   - 同分组同名模型「先见者胜」；
 //   - 只返回 Models 非空的分组；分组按 RateMultiplier 升序（同倍率按名称），
 //     组内模型按名称排序。
 //
@@ -84,7 +72,10 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 	}
 
 	sort.SliceStable(channels, func(i, j int) bool {
-		return strings.ToLower(channels[i].Name) < strings.ToLower(channels[j].Name)
+		if !channels[i].CreatedAt.Equal(channels[j].CreatedAt) {
+			return channels[i].CreatedAt.Before(channels[j].CreatedAt)
+		}
+		return channels[i].ID < channels[j].ID
 	})
 
 	byGroup := make(map[int64]*PlazaGroup, len(groups))
@@ -119,7 +110,6 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 		}
 		ch.normalizeBillingModelSource()
 		supported := ch.SupportedModels()
-		s.fillGlobalPricingFallback(supported)
 
 		for _, gid := range ch.GroupIDs {
 			pg, ok := byGroup[gid]
@@ -133,27 +123,19 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 			}
 			for j := range supported {
 				m := supported[j]
-				if m.Platform != pg.Platform || m.Pricing == nil || !m.Pricing.UserVisible {
+				if m.Platform != pg.Platform || m.Pricing == nil ||
+					!m.Pricing.UserVisible || !plazaPricingConfigured(m.Pricing) {
 					continue
 				}
-				if at, seen := idx[m.Name]; seen {
-					// 先见者胜；仅当已存条目无定价而新条目有定价时升级。
-					if pg.Models[at].Pricing == nil && m.Pricing != nil {
-						pg.Models[at].Pricing = m.Pricing
-					}
+				if _, seen := idx[m.Name]; seen {
 					continue
 				}
 				idx[m.Name] = len(pg.Models)
-				pg.Models = append(pg.Models, PlazaModel{
-					Name:     m.Name,
-					Platform: m.Platform,
-					Pricing:  m.Pricing,
-				})
+				pg.Models = append(pg.Models, PlazaModel(m))
 			}
 		}
 	}
 
-	officialMemo := make(map[string]*PlazaOfficialPricing)
 	out := make([]PlazaGroup, 0, len(order))
 	for _, gid := range order {
 		pg := byGroup[gid]
@@ -161,9 +143,6 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 			continue
 		}
 		sort.SliceStable(pg.Models, func(i, j int) bool { return pg.Models[i].Name < pg.Models[j].Name })
-		for j := range pg.Models {
-			pg.Models[j].OfficialPricing = s.lookupOfficialPricing(pg.Models[j].Name, officialMemo)
-		}
 		out = append(out, *pg)
 	}
 
@@ -176,37 +155,21 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 	return out, nil
 }
 
-// PlazaOfficialPricingUpdatedAt 返回模型广场参考价格数据的更新时间。
-func (s *ChannelService) PlazaOfficialPricingUpdatedAt() time.Time {
-	if s == nil || s.pricingService == nil {
-		return time.Time{}
+func plazaPricingConfigured(p *ChannelModelPricing) bool {
+	if p == nil {
+		return false
 	}
-	return s.pricingService.LastUpdated()
-}
-
-// lookupOfficialPricing 查询模型的 LiteLLM 官方参考价，带 memo 避免同名模型重复转换。
-// pricingService 为 nil（测试场景）或查不到时返回 nil。
-func (s *ChannelService) lookupOfficialPricing(modelName string, memo map[string]*PlazaOfficialPricing) *PlazaOfficialPricing {
-	if s.pricingService == nil {
-		return nil
+	if p.InputPrice != nil || p.OutputPrice != nil ||
+		p.CacheWritePrice != nil || p.CacheReadPrice != nil ||
+		p.ImageInputPrice != nil || p.ImageOutputPrice != nil || p.PerRequestPrice != nil {
+		return true
 	}
-	if cached, ok := memo[modelName]; ok {
-		return cached
-	}
-	var result *PlazaOfficialPricing
-	if lp := s.pricingService.GetModelPricing(modelName); lp != nil && !lp.TokenPricingAbsent {
-		result = &PlazaOfficialPricing{
-			InputPrice:        nonZeroPtr(lp.InputCostPerToken),
-			OutputPrice:       nonZeroPtr(lp.OutputCostPerToken),
-			CacheWritePrice:   nonZeroPtr(lp.CacheCreationInputTokenCost),
-			CacheWrite1hPrice: nonZeroPtr(lp.CacheCreationInputTokenCostAbove1hr),
-			CacheReadPrice:    nonZeroPtr(lp.CacheReadInputTokenCost),
-		}
-		if result.InputPrice == nil && result.OutputPrice == nil &&
-			result.CacheWritePrice == nil && result.CacheWrite1hPrice == nil && result.CacheReadPrice == nil {
-			result = nil
+	for _, interval := range p.Intervals {
+		if interval.InputPrice != nil || interval.OutputPrice != nil ||
+			interval.CacheWritePrice != nil || interval.CacheReadPrice != nil ||
+			interval.PerRequestPrice != nil {
+			return true
 		}
 	}
-	memo[modelName] = result
-	return result
+	return false
 }

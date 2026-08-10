@@ -1,5 +1,6 @@
 import type { BillingMode } from '@/constants/channel'
 import { BILLING_MODE_TOKEN } from '@/constants/channel'
+import type { UserSupportedModelPricing } from '@/api/channels'
 import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
 import { GROUP_PLATFORM_ORDER } from '@/utils/providerPresets'
 
@@ -63,13 +64,26 @@ export function plazaBillingMode(model: PlazaModel): BillingMode {
 }
 
 export function plazaHasOfficialPricing(model: PlazaModel): boolean {
-  if (plazaBillingMode(model) !== BILLING_MODE_TOKEN) return false
-  const pricing = model.official_pricing
+  const pricing = model.pricing
+  if (!pricing) return false
+  const flatPrices = [
+    pricing.input_price,
+    pricing.output_price,
+    pricing.cache_write_price,
+    pricing.cache_read_price,
+    pricing.image_input_price,
+    pricing.image_output_price,
+    pricing.per_request_price
+  ]
+  const intervalPrices = pricing.intervals.flatMap((interval) => [
+    interval.input_price,
+    interval.output_price,
+    interval.cache_write_price,
+    interval.cache_read_price,
+    interval.per_request_price
+  ])
   return Boolean(
-    pricing &&
-      [pricing.input_price, pricing.output_price, pricing.cache_write_price, pricing.cache_read_price].some(
-        (value) => value != null
-      )
+    [...flatPrices, ...intervalPrices].some((value) => value != null && Number.isFinite(value))
   )
 }
 
@@ -80,25 +94,21 @@ function firstFinitePrice(values: Array<number | null | undefined>): number | nu
 
 export function plazaModelSortPrice(model: PlazaModel | undefined, officialPricing = false): number | null {
   if (!model) return null
-  if (officialPricing) {
-    const pricing = model.official_pricing
-    if (!pricing) return null
-    return firstFinitePrice([
-      pricing.output_price,
-      pricing.input_price,
-      pricing.cache_write_price,
-      pricing.cache_read_price
-    ])
-  }
-
-  const pricing = model.display_pricing
+  const pricing: UserSupportedModelPricing | null = officialPricing ? model.pricing : model.display_pricing
   if (!pricing) return null
   if (plazaBillingMode(model) === BILLING_MODE_TOKEN) {
+    const intervalPrices = pricing.intervals.flatMap((interval) => [
+      interval.output_price,
+      interval.input_price,
+      interval.cache_write_price,
+      interval.cache_read_price
+    ])
     return firstFinitePrice([
       pricing.output_price,
       pricing.input_price,
       pricing.cache_write_price,
-      pricing.cache_read_price
+      pricing.cache_read_price,
+      ...intervalPrices
     ])
   }
 
@@ -107,6 +117,8 @@ export function plazaModelSortPrice(model: PlazaModel | undefined, officialPrici
     .filter((value): value is number => value != null && Number.isFinite(value))
   return firstFinitePrice([
     pricing.per_request_price,
+    pricing.image_output_price,
+    pricing.image_input_price,
     ...(intervalPrices.length > 0 ? [Math.min(...intervalPrices)] : [])
   ])
 }

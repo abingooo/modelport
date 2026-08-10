@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -60,26 +61,22 @@ func TestListPlazaGroups_GroupCentricAggregation(t *testing.T) {
 	require.Equal(t, "claude-sonnet", out[0].Models[1].Name)
 }
 
-func TestListPlazaGroups_DedupFirstWinsWithPricingUpgrade(t *testing.T) {
-	// 同名模型:先见者胜;仅当已存条目无定价而新条目有定价时升级替换。
-	unpriced := Channel{
-		ID: 1, Name: "alpha", Status: StatusActive, GroupIDs: []int64{10},
-		// mapping-only → SupportedModels 产出无定价条目
-		ModelMapping: map[string]map[string]string{
-			"anthropic": {"claude-sonnet": "claude-sonnet"},
-		},
-	}
-	priced := plazaPricedChannel(2, "beta", []int64{10}, "anthropic", "claude-sonnet")
+func TestListPlazaGroups_DedupUsesOldestChannel(t *testing.T) {
+	older := plazaPricedChannel(20, "z-older", []int64{10}, "anthropic", "claude-sonnet")
+	older.CreatedAt = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	older.ModelPricing[0].InputPrice = testPtrFloat64(1e-6)
+	younger := plazaPricedChannel(10, "a-younger", []int64{10}, "anthropic", "claude-sonnet")
+	younger.CreatedAt = older.CreatedAt.Add(time.Hour)
+	younger.ModelPricing[0].InputPrice = testPtrFloat64(9e-6)
 	groups := []Group{{ID: 10, Name: "g", Platform: "anthropic", RateMultiplier: 1}}
 
-	// alpha(无价)按名称序先于 beta(有价):先见者无价,应被有价条目升级。
-	svc := newPlazaChannelService([]Channel{priced, unpriced}, groups, nil)
+	// 输入顺序和名称顺序都与创建时间相反，仍应选择更早创建的渠道。
+	svc := newPlazaChannelService([]Channel{younger, older}, groups, nil)
 	out, err := svc.ListPlazaGroups(context.Background())
 	require.NoError(t, err)
 	require.Len(t, out, 1)
 	require.Len(t, out[0].Models, 1)
-	require.NotNil(t, out[0].Models[0].Pricing, "无价条目应被有价条目升级")
-	require.NotNil(t, out[0].Models[0].Pricing.InputPrice)
+	require.InDelta(t, 1e-6, *out[0].Models[0].Pricing.InputPrice, 1e-12)
 }
 
 func TestListPlazaGroups_PlatformIsolation(t *testing.T) {
@@ -127,6 +124,23 @@ func TestListPlazaGroups_UserVisibleFiltersPricingEntries(t *testing.T) {
 	require.Equal(t, "visible-model", out[0].Models[0].Name)
 }
 
+func TestListPlazaGroups_ImageInputOnlyPricingIsConfigured(t *testing.T) {
+	channel := plazaPricedChannel(1, "ch", []int64{10}, "openai", "image-edit")
+	channel.ModelPricing[0] = ChannelModelPricing{
+		Platform:        "openai",
+		Models:          []string{"image-edit"},
+		BillingMode:     BillingModeImage,
+		ImageInputPrice: testPtrFloat64(1e-6),
+		UserVisible:     true,
+	}
+	groups := []Group{{ID: 10, Name: "g", Platform: "openai", RateMultiplier: 1}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Models, 1)
+}
+
 func TestListPlazaGroups_InactiveChannelSkipped(t *testing.T) {
 	inactive := plazaPricedChannel(1, "off", []int64{10}, "anthropic", "claude-sonnet")
 	inactive.Status = "inactive"
@@ -155,42 +169,21 @@ func TestListPlazaGroups_SortedByRateMultiplierAsc(t *testing.T) {
 	require.Equal(t, "b-standard", out[2].Name)
 }
 
-func TestListPlazaGroups_OfficialPricingFill(t *testing.T) {
+func TestListPlazaGroups_DoesNotUseLiteLLMFallback(t *testing.T) {
 	pricingSvc := newStubPricingServiceFromMap(map[string]*LiteLLMModelPricing{
-		"claude-sonnet": {
-			Mode:                                "chat",
-			InputCostPerToken:                   3e-6,
-			OutputCostPerToken:                  1.5e-5,
-			CacheCreationInputTokenCost:         3.75e-6,
-			CacheCreationInputTokenCostAbove1hr: 6e-6,
-			CacheReadInputTokenCost:             3e-7,
-		},
-		"token-absent": {Mode: "image_generation", TokenPricingAbsent: true, OutputCostPerImage: 0.04},
+		"fallback-only": {Mode: "chat", InputCostPerToken: 8e-6, OutputCostPerToken: 9e-6},
 	})
-	channels := []Channel{
-		plazaPricedChannel(1, "ch", []int64{10}, "anthropic", "claude-sonnet", "unknown-model", "token-absent"),
+	channel := plazaPricedChannel(1, "ch", []int64{10}, "anthropic", "configured")
+	channel.ModelMapping = map[string]map[string]string{
+		"anthropic": {"fallback-only": "fallback-only"},
 	}
 	groups := []Group{{ID: 10, Name: "g", Platform: "anthropic", RateMultiplier: 1}}
-	svc := newPlazaChannelService(channels, groups, pricingSvc)
+	svc := newPlazaChannelService([]Channel{channel}, groups, pricingSvc)
 	out, err := svc.ListPlazaGroups(context.Background())
 	require.NoError(t, err)
 	require.Len(t, out, 1)
-	require.Len(t, out[0].Models, 3)
-
-	byName := map[string]PlazaModel{}
-	for _, m := range out[0].Models {
-		byName[m.Name] = m
-	}
-	// 命中:填充完整官方价(含 1h 缓存写入)
-	official := byName["claude-sonnet"].OfficialPricing
-	require.NotNil(t, official)
-	require.InDelta(t, 3e-6, *official.InputPrice, 1e-12)
-	require.InDelta(t, 6e-6, *official.CacheWrite1hPrice, 1e-12)
-	require.InDelta(t, 3e-7, *official.CacheReadPrice, 1e-12)
-	// 未命中:nil(GetModelPricing 的 claude 系列模糊匹配对非 claude 名不生效)
-	require.Nil(t, byName["unknown-model"].OfficialPricing)
-	// TokenPricingAbsent 条目不作为官方 token 价展示
-	require.Nil(t, byName["token-absent"].OfficialPricing)
+	require.Len(t, out[0].Models, 1)
+	require.Equal(t, "configured", out[0].Models[0].Name)
 }
 
 func TestListPlazaGroups_RepoErrorsPropagate(t *testing.T) {

@@ -328,11 +328,6 @@ func matchInstructionV2Field(snapshot *instructionV2Snapshot, scopes []instructi
 	return instructionV2HashRuntime{}, false
 }
 
-func instructionV2FieldsEmpty(fields instructionV2ParsedFields) bool {
-	name, _ := selectInstructionV2Field(fields)
-	return name == ""
-}
-
 func (s *InstructionV2Service) snapshotStale(snapshot *instructionV2Snapshot, now time.Time) bool {
 	if snapshot == nil {
 		return true

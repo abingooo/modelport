@@ -173,8 +173,8 @@ describe('PlazaModelCard', () => {
     expect(wrapper.text()).not.toContain('￥0.05')
   })
 
-  it('renders image specifications as per-image price rows', () => {
-    const imagePricing = pricing({
+  it('renders image specifications and switches to channel official prices', async () => {
+    const imageOfficialPricing = pricing({
       billing_mode: 'image',
       input_price: null,
       output_price: null,
@@ -185,8 +185,15 @@ describe('PlazaModelCard', () => {
         { min_tokens: 0, max_tokens: null, tier_label: '4K', input_price: null, output_price: null, cache_write_price: null, cache_read_price: null, per_request_price: 0.12 }
       ]
     })
-    const imageModel = model(imagePricing)
-    imageModel.pricing = imagePricing
+    const imageDisplayPricing = pricing({
+      ...imageOfficialPricing,
+      intervals: imageOfficialPricing.intervals.map((interval) => ({
+        ...interval,
+        per_request_price: (interval.per_request_price ?? 0) * 0.5
+      }))
+    })
+    const imageModel = model(imageDisplayPricing)
+    imageModel.pricing = imageOfficialPricing
     const wrapper = mountCard({
       key: 'grok:image',
       name: 'grok-image',
@@ -195,16 +202,21 @@ describe('PlazaModelCard', () => {
     })
 
     expect(wrapper.text()).toContain('1K')
-    expect(wrapper.text()).toContain('￥0.04')
+    expect(wrapper.text()).toContain('￥0.02')
     expect(wrapper.text()).toContain('4K')
-    expect(wrapper.text()).toContain('￥0.12')
+    expect(wrapper.text()).toContain('￥0.06')
     expect(wrapper.text()).not.toContain('$')
     expect(wrapper.text()).toContain('modelPlaza.table.perUnitImage')
-    expect(wrapper.findComponent(Select).exists()).toBe(false)
+    expect(wrapper.findComponent(Select).exists()).toBe(true)
+
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', '__official__')
+    await nextTick()
+    expect(wrapper.text()).toContain('￥0.04')
+    expect(wrapper.text()).toContain('￥0.12')
   })
 
-  it('renders per-request pricing with the renminbi symbol', () => {
-    const requestPricing = pricing({
+  it('renders per-request pricing and switches to the channel official price', async () => {
+    const requestOfficialPricing = pricing({
       billing_mode: 'per_request',
       input_price: null,
       output_price: null,
@@ -212,8 +224,8 @@ describe('PlazaModelCard', () => {
       cache_read_price: null,
       per_request_price: 0.05
     })
-    const requestModel = model(requestPricing)
-    requestModel.pricing = requestPricing
+    const requestModel = model(pricing({ ...requestOfficialPricing, per_request_price: 0.025 }))
+    requestModel.pricing = requestOfficialPricing
     const wrapper = mountCard({
       key: 'grok:request',
       name: 'grok-request',
@@ -221,8 +233,12 @@ describe('PlazaModelCard', () => {
       offers: [{ group: group(1, 'Request'), model: requestModel }]
     })
 
-    expect(wrapper.text()).toContain('￥0.05')
+    expect(wrapper.text()).toContain('￥0.025')
     expect(wrapper.text()).toContain('modelPlaza.table.perUnitRequest')
     expect(wrapper.text()).not.toContain('$')
+
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', '__official__')
+    await nextTick()
+    expect(wrapper.text()).toContain('￥0.05')
   })
 })
