@@ -982,6 +982,13 @@ func TestExchangePendingOAuthCompletionChoiceStateDoesNotBindIdentity(t *testing
 	storedVictim, err := client.User.Get(ctx, victim.ID)
 	require.NoError(t, err)
 	require.Equal(t, "victim-user", storedVictim.Username)
+	require.Nil(t, loadUserAvatarRecord(t, client, victim.ID))
+
+	decisionCount, err := client.IdentityAdoptionDecision.Query().
+		Where(identityadoptiondecision.PendingAuthSessionIDEQ(session.ID)).
+		Count(ctx)
+	require.NoError(t, err)
+	require.Zero(t, decisionCount)
 
 	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
 	require.NoError(t, err)
