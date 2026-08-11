@@ -26,6 +26,7 @@ import type {
   SaveInstructionHash,
   SaveInstructionRiskHash,
   SaveInstructionScope,
+  SaveInstructionScopeSet,
   UpdateInstructionHash,
   UpdateInstructionV2Config,
 } from './v2Types'
@@ -35,6 +36,7 @@ const basePath = '/admin/instruction-audit'
 function normalizeInstructionHash(hash: InstructionHash): InstructionHash {
   return {
     ...hash,
+    source_user_email: hash.source_user_email || '',
     scope_ids: Array.isArray(hash.scope_ids) ? hash.scope_ids : [],
     scopes: Array.isArray(hash.scopes) ? hash.scopes : [],
   }
@@ -159,6 +161,13 @@ export const instructionAuditV2API = {
       : apiClient.post<InstructionScope>(`${basePath}/scopes`, payload)
     const { data } = await request
     return data
+  },
+  async saveScopeSet(payload: SaveInstructionScopeSet): Promise<InstructionScope[]> {
+    const { data } = await apiClient.post<InstructionScope[]>(`${basePath}/scopes/batch`, payload)
+    return data
+  },
+  async deleteScopeSet(groupId: number): Promise<void> {
+    await apiClient.delete(`${basePath}/scopes/group/${groupId}`)
   },
   async deleteScope(id: number): Promise<void> {
     await apiClient.delete(`${basePath}/scopes/${id}`)

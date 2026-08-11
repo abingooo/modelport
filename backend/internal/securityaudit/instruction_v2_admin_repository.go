@@ -11,7 +11,15 @@ import (
 )
 
 func (r *InstructionV2Repository) ListScopes(ctx context.Context) ([]InstructionV2Scope, error) {
-	rows, err := r.db.QueryContext(ctx, `
+	return listInstructionV2Scopes(ctx, r.db)
+}
+
+type instructionV2ScopeQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func listInstructionV2Scopes(ctx context.Context, queryer instructionV2ScopeQueryer) ([]InstructionV2Scope, error) {
+	rows, err := queryer.QueryContext(ctx, `
 		SELECT s.id, s.group_id, g.name, g.platform, g.status, s.client_profile_id,
 		       COALESCE(p.profile_key, ''), COALESCE(p.name, '全部客户端'), s.enabled,
 		       (s.enabled AND g.deleted_at IS NULL AND g.status = 'active'
@@ -56,9 +64,8 @@ func (r *InstructionV2Repository) SaveScope(ctx context.Context, id int64, reque
 	if id > 0 {
 		err = tx.QueryRowContext(ctx, `
 			UPDATE instruction_audit_v2_scopes
-			SET group_id = $2, client_profile_id = $3, enabled = $4,
-			    updated_by = NULLIF($5, 0), updated_at = NOW()
-			WHERE id = $1 RETURNING id`, id, request.GroupID, request.ClientProfileID, request.Enabled, actorID).Scan(&scopeID)
+			SET enabled = $2, updated_by = NULLIF($3, 0), updated_at = NOW()
+			WHERE id = $1 RETURNING id`, id, request.Enabled, actorID).Scan(&scopeID)
 	} else if request.ClientProfileID == nil {
 		err = tx.QueryRowContext(ctx, `
 			INSERT INTO instruction_audit_v2_scopes
@@ -83,19 +90,188 @@ func (r *InstructionV2Repository) SaveScope(ctx context.Context, id int64, reque
 	if err != nil {
 		return InstructionV2Scope{}, 0, err
 	}
-	if err := tx.Commit(); err != nil {
-		return InstructionV2Scope{}, 0, err
-	}
-	items, err := r.ListScopes(ctx)
+	items, err := listInstructionV2Scopes(ctx, tx)
 	if err != nil {
 		return InstructionV2Scope{}, 0, err
 	}
-	for _, item := range items {
-		if item.ID == scopeID {
-			return item, version, nil
+	var saved *InstructionV2Scope
+	for index := range items {
+		if items[index].ID == scopeID {
+			saved = &items[index]
+			break
 		}
 	}
-	return InstructionV2Scope{}, 0, sql.ErrNoRows
+	if saved == nil {
+		return InstructionV2Scope{}, 0, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return InstructionV2Scope{}, 0, err
+	}
+	return *saved, version, nil
+}
+
+func (r *InstructionV2Repository) SaveScopeSet(
+	ctx context.Context,
+	request SaveInstructionV2ScopeSetRequest,
+	actorID int64,
+) ([]InstructionV2Scope, int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var lockedGroupID int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT id FROM groups
+		WHERE id = $1 AND deleted_at IS NULL
+		FOR UPDATE`, request.GroupID).Scan(&lockedGroupID); err != nil {
+		return nil, 0, err
+	}
+	if len(request.ClientProfileIDs) > 0 {
+		var profileCount int
+		if err = tx.QueryRowContext(ctx, `
+			SELECT COUNT(*) FROM instruction_audit_v2_client_profiles
+			WHERE id = ANY($1)`, pq.Array(request.ClientProfileIDs)).Scan(&profileCount); err != nil {
+			return nil, 0, err
+		}
+		if profileCount != len(request.ClientProfileIDs) {
+			return nil, 0, errInstructionV2InvalidScopeProfile
+		}
+	}
+
+	type existingScope struct {
+		id              int64
+		clientProfileID int64
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, COALESCE(client_profile_id, 0)
+		FROM instruction_audit_v2_scopes
+		WHERE group_id = $1
+		ORDER BY id
+		FOR UPDATE`, request.GroupID)
+	if err != nil {
+		return nil, 0, err
+	}
+	existing := make([]existingScope, 0)
+	for rows.Next() {
+		var item existingScope
+		if err = rows.Scan(&item.id, &item.clientProfileID); err != nil {
+			_ = rows.Close()
+			return nil, 0, err
+		}
+		existing = append(existing, item)
+	}
+	if err = rows.Close(); err != nil {
+		return nil, 0, err
+	}
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+
+	desired := append([]int64(nil), request.ClientProfileIDs...)
+	if request.AllClients {
+		desired = append([]int64{0}, desired...)
+	}
+	desiredSet := make(map[int64]struct{}, len(desired))
+	for _, clientProfileID := range desired {
+		desiredSet[clientProfileID] = struct{}{}
+	}
+	matched := make(map[int64]struct{}, len(desired))
+	obsoleteIDs := make([]int64, 0, len(existing))
+	for _, item := range existing {
+		if _, wanted := desiredSet[item.clientProfileID]; wanted {
+			matched[item.clientProfileID] = struct{}{}
+			if _, err = tx.ExecContext(ctx, `
+				UPDATE instruction_audit_v2_scopes
+				SET enabled = $2, updated_by = NULLIF($3, 0), updated_at = NOW()
+				WHERE id = $1`, item.id, request.Enabled, actorID); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		obsoleteIDs = append(obsoleteIDs, item.id)
+	}
+	unmatchedDesired := make([]int64, 0, len(desired))
+	for _, clientProfileID := range desired {
+		if _, ok := matched[clientProfileID]; !ok {
+			unmatchedDesired = append(unmatchedDesired, clientProfileID)
+		}
+	}
+
+	for _, clientProfileID := range unmatchedDesired {
+		if clientProfileID == 0 {
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO instruction_audit_v2_scopes
+					(group_id, client_profile_id, enabled, created_by, updated_by)
+				VALUES ($1, NULL, $2, NULLIF($3, 0), NULLIF($3, 0))`,
+				request.GroupID, request.Enabled, actorID)
+		} else {
+			_, err = tx.ExecContext(ctx, `
+				INSERT INTO instruction_audit_v2_scopes
+					(group_id, client_profile_id, enabled, created_by, updated_by)
+				VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($4, 0))`,
+				request.GroupID, clientProfileID, request.Enabled, actorID)
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	if len(obsoleteIDs) > 0 {
+		if _, err = tx.ExecContext(ctx, `
+			DELETE FROM instruction_audit_v2_scopes WHERE id = ANY($1)`, pq.Array(obsoleteIDs)); err != nil {
+			return nil, 0, err
+		}
+	}
+	version, err := r.bumpConfigVersion(ctx, tx, actorID)
+	if err != nil {
+		return nil, 0, err
+	}
+	items, err := listInstructionV2Scopes(ctx, tx)
+	if err != nil {
+		return nil, 0, err
+	}
+	result := make([]InstructionV2Scope, 0, len(desired))
+	for _, item := range items {
+		if item.GroupID == request.GroupID {
+			result = append(result, item)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return result, version, nil
+}
+
+func (r *InstructionV2Repository) DeleteScopeSet(ctx context.Context, groupID, actorID int64) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var lockedGroupID int64
+	if err = tx.QueryRowContext(ctx, `
+		SELECT id FROM groups WHERE id = $1 FOR UPDATE`, groupID).Scan(&lockedGroupID); err != nil {
+		return 0, err
+	}
+	result, err := tx.ExecContext(ctx, `
+		DELETE FROM instruction_audit_v2_scopes WHERE group_id = $1`, groupID)
+	if err != nil {
+		return 0, err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return 0, sql.ErrNoRows
+	}
+	version, err := r.bumpConfigVersion(ctx, tx, actorID)
+	if err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return version, nil
 }
 
 func (r *InstructionV2Repository) DeleteScope(ctx context.Context, id, actorID int64) (int64, error) {
@@ -269,7 +445,8 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 		       CASE WHEN vault.id IS NULL THEN h.content_bytes ELSE vault.content_bytes END,
 		       CASE WHEN vault.id IS NULL THEN h.raw_storage ELSE 'full' END,
 		       CASE WHEN vault.id IS NULL THEN h.stored_bytes ELSE vault.stored_bytes END,
-		       h.ai_sampled, h.source_event_id, h.reviewer_node_id,
+		       h.ai_sampled, h.source_event_id, h.source_user_id,
+		       h.source_user_email_snapshot, h.reviewer_node_id,
 		       h.reviewer_model, h.prompt_version, h.confidence, h.review_reason,
 		       h.review_category, h.candidate_expires_at, h.created_by, h.updated_by,
 		       h.created_at, h.updated_at, h.global_trust, h.content_vault_id
@@ -289,7 +466,8 @@ func (r *InstructionV2Repository) ListHashes(ctx context.Context, page, pageSize
 			&item.ID, &item.SHA256, &item.Name, &item.Note, &item.Status, &item.Source,
 			&item.ObservedField, &item.HashAlgorithm, &item.NormalizationVersion, &item.ContentBytes,
 			&item.RawStorage, &item.StoredBytes, &item.AISampled, &item.SourceEventID,
-			&item.ReviewerNodeID, &item.ReviewerModel, &item.PromptVersion, &item.Confidence,
+			&item.SourceUserID, &item.SourceUserEmail, &item.ReviewerNodeID,
+			&item.ReviewerModel, &item.PromptVersion, &item.Confidence,
 			&item.ReviewReason, &item.ReviewCategory, &item.CandidateExpiresAt, &item.CreatedBy,
 			&item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt, &item.GlobalTrust,
 			&item.ContentVaultID,
@@ -349,7 +527,8 @@ func (r *InstructionV2Repository) GetHash(ctx context.Context, id int64) (Instru
 		       CASE WHEN vault.id IS NULL THEN h.raw_storage ELSE 'full' END,
 		       COALESCE(vault.raw_ciphertext, h.raw_ciphertext),
 		       CASE WHEN vault.id IS NULL THEN h.stored_bytes ELSE vault.stored_bytes END,
-		       h.ai_sampled, h.source_event_id, h.reviewer_node_id, h.reviewer_model,
+		       h.ai_sampled, h.source_event_id, h.source_user_id,
+		       h.source_user_email_snapshot, h.reviewer_node_id, h.reviewer_model,
 		       h.prompt_version, h.confidence, h.review_reason, h.review_category,
 		       h.candidate_expires_at, h.created_by, h.updated_by, h.created_at,
 		       h.updated_at, h.global_trust, h.content_vault_id
@@ -359,7 +538,8 @@ func (r *InstructionV2Repository) GetHash(ctx context.Context, id int64) (Instru
 		&item.ID, &item.SHA256, &item.Name, &item.Note, &item.Status, &item.Source,
 		&item.ObservedField, &item.HashAlgorithm, &item.NormalizationVersion, &item.ContentBytes,
 		&item.RawStorage, &ciphertext, &item.StoredBytes, &item.AISampled, &item.SourceEventID,
-		&item.ReviewerNodeID, &item.ReviewerModel, &item.PromptVersion, &item.Confidence,
+		&item.SourceUserID, &item.SourceUserEmail, &item.ReviewerNodeID,
+		&item.ReviewerModel, &item.PromptVersion, &item.Confidence,
 		&item.ReviewReason, &item.ReviewCategory, &item.CandidateExpiresAt, &item.CreatedBy,
 		&item.UpdatedBy, &item.CreatedAt, &item.UpdatedAt, &item.GlobalTrust,
 		&item.ContentVaultID,
@@ -497,10 +677,12 @@ func saveInstructionV2ManualHashTx(
 	err := tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_v2_hashes
 			(sha256, name, note, status, source, observed_field, content_bytes,
-			 raw_storage, raw_ciphertext, stored_bytes, candidate_expires_at,
-			 global_trust, content_vault_id, created_by, updated_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, 'unavailable', NULL, 0, NULL,
-		        $8, $9, NULLIF($10, 0), NULLIF($10, 0))
+			 raw_storage, raw_ciphertext, stored_bytes, source_event_id, source_user_id,
+			 source_user_email_snapshot, candidate_expires_at, global_trust,
+			 content_vault_id, created_by, updated_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'unavailable', NULL, 0,
+		        NULLIF($8, 0), NULLIF($9, 0), $10, NULL, $11, $12,
+		        NULLIF($13, 0), NULLIF($13, 0))
 		ON CONFLICT (sha256) DO UPDATE
 		SET name = CASE WHEN EXCLUDED.name = '' THEN instruction_audit_v2_hashes.name ELSE EXCLUDED.name END,
 		    note = CASE WHEN EXCLUDED.note = '' THEN instruction_audit_v2_hashes.note ELSE EXCLUDED.note END,
@@ -512,10 +694,12 @@ func saveInstructionV2ManualHashTx(
 		    content_vault_id = COALESCE(EXCLUDED.content_vault_id,
 		        instruction_audit_v2_hashes.content_vault_id),
 		    candidate_expires_at = NULL,
-		    updated_by = NULLIF($10, 0), updated_at = NOW()
+		    updated_by = NULLIF($13, 0), updated_at = NOW()
 		WHERE instruction_audit_v2_hashes.status <> 'revoked'
 		RETURNING id`, write.SHA256, write.Name, write.Note, write.Status, write.Source,
-		write.ObservedField, write.ContentBytes, write.GlobalTrust, vaultID, actorID).Scan(&hashID)
+		write.ObservedField, write.ContentBytes, pointerInt64Value(write.SourceEventID),
+		pointerInt64Value(write.SourceUserID), write.SourceUserEmail, write.GlobalTrust,
+		vaultID, actorID).Scan(&hashID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, errInstructionV2RevokedHash
 	}

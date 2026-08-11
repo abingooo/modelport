@@ -195,6 +195,13 @@ type SaveInstructionV2ScopeRequest struct {
 	Enabled         bool   `json:"enabled"`
 }
 
+type SaveInstructionV2ScopeSetRequest struct {
+	GroupID          int64   `json:"group_id"`
+	ClientProfileIDs []int64 `json:"client_profile_ids"`
+	AllClients       bool    `json:"all_clients"`
+	Enabled          bool    `json:"enabled"`
+}
+
 type InstructionV2UserAllowlistEntry struct {
 	ID        int64     `json:"id"`
 	UserID    int64     `json:"user_id"`
@@ -236,6 +243,8 @@ type InstructionV2Hash struct {
 	StoredBytes          int                      `json:"stored_bytes"`
 	AISampled            bool                     `json:"ai_sampled"`
 	SourceEventID        *int64                   `json:"source_event_id,omitempty"`
+	SourceUserID         *int64                   `json:"source_user_id,omitempty"`
+	SourceUserEmail      string                   `json:"source_user_email"`
 	ReviewerNodeID       *int64                   `json:"reviewer_node_id,omitempty"`
 	ReviewerModel        string                   `json:"reviewer_model"`
 	PromptVersion        string                   `json:"prompt_version"`
@@ -303,6 +312,8 @@ type InstructionV2RiskHash struct {
 	Status            string     `json:"status"`
 	Source            string     `json:"source"`
 	SourceEventID     *int64     `json:"source_event_id,omitempty"`
+	SourceUserID      *int64     `json:"source_user_id,omitempty"`
+	SourceUserEmail   string     `json:"source_user_email"`
 	ReviewerNodeID    *int64     `json:"reviewer_node_id,omitempty"`
 	ReviewerModel     string     `json:"reviewer_model"`
 	PromptVersion     string     `json:"prompt_version"`
@@ -346,29 +357,31 @@ type InstructionV2RiskActionResult struct {
 }
 
 type InstructionV2ReviewJob struct {
-	ID             int64                        `json:"id"`
-	SHA256         string                       `json:"sha256"`
-	ContentVaultID int64                        `json:"content_vault_id"`
-	SelectedField  string                       `json:"selected_field"`
-	SourceEventID  *int64                       `json:"source_event_id,omitempty"`
-	Status         string                       `json:"status"`
-	FinalResult    string                       `json:"final_result"`
-	PassVotes      int                          `json:"pass_votes"`
-	RejectVotes    int                          `json:"reject_votes"`
-	RetryRound     int                          `json:"retry_round"`
-	NextAttemptAt  time.Time                    `json:"next_attempt_at"`
-	PromptVersion  string                       `json:"prompt_version"`
-	ReviewCriteria string                       `json:"review_criteria"`
-	ConfigVersion  int64                        `json:"config_version"`
-	ObserveOnly    bool                         `json:"observe_only"`
-	Sampled        bool                         `json:"sampled"`
-	SampleBytes    int                          `json:"sample_bytes"`
-	ContentBytes   int64                        `json:"content_bytes"`
-	LastError      string                       `json:"last_error"`
-	CompletedAt    *time.Time                   `json:"completed_at,omitempty"`
-	CreatedAt      time.Time                    `json:"created_at"`
-	UpdatedAt      time.Time                    `json:"updated_at"`
-	Attempts       []InstructionV2ReviewAttempt `json:"attempts,omitempty"`
+	ID              int64                        `json:"id"`
+	SHA256          string                       `json:"sha256"`
+	ContentVaultID  int64                        `json:"content_vault_id"`
+	SelectedField   string                       `json:"selected_field"`
+	SourceEventID   *int64                       `json:"source_event_id,omitempty"`
+	SourceUserID    *int64                       `json:"source_user_id,omitempty"`
+	SourceUserEmail string                       `json:"source_user_email"`
+	Status          string                       `json:"status"`
+	FinalResult     string                       `json:"final_result"`
+	PassVotes       int                          `json:"pass_votes"`
+	RejectVotes     int                          `json:"reject_votes"`
+	RetryRound      int                          `json:"retry_round"`
+	NextAttemptAt   time.Time                    `json:"next_attempt_at"`
+	PromptVersion   string                       `json:"prompt_version"`
+	ReviewCriteria  string                       `json:"review_criteria"`
+	ConfigVersion   int64                        `json:"config_version"`
+	ObserveOnly     bool                         `json:"observe_only"`
+	Sampled         bool                         `json:"sampled"`
+	SampleBytes     int                          `json:"sample_bytes"`
+	ContentBytes    int64                        `json:"content_bytes"`
+	LastError       string                       `json:"last_error"`
+	CompletedAt     *time.Time                   `json:"completed_at,omitempty"`
+	CreatedAt       time.Time                    `json:"created_at"`
+	UpdatedAt       time.Time                    `json:"updated_at"`
+	Attempts        []InstructionV2ReviewAttempt `json:"attempts,omitempty"`
 }
 
 type InstructionV2ReviewAttempt struct {
@@ -649,12 +662,13 @@ type instructionV2AIAttempt struct {
 }
 
 type instructionV2PersistEvent struct {
-	Event     InstructionV2Event
-	Evidence  []instructionV2EvidenceWrite
-	Reviews   []instructionV2AIAttempt
-	Risk      *instructionV2RiskWrite
-	Trusted   *instructionV2TrustedWrite
-	ReviewJob *instructionV2ReviewJobWrite
+	Event       InstructionV2Event
+	Evidence    []instructionV2EvidenceWrite
+	Reviews     []instructionV2AIAttempt
+	Risk        *instructionV2RiskWrite
+	Trusted     *instructionV2TrustedWrite
+	ReviewJob   *instructionV2ReviewJobWrite
+	ReviewReuse *instructionV2ReviewReuseWrite
 }
 
 type instructionV2EvidenceWrite struct {
@@ -668,18 +682,21 @@ type instructionV2EvidenceWrite struct {
 }
 
 type instructionV2ManualHashWrite struct {
-	SHA256        string
-	Name          string
-	Note          string
-	Status        string
-	Source        string
-	ContentBytes  int64
-	RawStorage    string
-	RawCiphertext []byte
-	StoredBytes   int
-	ScopeIDs      []int64
-	GlobalTrust   bool
-	ObservedField string
+	SHA256          string
+	Name            string
+	Note            string
+	Status          string
+	Source          string
+	ContentBytes    int64
+	RawStorage      string
+	RawCiphertext   []byte
+	StoredBytes     int
+	ScopeIDs        []int64
+	GlobalTrust     bool
+	ObservedField   string
+	SourceEventID   *int64
+	SourceUserID    *int64
+	SourceUserEmail string
 }
 
 type instructionV2VaultWrite struct {
@@ -691,40 +708,46 @@ type instructionV2VaultWrite struct {
 }
 
 type instructionV2RiskWrite struct {
-	Vault          instructionV2VaultWrite
-	Source         string
-	ObservedField  string
-	ReviewerNodeID *int64
-	ReviewerModel  string
-	PromptVersion  string
-	Confidence     float64
-	ReviewReason   string
-	ReviewCategory string
+	Vault           instructionV2VaultWrite
+	Source          string
+	ObservedField   string
+	ReviewerNodeID  *int64
+	ReviewerModel   string
+	PromptVersion   string
+	Confidence      float64
+	ReviewReason    string
+	ReviewCategory  string
+	SourceUserID    *int64
+	SourceUserEmail string
 }
 
 type instructionV2TrustedWrite struct {
-	Vault          instructionV2VaultWrite
-	Source         string
-	ObservedField  string
-	ReviewerNodeID *int64
-	ReviewerModel  string
-	PromptVersion  string
-	Confidence     float64
-	ReviewReason   string
-	ReviewCategory string
-	GlobalTrust    bool
-	ScopeIDs       []int64
+	Vault           instructionV2VaultWrite
+	Source          string
+	ObservedField   string
+	ReviewerNodeID  *int64
+	ReviewerModel   string
+	PromptVersion   string
+	Confidence      float64
+	ReviewReason    string
+	ReviewCategory  string
+	GlobalTrust     bool
+	ScopeIDs        []int64
+	SourceUserID    *int64
+	SourceUserEmail string
 }
 
 type instructionV2ReviewJobWrite struct {
-	Vault          instructionV2VaultWrite
-	SelectedField  string
-	PromptVersion  string
-	ReviewCriteria string
-	ConfigVersion  int64
-	ObserveOnly    bool
-	Sampled        bool
-	SampleBytes    int
+	Vault           instructionV2VaultWrite
+	SelectedField   string
+	PromptVersion   string
+	ReviewCriteria  string
+	ConfigVersion   int64
+	ObserveOnly     bool
+	Sampled         bool
+	SampleBytes     int
+	SourceUserID    *int64
+	SourceUserEmail string
 }
 
 type instructionV2ReviewReuse struct {
@@ -733,6 +756,11 @@ type instructionV2ReviewReuse struct {
 	SourceDecision      string
 	Requeued            bool
 	ResetForEnforcement bool
+}
+
+type instructionV2ReviewReuseWrite struct {
+	Reuse instructionV2ReviewReuse
+	Job   instructionV2ReviewJobWrite
 }
 
 type instructionV2ClaimedReviewJob struct {

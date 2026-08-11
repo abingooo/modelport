@@ -43,12 +43,16 @@ describe('instruction audit V2 API', () => {
   })
 
   it('uses create and update contracts for scopes, clients, hashes, and AI nodes', async () => {
+    await instructionAuditV2API.saveScopeSet({ group_id: 7, client_profile_ids: [2, 3], all_clients: false, enabled: true })
+    await instructionAuditV2API.deleteScopeSet(7)
     await instructionAuditV2API.saveScope(null, { group_id: 7, client_profile_id: null, enabled: true })
     await instructionAuditV2API.saveScope(9, { group_id: 7, client_profile_id: 2, enabled: false })
     await instructionAuditV2API.saveClientProfile(null, { profile_key: 'custom', name: 'Custom', description: '', priority: 10, enabled: true, matchers: [] })
     await instructionAuditV2API.updateHash(5, { status: 'active', scope_ids: [9], set_scopes: true })
     await instructionAuditV2API.testAINode(6)
 
+    expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/scopes/batch', { group_id: 7, client_profile_ids: [2, 3], all_clients: false, enabled: true })
+    expect(client.delete).toHaveBeenCalledWith('/admin/instruction-audit/scopes/group/7')
     expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/scopes', { group_id: 7, client_profile_id: null, enabled: true })
     expect(client.put).toHaveBeenCalledWith('/admin/instruction-audit/scopes/9', { group_id: 7, client_profile_id: 2, enabled: false })
     expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/client-profiles', expect.objectContaining({ profile_key: 'custom' }))
@@ -65,6 +69,7 @@ describe('instruction audit V2 API', () => {
 
     expect(page.items[0].scope_ids).toEqual([])
     expect(page.items[0].scopes).toEqual([])
+    expect(page.items[0].source_user_email).toBe('')
   })
 
   it('manages the global user allowlist without model bindings', async () => {

@@ -431,6 +431,28 @@ func (h *InstructionV2AdminHandler) SaveScope(c *gin.Context) {
 	response.Success(c, item)
 }
 
+func (h *InstructionV2AdminHandler) SaveScopeSet(c *gin.Context) {
+	var request SaveInstructionV2ScopeSetRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		response.ErrorFrom(c, infraerrors.BadRequest("instruction_audit_v2_invalid_scope", "审核范围请求无效"))
+		return
+	}
+	items, err := h.service.SaveAdminScopeSet(c.Request.Context(), request, adminID(c))
+	if err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"group_id": request.GroupID, "client_profile_count": len(request.ClientProfileIDs),
+			"all_clients": request.AllClients,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{
+		"group_id": request.GroupID, "scope_count": len(items),
+		"client_profile_count": len(request.ClientProfileIDs), "all_clients": request.AllClients,
+	})
+	response.Success(c, items)
+}
+
 func (h *InstructionV2AdminHandler) DeleteScope(c *gin.Context) {
 	id, ok := instructionIDParam(c, "scope")
 	if !ok {
@@ -442,6 +464,21 @@ func (h *InstructionV2AdminHandler) DeleteScope(c *gin.Context) {
 		return
 	}
 	h.audit(c, "success", "", map[string]any{"scope_id": id})
+	response.Success(c, gin.H{"deleted": true})
+}
+
+func (h *InstructionV2AdminHandler) DeleteScopeSet(c *gin.Context) {
+	groupID, ok := instructionIDParam(c, "group")
+	if !ok {
+		return
+	}
+	err := h.service.DeleteAdminScopeSet(c.Request.Context(), groupID, adminID(c))
+	if err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{"group_id": groupID})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{"group_id": groupID})
 	response.Success(c, gin.H{"deleted": true})
 }
 

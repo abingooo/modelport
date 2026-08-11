@@ -153,6 +153,8 @@ func TestInstructionAuditMutationRoutesHaveStableActionsAndOmitBodies(t *testing
 		"PUT /api/v1/admin/instruction-audit/hashes/:id":                  "admin.instruction_audit.hash.update",
 		"DELETE /api/v1/admin/instruction-audit/hashes/:id":               "admin.instruction_audit.hash.delete",
 		"POST /api/v1/admin/instruction-audit/scopes":                     "admin.instruction_audit.scope.create",
+		"POST /api/v1/admin/instruction-audit/scopes/batch":               "admin.instruction_audit.scope_set.update",
+		"DELETE /api/v1/admin/instruction-audit/scopes/group/:id":         "admin.instruction_audit.scope_set.delete",
 		"PUT /api/v1/admin/instruction-audit/scopes/:id":                  "admin.instruction_audit.scope.update",
 		"DELETE /api/v1/admin/instruction-audit/scopes/:id":               "admin.instruction_audit.scope.delete",
 		"POST /api/v1/admin/instruction-audit/client-profiles":            "admin.instruction_audit.client_profile.create",
@@ -191,6 +193,26 @@ func TestInstructionAuditSensitiveReadsHaveStableActions(t *testing.T) {
 	for route, action := range expected {
 		require.Equal(t, action, auditSensitiveReads[route])
 	}
+}
+
+func TestInstructionAuditScopeSetDetailsAreAllowlistedWithoutClientIDs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+
+	SetAuditExtra(context, map[string]any{
+		"group_id": int64(17), "scope_count": 3, "all_clients": false,
+		"client_profile_count": 3, "client_profile_ids": []int64{11, 12, 13},
+	})
+
+	value, ok := context.Get(auditCtxKeyExtra)
+	require.True(t, ok)
+	details, ok := value.(map[string]any)
+	require.True(t, ok)
+	require.EqualValues(t, 17, details["group_id"])
+	require.EqualValues(t, 3, details["scope_count"])
+	require.Equal(t, false, details["all_clients"])
+	require.EqualValues(t, 3, details["client_profile_count"])
+	require.NotContains(t, details, "client_profile_ids")
 }
 
 func TestPasskeyLoginAuditUsesCanonicalLoginActionAndOmitsCredentialBody(t *testing.T) {

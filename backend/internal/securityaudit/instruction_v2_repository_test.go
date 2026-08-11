@@ -3,6 +3,7 @@ package securityaudit
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,186 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
 )
+
+func TestInstructionV2RepositorySavesScopeSetAtomicallyAndPreservesOnlyExactMatchID(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	now := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id FROM groups.*WHERE id = \$1.*FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\) FROM instruction_audit_v2_client_profiles.*WHERE id = ANY\(\$1\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectQuery(`(?s)SELECT id, COALESCE\(client_profile_id, 0\).*WHERE group_id = \$1.*FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "client_profile_id"}).
+			AddRow(int64(10), int64(0)).
+			AddRow(int64(11), int64(2)).
+			AddRow(int64(13), int64(3)))
+	mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_scopes.*SET enabled = \$2.*WHERE id = \$1`).
+		WithArgs(int64(10), true, int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_scopes.*SET enabled = \$2.*WHERE id = \$1`).
+		WithArgs(int64(11), true, int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`(?s)INSERT INTO instruction_audit_v2_scopes.*VALUES \(\$1, \$2, \$3`).
+		WithArgs(int64(7), int64(4), true, int64(9)).
+		WillReturnResult(sqlmock.NewResult(12, 1))
+	mock.ExpectExec(`DELETE FROM instruction_audit_v2_scopes WHERE id = ANY\(\$1\)`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_config.*RETURNING config_version`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"config_version"}).AddRow(int64(22)))
+	mock.ExpectQuery(`(?s)SELECT s.id, s.group_id, g.name, g.platform, g.status, s.client_profile_id`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "group_id", "group_name", "group_platform", "group_status", "client_profile_id",
+			"client_profile_key", "client_profile_name", "enabled", "effective", "created_by", "updated_by",
+			"created_at", "updated_at",
+		}).
+			AddRow(int64(10), int64(7), "group", "openai", "active", nil, "", "全部客户端", true, true, nil, int64(9), now, now).
+			AddRow(int64(11), int64(7), "group", "openai", "active", int64(2), "codex", "Codex", true, true, nil, int64(9), now, now).
+			AddRow(int64(12), int64(7), "group", "openai", "active", int64(4), "other", "Other", true, true, int64(9), int64(9), now, now))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	items, version, err := NewInstructionV2Repository(db).SaveScopeSet(context.Background(), SaveInstructionV2ScopeSetRequest{
+		GroupID: 7, ClientProfileIDs: []int64{2, 4}, AllClients: true, Enabled: true,
+	}, 9)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(22), version)
+	require.Len(t, items, 3)
+	require.Equal(t, int64(10), items[0].ID)
+	require.Nil(t, items[0].ClientProfileID)
+	require.Equal(t, int64(11), items[1].ID)
+	require.Equal(t, int64(2), *items[1].ClientProfileID)
+	require.Equal(t, int64(12), items[2].ID)
+	require.Equal(t, int64(4), *items[2].ClientProfileID)
+}
+
+func TestInstructionV2RepositoryScopeUpdateCannotMoveIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	now := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_scopes.*SET enabled = \$2.*WHERE id = \$1 RETURNING id`).
+		WithArgs(int64(10), false, int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(10)))
+	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_config.*RETURNING config_version`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"config_version"}).AddRow(int64(23)))
+	mock.ExpectQuery(`(?s)SELECT s.id, s.group_id, g.name, g.platform, g.status, s.client_profile_id`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "group_id", "group_name", "group_platform", "group_status", "client_profile_id",
+			"client_profile_key", "client_profile_name", "enabled", "effective", "created_by", "updated_by",
+			"created_at", "updated_at",
+		}).AddRow(int64(10), int64(7), "group", "openai", "active", int64(2), "codex", "Codex", false, false, nil, int64(9), now, now))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	profileID := int64(99)
+	item, version, err := NewInstructionV2Repository(db).SaveScope(context.Background(), 10, SaveInstructionV2ScopeRequest{
+		GroupID: 88, ClientProfileID: &profileID, Enabled: false,
+	}, 9)
+	require.NoError(t, err)
+	require.Equal(t, int64(23), version)
+	require.Equal(t, int64(7), item.GroupID)
+	require.Equal(t, int64(2), *item.ClientProfileID)
+}
+
+func TestInstructionV2ServiceRejectsScopeIdentityMutation(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+	now := time.Date(2026, 8, 11, 8, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`(?s)SELECT s.id, s.group_id, g.name, g.platform, g.status, s.client_profile_id`).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "group_id", "group_name", "group_platform", "group_status", "client_profile_id",
+			"client_profile_key", "client_profile_name", "enabled", "effective", "created_by", "updated_by",
+			"created_at", "updated_at",
+		}).AddRow(int64(10), int64(7), "group", "openai", "active", int64(2), "codex", "Codex", true, true, nil, nil, now, now))
+	mock.ExpectClose()
+
+	profileID := int64(3)
+	service := &InstructionV2Service{repository: NewInstructionV2Repository(db)}
+	_, err = service.SaveAdminScope(context.Background(), 10, SaveInstructionV2ScopeRequest{
+		GroupID: 7, ClientProfileID: &profileID, Enabled: true,
+	}, 9)
+	require.Equal(t, "instruction_audit_v2_scope_identity_immutable", infraErrorReason(err))
+}
+
+func TestInstructionV2RepositoryRollsBackEntireScopeSet(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id FROM groups.*FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\) FROM instruction_audit_v2_client_profiles`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
+	mock.ExpectQuery(`(?s)SELECT id, COALESCE\(client_profile_id, 0\).*FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "client_profile_id"}).AddRow(int64(11), int64(3)))
+	mock.ExpectExec(`(?s)INSERT INTO instruction_audit_v2_scopes`).
+		WithArgs(int64(7), int64(2), true, int64(9)).
+		WillReturnError(errors.New("insert failed"))
+	mock.ExpectRollback()
+	mock.ExpectClose()
+
+	_, _, err = NewInstructionV2Repository(db).SaveScopeSet(context.Background(), SaveInstructionV2ScopeSetRequest{
+		GroupID: 7, ClientProfileIDs: []int64{2, 4}, Enabled: true,
+	}, 9)
+
+	require.EqualError(t, err, "insert failed")
+}
+
+func TestInstructionV2RepositoryDeletesGroupScopeSetAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, db.Close())
+		require.NoError(t, mock.ExpectationsWereMet())
+	})
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id FROM groups WHERE id = \$1 FOR UPDATE`).
+		WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(7)))
+	mock.ExpectExec(`DELETE FROM instruction_audit_v2_scopes WHERE group_id = \$1`).
+		WithArgs(int64(7)).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_config.*RETURNING config_version`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"config_version"}).AddRow(int64(23)))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	version, err := NewInstructionV2Repository(db).DeleteScopeSet(context.Background(), 7, 9)
+
+	require.NoError(t, err)
+	require.Equal(t, int64(23), version)
+}
 
 func TestInstructionV2RepositoryListHashesUsesVaultPlaintextMetadata(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -23,7 +204,8 @@ func TestInstructionV2RepositoryListHashesUsesVaultPlaintextMetadata(t *testing.
 	columns := []string{
 		"id", "sha256", "name", "note", "status", "source", "observed_field",
 		"hash_algorithm", "normalization_version", "content_bytes", "raw_storage",
-		"stored_bytes", "ai_sampled", "source_event_id", "reviewer_node_id",
+		"stored_bytes", "ai_sampled", "source_event_id", "source_user_id",
+		"source_user_email_snapshot", "reviewer_node_id",
 		"reviewer_model", "prompt_version", "confidence", "review_reason",
 		"review_category", "candidate_expires_at", "created_by", "updated_by",
 		"created_at", "updated_at", "global_trust", "content_vault_id",
@@ -34,10 +216,12 @@ func TestInstructionV2RepositoryListHashesUsesVaultPlaintextMetadata(t *testing.
 		WithArgs(20, 0).
 		WillReturnRows(sqlmock.NewRows(columns).
 			AddRow(int64(11), strings.Repeat("a", 64), "vault-backed", "", "active", "manual", "instructions",
-				"sha256", "identity_utf8_v1", int64(42), "full", 58, false, nil, nil,
+				"sha256", "identity_utf8_v1", int64(42), "full", 58, false,
+				int64(71), int64(81), "source@example.test", nil,
 				"", "", nil, "", "", nil, nil, nil, createdAt, createdAt, true, int64(91)).
 			AddRow(int64(12), strings.Repeat("b", 64), "digest-only", "", "active", "import", "",
-				"sha256", "identity_utf8_v1", int64(0), "unavailable", 0, false, nil, nil,
+				"sha256", "identity_utf8_v1", int64(0), "unavailable", 0, false,
+				nil, nil, "", nil,
 				"", "", nil, "", "", nil, nil, nil, createdAt, createdAt, true, nil))
 	mock.ExpectQuery(`(?s)SELECT hs.hash_id, s.id, s.group_id.*WHERE hs.hash_id = ANY\(\$1\)`).
 		WithArgs(sqlmock.AnyArg()).
@@ -56,6 +240,9 @@ func TestInstructionV2RepositoryListHashesUsesVaultPlaintextMetadata(t *testing.
 	require.Equal(t, 58, page.Items[0].StoredBytes)
 	require.NotNil(t, page.Items[0].ContentVaultID)
 	require.Equal(t, int64(91), *page.Items[0].ContentVaultID)
+	require.Equal(t, int64(71), *page.Items[0].SourceEventID)
+	require.Equal(t, int64(81), *page.Items[0].SourceUserID)
+	require.Equal(t, "source@example.test", page.Items[0].SourceUserEmail)
 	require.Equal(t, "unavailable", page.Items[1].RawStorage)
 	require.Zero(t, page.Items[1].StoredBytes)
 	require.Nil(t, page.Items[1].ContentVaultID)
@@ -70,13 +257,10 @@ func TestInstructionV2RepositoryResumesFailedReviewJobBySHA(t *testing.T) {
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
 		WithArgs(digest).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*FOR UPDATE OF job`).
+	mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*WHERE job.sha256 = \$1`).
 		WithArgs(digest).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "observe_only", "decision"}).
 			AddRow(int64(41), "failed", false, "allow"))
-	mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET status = 'retry'.*WHERE id = \$1`).
-		WithArgs(int64(41)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
@@ -105,7 +289,7 @@ func TestInstructionV2RepositoryReusesProcessingReviewWithoutChangingLease(t *te
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
 		WithArgs(digest).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*FOR UPDATE OF job`).
+	mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*WHERE job.sha256 = \$1`).
 		WithArgs(digest).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "observe_only", "decision"}).
 			AddRow(int64(42), "processing", false, "block"))
@@ -135,16 +319,10 @@ func TestInstructionV2RepositoryResetsObserveReviewForEnforcement(t *testing.T) 
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
 		WithArgs(digest).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*FOR UPDATE OF job`).
+	mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*WHERE job.sha256 = \$1`).
 		WithArgs(digest).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "status", "observe_only", "decision"}).
 			AddRow(int64(43), "completed", true, "allow"))
-	mock.ExpectExec(`DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = \$1`).
-		WithArgs(int64(43)).
-		WillReturnResult(sqlmock.NewResult(0, 3))
-	mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET selected_field = \$2, status = 'pending'.*WHERE id = \$1`).
-		WithArgs(int64(43), "instructions", "prompt-v2", "criteria-v2", int64(2), false, 12, int64(12)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectClose()
 
@@ -154,6 +332,7 @@ func TestInstructionV2RepositoryResetsObserveReviewForEnforcement(t *testing.T) 
 			Vault:         instructionV2VaultWrite{SHA256: digest, ContentBytes: 12},
 			SelectedField: "instructions", PromptVersion: "prompt-v2",
 			ReviewCriteria: "criteria-v2", ConfigVersion: 2, SampleBytes: 12,
+			SourceUserID: instructionV2TestInt64Pointer(55), SourceUserEmail: "source@example.test",
 		},
 	)
 
@@ -162,6 +341,104 @@ func TestInstructionV2RepositoryResetsObserveReviewForEnforcement(t *testing.T) 
 	require.Equal(t, "pending", result.Status)
 	require.True(t, result.ResetForEnforcement)
 	require.False(t, result.Requeued)
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInstructionV2RepositoryPersistsEventAndObserveResetAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	digest := strings.Repeat("d", 64)
+	userID := int64(55)
+	jobID := int64(43)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
+		WithArgs(digest).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)INSERT INTO instruction_audit_v2_events.*RETURNING id`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(91)))
+	mock.ExpectQuery(`(?s)SELECT status, observe_only.*WHERE id = \$1 AND sha256 = \$2.*FOR UPDATE`).
+		WithArgs(jobID, digest).
+		WillReturnRows(sqlmock.NewRows([]string{"status", "observe_only"}).AddRow("completed", true))
+	mock.ExpectExec(`DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = \$1`).
+		WithArgs(jobID).
+		WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET selected_field = \$2, source_event_id = \$3.*status = 'pending'.*WHERE id = \$1`).
+		WithArgs(jobID, "instructions", int64(91), userID, "source@example.test", "prompt-v2", "criteria-v2", int64(2), false, 12, int64(12)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE instruction_audit_v2_events SET review_job_id = \$2 WHERE id = \$1`).
+		WithArgs(int64(91), jobID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	repository := NewInstructionV2Repository(db)
+	result, err := repository.PersistInstructionV2Event(context.Background(), instructionV2PersistEvent{
+		Event: InstructionV2Event{ReviewJobID: &jobID, UserID: &userID, UserEmail: "source@example.test"},
+		ReviewReuse: &instructionV2ReviewReuseWrite{
+			Reuse: instructionV2ReviewReuse{JobID: jobID, ResetForEnforcement: true},
+			Job: instructionV2ReviewJobWrite{
+				Vault:         instructionV2VaultWrite{SHA256: digest, ContentBytes: 12},
+				SelectedField: "instructions", PromptVersion: "prompt-v2",
+				ReviewCriteria: "criteria-v2", ConfigVersion: 2, SampleBytes: 12,
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, int64(91), result.EventID)
+	require.NotNil(t, result.JobID)
+	require.Equal(t, jobID, *result.JobID)
+	require.NoError(t, db.Close())
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestInstructionV2RepositoryLocksReviewJobBeforeUpdatingVault(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	digest := strings.Repeat("e", 64)
+	jobID := int64(44)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
+		WithArgs(digest).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)INSERT INTO instruction_audit_v2_events.*RETURNING id`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(92)))
+	mock.ExpectQuery(`(?s)SELECT id, observe_only.*WHERE sha256 = \$1.*FOR UPDATE`).
+		WithArgs(digest).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "observe_only"}).AddRow(jobID, true))
+	mock.ExpectQuery(`(?s)INSERT INTO instruction_audit_v2_content_vault.*ON CONFLICT.*RETURNING id`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(82)))
+	mock.ExpectExec(`DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = \$1`).
+		WithArgs(jobID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET content_vault_id = \$2.*status = 'pending'.*WHERE id = \$1`).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE instruction_audit_v2_events SET review_job_id = \$2 WHERE id = \$1`).
+		WithArgs(int64(92), jobID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectClose()
+
+	result, err := NewInstructionV2Repository(db).PersistInstructionV2Event(
+		context.Background(),
+		instructionV2PersistEvent{
+			Event: InstructionV2Event{},
+			ReviewJob: &instructionV2ReviewJobWrite{
+				Vault: instructionV2VaultWrite{
+					SHA256: digest, RawCiphertext: []byte("encrypted"),
+					ContentBytes: 12, StoredBytes: 12,
+				},
+				SelectedField: "instructions", PromptVersion: "prompt-v2",
+				ReviewCriteria: "criteria-v2", ConfigVersion: 2, SampleBytes: 12,
+			},
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result.JobID)
+	require.Equal(t, jobID, *result.JobID)
 	require.NoError(t, db.Close())
 	require.NoError(t, mock.ExpectationsWereMet())
 }

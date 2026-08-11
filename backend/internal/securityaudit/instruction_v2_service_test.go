@@ -240,19 +240,30 @@ func TestInstructionV2ServiceReusesReviewJobBeforeSyncAI(t *testing.T) {
 			mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
 				WithArgs(digest).
 				WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*FOR UPDATE OF job`).
+			mock.ExpectQuery(`(?s)SELECT job.id, job.status, job.observe_only.*WHERE job.sha256 = \$1`).
 				WithArgs(digest).
 				WillReturnRows(sqlmock.NewRows([]string{"id", "status", "observe_only", "decision"}).
 					AddRow(int64(71), test.jobStatus, false, test.sourceDecision))
-			if test.wantRequeue {
-				mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET status = 'retry'.*WHERE id = \$1`).
-					WithArgs(int64(71)).
-					WillReturnResult(sqlmock.NewResult(0, 1))
-			}
 			mock.ExpectCommit()
 			mock.ExpectBegin()
+			if test.wantRequeue {
+				mock.ExpectExec(`SELECT pg_advisory_xact_lock\(hashtext\(\$1\)\)`).
+					WithArgs(digest).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
 			mock.ExpectQuery(`(?s)INSERT INTO instruction_audit_v2_events.*RETURNING id`).
 				WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(91)))
+			if test.wantRequeue {
+				mock.ExpectQuery(`(?s)SELECT status, observe_only.*WHERE id = \$1 AND sha256 = \$2.*FOR UPDATE`).
+					WithArgs(int64(71), digest).
+					WillReturnRows(sqlmock.NewRows([]string{"status", "observe_only"}).AddRow("failed", false))
+				mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_review_jobs.*SET source_event_id = \$2.*status = 'retry'.*WHERE id = \$1`).
+					WithArgs(int64(71), int64(91), int64(0), "").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec(`UPDATE instruction_audit_v2_events SET review_job_id = \$2 WHERE id = \$1`).
+					WithArgs(int64(91), int64(71)).
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
 			mock.ExpectCommit()
 			mock.ExpectClose()
 
