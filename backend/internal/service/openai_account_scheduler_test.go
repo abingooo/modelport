@@ -147,11 +147,16 @@ func (c schedulerTestConcurrencyCache) GetAccountWaitingCount(ctx context.Contex
 }
 
 type schedulerTestGatewayCache struct {
-	sessionBindings map[string]int64
-	deletedSessions map[string]int
+	sessionBindings   map[string]int64
+	deletedSessions   map[string]int
+	refreshedSessions map[string]int
+	getErr            error
 }
 
 func (c *schedulerTestGatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
+	if c.getErr != nil {
+		return 0, c.getErr
+	}
 	if id, ok := c.sessionBindings[sessionHash]; ok {
 		return id, nil
 	}
@@ -167,6 +172,10 @@ func (c *schedulerTestGatewayCache) SetSessionAccountID(ctx context.Context, gro
 }
 
 func (c *schedulerTestGatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
+	if c.refreshedSessions == nil {
+		c.refreshedSessions = make(map[string]int)
+	}
+	c.refreshedSessions[sessionHash]++
 	return nil
 }
 
@@ -179,6 +188,20 @@ func (c *schedulerTestGatewayCache) DeleteSessionAccountID(ctx context.Context, 
 	}
 	c.deletedSessions[sessionHash]++
 	delete(c.sessionBindings, sessionHash)
+	return nil
+}
+
+func (c *schedulerTestGatewayCache) SetGrokVideoPendingBilling(_ context.Context, _ string, _ []byte, _ time.Duration) error {
+	return nil
+}
+func (c *schedulerTestGatewayCache) GetGrokVideoPendingBilling(_ context.Context, _ string) ([]byte, error) {
+	return nil, nil
+}
+func (c *schedulerTestGatewayCache) ClaimGrokVideoBilled(_ context.Context, _ string, _ time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (c *schedulerTestGatewayCache) ReleaseGrokVideoBilled(_ context.Context, _ string) error {
 	return nil
 }
 
@@ -2142,6 +2165,177 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionSticky(t *testin
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_HardStickyDoesNotRefreshOrEscape(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	ctx := WithGrokVoiceHardAccountAffinity(context.Background())
+	groupID := int64(10010)
+	account := Account{
+		ID:          20010,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+	}
+	cacheKey := "openai:hard_sticky_success"
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{cacheKey: account.ID}}
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
+	cfg.Gateway.OpenAIScheduler.StickyEscapeTTFTMs = 1
+	cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 0.01
+	stats := newOpenAIAccountRuntimeStats()
+	slowTTFT := 20_000
+	for i := 0; i < 5; i++ {
+		stats.report(account.ID, false, &slowTTFT)
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              cache,
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+		openaiAccountStats: stats,
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(
+		ctx, &groupID, "", "hard_sticky_success", "gpt-5.1", nil,
+		OpenAIUpstreamTransportAny, false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, account.ID, selection.Account.ID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.Zero(t, cache.refreshedSessions[cacheKey], "hard binding TTL must not be refreshed")
+	require.Zero(t, cache.deletedSessions[cacheKey], "hard binding must not be deleted")
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_HardStickyUnavailableDoesNotFailOver(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	groupID := int64(10011)
+	const (
+		boundID    int64 = 20011
+		fallbackID int64 = 20012
+	)
+	accounts := []Account{
+		{ID: boundID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusError, Schedulable: false, Concurrency: 1, GroupIDs: []int64{groupID}},
+		{ID: fallbackID, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{groupID}},
+	}
+	cacheKey := "openai:hard_sticky_unavailable"
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{cacheKey: boundID}}
+	acquiredIDs := make([]int64, 0)
+	svc := &OpenAIGatewayService{
+		accountRepo:      schedulerTestOpenAIAccountRepo{accounts: accounts},
+		cache:            cache,
+		cfg:              &config.Config{},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("false"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquiredIDs: &acquiredIDs,
+		}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(
+		WithGrokVoiceHardAccountAffinity(context.Background()),
+		&groupID, "", "hard_sticky_unavailable", "gpt-5.1", nil,
+		OpenAIUpstreamTransportAny, false,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, selection)
+	require.Equal(t, boundID, cache.sessionBindings[cacheKey])
+	require.Zero(t, cache.deletedSessions[cacheKey], "unavailable hard binding must be preserved")
+	require.Zero(t, cache.refreshedSessions[cacheKey], "unavailable hard binding TTL must not be refreshed")
+	require.NotContains(t, acquiredIDs, fallbackID, "hard affinity must not escape to another account")
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_HardStickyExcludedDoesNotFailOver(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	groupID := int64(10012)
+	bound := Account{ID: 20021, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{groupID}}
+	fallback := Account{ID: 20022, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{groupID}}
+	cacheKey := "openai:hard_sticky_excluded"
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{cacheKey: bound.ID}}
+	acquiredIDs := make([]int64, 0)
+	svc := &OpenAIGatewayService{
+		accountRepo:      schedulerTestOpenAIAccountRepo{accounts: []Account{bound, fallback}},
+		cache:            cache,
+		cfg:              &config.Config{},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquiredIDs: &acquiredIDs,
+		}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(
+		WithGrokVoiceHardAccountAffinity(context.Background()),
+		&groupID, "", "hard_sticky_excluded", "gpt-5.1",
+		map[int64]struct{}{bound.ID: {}}, OpenAIUpstreamTransportAny, false,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, selection)
+	require.Equal(t, bound.ID, cache.sessionBindings[cacheKey])
+	require.Empty(t, acquiredIDs)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_HardStickyMissingBindingDoesNotSelect(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	groupID := int64(10013)
+	fallback := Account{ID: 20031, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{groupID}}
+	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{}}
+	acquiredIDs := make([]int64, 0)
+	svc := &OpenAIGatewayService{
+		accountRepo:      schedulerTestOpenAIAccountRepo{accounts: []Account{fallback}},
+		cache:            cache,
+		cfg:              &config.Config{},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("false"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquiredIDs: &acquiredIDs,
+		}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(
+		WithGrokVoiceHardAccountAffinity(context.Background()),
+		&groupID, "", "hard_sticky_disappeared", "gpt-5.1", nil,
+		OpenAIUpstreamTransportAny, false,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, selection)
+	require.Empty(t, acquiredIDs, "a disappeared hard binding must not fall through to load balance")
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_HardStickyLookupFailureDoesNotSelect(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	groupID := int64(10014)
+	fallback := Account{ID: 20041, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{groupID}}
+	cache := &schedulerTestGatewayCache{getErr: errors.New("redis unavailable")}
+	acquiredIDs := make([]int64, 0)
+	svc := &OpenAIGatewayService{
+		accountRepo:      schedulerTestOpenAIAccountRepo{accounts: []Account{fallback}},
+		cache:            cache,
+		cfg:              &config.Config{},
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("false"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquiredIDs: &acquiredIDs,
+		}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(
+		WithGrokVoiceHardAccountAffinity(context.Background()),
+		&groupID, "", "hard_sticky_lookup_failure", "gpt-5.1", nil,
+		OpenAIUpstreamTransportAny, false,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.Nil(t, selection)
+	require.Empty(t, acquiredIDs, "a hard-binding lookup failure must not fall through to load balance")
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyBusyKeepsSticky(t *testing.T) {

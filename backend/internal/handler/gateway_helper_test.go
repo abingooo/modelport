@@ -145,6 +145,35 @@ func TestWrapReleaseOnDone_ConcurrentCalls(t *testing.T) {
 	}
 }
 
+func TestWrapResponsesSlotRelease_DetachedUpstreamIgnoresRequestCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var releaseCount int32
+	release := wrapResponsesSlotRelease(ctx, func() {
+		atomic.AddInt32(&releaseCount, 1)
+	}, false)
+
+	cancel()
+	time.Sleep(20 * time.Millisecond)
+	require.Zero(t, atomic.LoadInt32(&releaseCount), "detached upstream still owns the slot")
+
+	release()
+	release()
+	require.Equal(t, int32(1), atomic.LoadInt32(&releaseCount))
+}
+
+func TestWrapResponsesSlotRelease_NormalRequestReleasesOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	var releaseCount int32
+	_ = wrapResponsesSlotRelease(ctx, func() {
+		atomic.AddInt32(&releaseCount, 1)
+	}, true)
+
+	cancel()
+	require.Eventually(t, func() bool {
+		return atomic.LoadInt32(&releaseCount) == 1
+	}, time.Second, time.Millisecond)
+}
+
 // BenchmarkWrapReleaseOnDone 性能基准测试
 func BenchmarkWrapReleaseOnDone(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())

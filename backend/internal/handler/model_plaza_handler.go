@@ -59,23 +59,27 @@ type modelPlazaModel struct {
 
 // modelPlazaGroup 广场分组条目（白名单字段）。
 type modelPlazaGroup struct {
-	ID                           int64             `json:"id"`
-	Name                         string            `json:"name"`
-	Description                  string            `json:"description"`
-	Platform                     string            `json:"platform"`
-	SubscriptionType             string            `json:"subscription_type"`
-	RateMultiplier               float64           `json:"rate_multiplier"`
-	UserRateMultiplier           *float64          `json:"user_rate_multiplier,omitempty"`
-	PeakRateEnabled              bool              `json:"peak_rate_enabled"`
-	PeakStart                    string            `json:"peak_start"`
-	PeakEnd                      string            `json:"peak_end"`
-	PeakRateMultiplier           float64           `json:"peak_rate_multiplier"`
-	AppliedPeakMultiplier        float64           `json:"applied_peak_multiplier"`
-	EffectiveRateMultiplier      float64           `json:"effective_rate_multiplier"`
-	EffectiveImageRateMultiplier float64           `json:"effective_image_rate_multiplier"`
-	IsFree                       bool              `json:"is_free"`
-	IsExclusive                  bool              `json:"is_exclusive"`
-	Models                       []modelPlazaModel `json:"models"`
+	ID                           int64    `json:"id"`
+	Name                         string   `json:"name"`
+	Description                  string   `json:"description"`
+	Platform                     string   `json:"platform"`
+	SubscriptionType             string   `json:"subscription_type"`
+	RateMultiplier               float64  `json:"rate_multiplier"`
+	UserRateMultiplier           *float64 `json:"user_rate_multiplier,omitempty"`
+	PeakRateEnabled              bool     `json:"peak_rate_enabled"`
+	PeakStart                    string   `json:"peak_start"`
+	PeakEnd                      string   `json:"peak_end"`
+	PeakRateMultiplier           float64  `json:"peak_rate_multiplier"`
+	AppliedPeakMultiplier        float64  `json:"applied_peak_multiplier"`
+	EffectiveRateMultiplier      float64  `json:"effective_rate_multiplier"`
+	EffectiveImageRateMultiplier float64  `json:"effective_image_rate_multiplier"`
+	IsFree                       bool     `json:"is_free"`
+	IsExclusive                  bool     `json:"is_exclusive"`
+	// 生图独立倍率：为 true 时图片计费模型的实付倍率取 ImageRateMultiplier，
+	// 不取分组/用户专属倍率。
+	ImageRateIndependent bool              `json:"image_rate_independent"`
+	ImageRateMultiplier  float64           `json:"image_rate_multiplier"`
+	Models               []modelPlazaModel `json:"models"`
 }
 
 // modelPlazaResponse 广场页响应。
@@ -189,6 +193,10 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
 		m := &g.Models[i]
+		displayPricing := m.DisplayPricing
+		if displayPricing == nil {
+			displayPricing = m.Pricing
+		}
 		effectiveMultiplier := baseMultiplier
 		if m.Pricing != nil {
 			switch m.Pricing.BillingMode {
@@ -202,7 +210,7 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 			Name:                m.Name,
 			Platform:            m.Platform,
 			Pricing:             toUserPricing(m.Pricing),
-			DisplayPricing:      toDisplayPricing(m.Pricing, effectiveMultiplier),
+			DisplayPricing:      toDisplayPricing(displayPricing, effectiveMultiplier),
 			EffectiveMultiplier: effectiveMultiplier,
 			OfficialPricing:     toModelPlazaOfficialPricing(m.Pricing),
 		})
@@ -223,6 +231,8 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 		EffectiveImageRateMultiplier: imageMultiplier,
 		IsFree:                       g.IsFree,
 		IsExclusive:                  g.IsExclusive,
+		ImageRateIndependent:         g.ImageRateIndependent,
+		ImageRateMultiplier:          g.ImageRateMultiplier,
 		Models:                       models,
 	}
 	if rate, ok := userRates[g.ID]; ok {

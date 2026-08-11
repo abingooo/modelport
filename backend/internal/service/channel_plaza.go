@@ -8,17 +8,20 @@ import (
 )
 
 // PlazaModel 模型广场中单个模型条目。Pricing 是渠道配置的官方基础价；
-// handler 会按分组和用户倍率另行生成实际展示价。
+// DisplayPricing 是应用分组媒体档位覆盖后的展示基础价，handler 会再按有效倍率
+// 生成实际展示价。
 type PlazaModel struct {
-	Name     string
-	Platform string
-	Pricing  *ChannelModelPricing
+	Name           string
+	Platform       string
+	Pricing        *ChannelModelPricing
+	DisplayPricing *ChannelModelPricing
 }
 
 // PlazaGroup 模型广场中以分组为顶层的条目。
 //
 // 与 AvailableGroupRef 相比多了 Description 与 Models；Models 来自该分组关联渠道的
-// 支持模型（按分组平台隔离，防跨平台泄漏），与「可用渠道」页口径一致。
+// 支持模型（普通分组按分组平台隔离，Composite 分组展开关联渠道已配置的
+// 具体平台），与「可用渠道」页口径一致。
 type PlazaGroup struct {
 	ID                   int64
 	Name                 string
@@ -56,9 +59,11 @@ func (g *PlazaGroup) PeakMultiplierAt(now time.Time) float64 {
 // 模型广场只展示 Active 渠道中明确配置且允许用户查看的渠道定价，不使用全局
 // LiteLLM 价格回落：
 //   - 渠道按创建时间升序遍历（同时间按 ID），同名模型由最早渠道兜底；
-//   - 同分组同名模型「先见者胜」；
+//   - 普通分组按模型名去重；Composite 分组按平台和模型名去重并展开具体平台；
+//   - 图片计费模型的档位价按实收口径合成（分组图片价 > 渠道档位价 > 渠道默认按次价，
+//     见 plazaImageDisplayPricing）；
 //   - 只返回 Models 非空的分组；分组按 RateMultiplier 升序（同倍率按名称），
-//     组内模型按名称排序。
+//     组内模型按名称、平台排序。
 //
 // 可见性过滤（专属分组）不在此层做，由 handler 按登录态裁剪。
 func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, error) {
@@ -79,9 +84,10 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 	})
 
 	byGroup := make(map[int64]*PlazaGroup, len(groups))
+	groupEnt := make(map[int64]*Group, len(groups))
 	order := make([]int64, 0, len(groups))
 	for i := range groups {
-		g := groups[i]
+		g := &groups[i]
 		byGroup[g.ID] = &PlazaGroup{
 			ID:                   g.ID,
 			Name:                 g.Name,
@@ -98,11 +104,16 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 			IsFree:               g.IsFree,
 			IsExclusive:          g.IsExclusive,
 		}
+		groupEnt[g.ID] = g
 		order = append(order, g.ID)
 	}
 
-	// modelIdx[groupID][modelName] = index into byGroup[groupID].Models
-	modelIdx := make(map[int64]map[string]int, len(groups))
+	type modelKey struct {
+		platform string
+		name     string
+	}
+	// modelIdx[groupID][platform+modelName] = index into byGroup[groupID].Models
+	modelIdx := make(map[int64]map[modelKey]int, len(groups))
 	for i := range channels {
 		ch := &channels[i]
 		if ch.Status != StatusActive {
@@ -118,20 +129,36 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 			}
 			idx := modelIdx[gid]
 			if idx == nil {
-				idx = make(map[string]int, len(supported))
+				idx = make(map[modelKey]int, len(supported))
 				modelIdx[gid] = idx
 			}
 			for j := range supported {
 				m := supported[j]
-				if m.Platform != pg.Platform || m.Pricing == nil ||
-					!m.Pricing.UserVisible || !plazaPricingConfigured(m.Pricing) {
+				if pg.Platform == PlatformComposite {
+					if !isConcreteRequestPlatform(m.Platform) {
+						continue
+					}
+				} else if m.Platform != pg.Platform {
 					continue
 				}
-				if _, seen := idx[m.Name]; seen {
+				if m.Pricing == nil || !m.Pricing.UserVisible || !plazaPricingConfigured(m.Pricing) {
 					continue
 				}
-				idx[m.Name] = len(pg.Models)
-				pg.Models = append(pg.Models, PlazaModel(m))
+				displayPricing := plazaImageDisplayPricing(m.Pricing, groupEnt[gid])
+				key := modelKey{platform: m.Platform, name: m.Name}
+				if pg.Platform != PlatformComposite {
+					key.platform = ""
+				}
+				if _, seen := idx[key]; seen {
+					continue
+				}
+				idx[key] = len(pg.Models)
+				pg.Models = append(pg.Models, PlazaModel{
+					Name:           m.Name,
+					Platform:       m.Platform,
+					Pricing:        m.Pricing,
+					DisplayPricing: displayPricing,
+				})
 			}
 		}
 	}
@@ -142,7 +169,12 @@ func (s *ChannelService) ListPlazaGroups(ctx context.Context) ([]PlazaGroup, err
 		if len(pg.Models) == 0 {
 			continue
 		}
-		sort.SliceStable(pg.Models, func(i, j int) bool { return pg.Models[i].Name < pg.Models[j].Name })
+		sort.SliceStable(pg.Models, func(i, j int) bool {
+			if pg.Models[i].Name != pg.Models[j].Name {
+				return pg.Models[i].Name < pg.Models[j].Name
+			}
+			return pg.Models[i].Platform < pg.Models[j].Platform
+		})
 		out = append(out, *pg)
 	}
 
@@ -172,4 +204,51 @@ func plazaPricingConfigured(p *ChannelModelPricing) bool {
 		}
 	}
 	return false
+}
+
+// plazaImageDisplayPricing 为图片计费模型合成展示定价，使档位价与实收口径一致：
+// 每档（1K/2K/4K）单价 = 分组图片价 > 渠道同档位价 > 渠道默认按次价，无价的档不展示。
+// 分组未配任何图片价、或定价非图片模式时原样返回。返回克隆，不修改入参
+// （渠道定价指针指向缓存共享数据）。
+func plazaImageDisplayPricing(p *ChannelModelPricing, g *Group) *ChannelModelPricing {
+	if p == nil || g == nil || p.BillingMode != BillingModeImage {
+		return p
+	}
+	if g.ImagePrice1K == nil && g.ImagePrice2K == nil && g.ImagePrice4K == nil {
+		return p
+	}
+	channelTierPrice := func(label string) *float64 {
+		for i := range p.Intervals {
+			if p.Intervals[i].TierLabel == label && p.Intervals[i].PerRequestPrice != nil {
+				return p.Intervals[i].PerRequestPrice
+			}
+		}
+		return p.PerRequestPrice
+	}
+	tiers := []struct {
+		label      string
+		groupPrice *float64
+	}{
+		{"1K", g.ImagePrice1K},
+		{"2K", g.ImagePrice2K},
+		{"4K", g.ImagePrice4K},
+	}
+	clone := *p
+	clone.Intervals = make([]PricingInterval, 0, len(tiers))
+	for i, t := range tiers {
+		price := t.groupPrice
+		if price == nil {
+			price = channelTierPrice(t.label)
+		}
+		if price == nil {
+			continue
+		}
+		v := *price
+		clone.Intervals = append(clone.Intervals, PricingInterval{
+			TierLabel:       t.label,
+			PerRequestPrice: &v,
+			SortOrder:       i,
+		})
+	}
+	return &clone
 }

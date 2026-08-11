@@ -12,12 +12,14 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -37,6 +39,16 @@ type grokCredentialHandlerRepo struct {
 	setErrorErr    error
 	setTempErr     error
 	missingOnGet   map[int64]bool
+}
+
+type grokAuditBillingCache struct {
+	service.BillingCache
+	getBalanceCalls atomic.Int64
+}
+
+func (c *grokAuditBillingCache) GetUserBalance(context.Context, int64) (float64, error) {
+	c.getBalanceCalls.Add(1)
+	return 100, nil
 }
 
 func (r *grokCredentialHandlerRepo) ListSchedulableByPlatform(_ context.Context, platform string) ([]service.Account, error) {
@@ -743,6 +755,216 @@ func TestGrokOAuthCredentialFailoverAcrossHTTPHandlers(t *testing.T) {
 	}
 }
 
+func TestGrokTextSearchPricingHTTPGate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "responses",
+			path: "/openai/v1/responses",
+			body: `{"model":"grok","input":"latest news","tools":[{"type":"web_search"}],"tool_choice":"auto","stream":false}`,
+		},
+		{
+			name: "responses tool search",
+			path: "/openai/v1/responses",
+			body: `{"model":"grok","input":"find a tool","tools":[{"type":"tool_search"}],"tool_choice":"auto","stream":false}`,
+		},
+		{
+			name: "chat completions",
+			path: "/openai/v1/chat/completions",
+			body: `{"model":"grok","messages":[{"role":"user","content":"latest news"}],"tools":[{"type":"function","function":{"name":"web_search","parameters":{"type":"object"}}}],"tool_choice":"auto","stream":false}`,
+		},
+		{
+			name: "messages",
+			path: "/openai/v1/messages",
+			body: `{"model":"grok","max_tokens":16,"messages":[{"role":"user","content":"latest news"}],"tools":[{"name":"web_search","description":"search","input_schema":{"type":"object"}}],"tool_choice":{"type":"auto"},"stream":false}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" missing price", func(t *testing.T) {
+			_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "postmap_cancel")
+			defer cleanup()
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(recorder, req)
+
+			require.Equal(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
+			require.Contains(t, recorder.Body.String(), `"type":"not_found_error"`)
+			if tt.name == "messages" {
+				require.Contains(t, recorder.Body.String(), `"type":"error"`)
+			}
+			require.Zero(t, repo.selectorCalls(), "the ingress price gate must precede account selection")
+			require.Empty(t, upstream.accountHits())
+		})
+
+		t.Run(tt.name+" explicit zero", func(t *testing.T) {
+			h, _, upstream, _, cleanup := newGrokCredentialFailoverHandler(t, "postmap_cancel")
+			defer cleanup()
+			zero := 0.0
+			router := newGrokSearchPricingTestRouter(h, &zero)
+			recorder := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, tt.path, strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(recorder, req)
+
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			require.NotEmpty(t, upstream.accountHits(), "explicit zero must pass both search price gates")
+		})
+	}
+}
+
+func TestGrokSearchPricingFinalEgressGateAfterFreeCacheInjection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "postmap_cancel")
+	defer cleanup()
+	repo.mu.Lock()
+	for i := range repo.accounts {
+		repo.accounts[i].Credentials["subscription_tier"] = "free"
+	}
+	repo.mu.Unlock()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
+		`{"model":"grok","input":"use the tool","prompt_cache_key":"stable","tools":[{"type":"function","name":"lookup","description":"lookup","parameters":{"type":"object"}}],"tool_choice":"auto","stream":false}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusNotFound, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), `"type":"not_found_error"`)
+	require.Greater(t, repo.selectorCalls(), 0, "request must pass the original-intent gate before cache rewriting")
+	require.Empty(t, upstream.accountHits(), "the final rewritten body must be gated before upstream dispatch")
+}
+
+func TestGrokFreeCacheInjectionWithToolChoiceNoneDoesNotRequireSearchPrice(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "postmap_cancel")
+	defer cleanup()
+	repo.mu.Lock()
+	for i := range repo.accounts {
+		repo.accounts[i].Credentials["subscription_tier"] = "free"
+	}
+	repo.mu.Unlock()
+
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
+		`{"model":"grok","input":"do not use tools","prompt_cache_key":"stable","tools":[{"type":"function","name":"lookup","description":"lookup","parameters":{"type":"object"}}],"tool_choice":"none","stream":false}`,
+	))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.NotEmpty(t, upstream.accountHits())
+}
+
+func TestGrokWebSearchAndTTSAuditBlockBeforeBillingAndScheduling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	t.Run("web search", func(t *testing.T) {
+		zero := 0.0
+		groupID := int64(901)
+		group := &service.Group{ID: groupID, Hydrated: true, Platform: service.PlatformGrok, Status: service.StatusActive, SearchPricePer1k: &zero}
+		schedulerCache := &countingGatewaySchedulerCache{fakeSchedulerCache: &fakeSchedulerCache{}}
+		schedulerSnapshot := service.NewSchedulerSnapshotService(schedulerCache, nil, nil, nil, nil)
+		gatewayService := service.NewGatewayService(
+			nil, &fakeGroupRepo{group: group}, nil, nil, nil, nil, nil, nil, nil,
+			schedulerSnapshot, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		)
+		billingSpy := &grokAuditBillingCache{}
+		billing := service.NewBillingCacheService(billingSpy, nil, nil, nil, nil, nil, &config.Config{}, nil)
+		defer billing.Stop()
+		h := &GatewayHandler{
+			gatewayService:           gatewayService,
+			billingCacheService:      billing,
+			securityAuditCoordinator: securityaudit.NewCoordinator(nil, blockingHandlerPromptEngine()),
+		}
+		apiKey := &service.APIKey{
+			ID: 902, UserID: 903, GroupID: &groupID, Group: group,
+			User: &service.User{ID: 903, Status: service.StatusActive},
+		}
+		router := gin.New()
+		router.Use(grokAuditTestMiddleware(apiKey))
+		router.POST("/web_search", h.WebSearch)
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/web_search", strings.NewReader(`{"query":"blocked query"}`))
+		req.Header.Set("Content-Type", "application/json")
+
+		router.ServeHTTP(recorder, req)
+
+		require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+		require.Zero(t, billingSpy.getBalanceCalls.Load())
+		require.Zero(t, schedulerCache.snapshotCalls.Load())
+	})
+
+	t.Run("tts", func(t *testing.T) {
+		h, repo, upstream, _, cleanup := newGrokCredentialFailoverHandler(t, "postmap_cancel")
+		defer cleanup()
+		billingSpy := &grokAuditBillingCache{}
+		billing := service.NewBillingCacheService(billingSpy, nil, nil, nil, nil, nil, &config.Config{}, nil)
+		defer billing.Stop()
+		h.billingCacheService = billing
+		h.securityAuditCoordinator = securityaudit.NewCoordinator(nil, blockingHandlerPromptEngine())
+		zero := 0.0
+		groupID := int64(901)
+		apiKey := &service.APIKey{
+			ID: 902, UserID: 903, GroupID: &groupID,
+			User: &service.User{ID: 903, Status: service.StatusActive},
+			Group: &service.Group{
+				ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive,
+				AudioTTSPricePerMillionChars: &zero,
+			},
+		}
+		router := gin.New()
+		router.Use(grokAuditTestMiddleware(apiKey))
+		router.POST("/tts", func(c *gin.Context) { h.GrokVoice(c, "tts") })
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/tts", strings.NewReader(`{"input":"blocked speech"}`))
+		req.Header.Set("Content-Type", "application/json")
+
+		router.ServeHTTP(recorder, req)
+
+		require.Equal(t, http.StatusForbidden, recorder.Code, recorder.Body.String())
+		require.Zero(t, billingSpy.getBalanceCalls.Load())
+		require.Zero(t, repo.selectorCalls())
+		require.Empty(t, upstream.accountHits())
+	})
+}
+
+func newGrokSearchPricingTestRouter(h *OpenAIGatewayHandler, searchPrice *float64) *gin.Engine {
+	groupID := int64(901)
+	apiKey := &service.APIKey{
+		ID: 902, UserID: 903, GroupID: &groupID,
+		User: &service.User{ID: 903, Status: service.StatusActive},
+		Group: &service.Group{
+			ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive,
+			SearchPricePer1k: searchPrice,
+		},
+	}
+	router := gin.New()
+	router.Use(grokAuditTestMiddleware(apiKey))
+	router.POST("/openai/v1/responses", h.Responses)
+	router.POST("/openai/v1/messages", h.Messages)
+	router.POST("/openai/v1/chat/completions", h.ChatCompletions)
+	return router
+}
+
+func grokAuditTestMiddleware(apiKey *service.APIKey) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
+		c.Next()
+	}
+}
+
 func TestGrokOAuthMissingSelectedRowRetriesHealthyAccountWithoutMutation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	_, repo, upstream, router, cleanup := newGrokCredentialFailoverHandler(t, "missing_row")
@@ -934,10 +1156,14 @@ func newGrokCredentialFailoverHandler(t *testing.T, mode string) (*OpenAIGateway
 		acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) { return true, nil },
 	}
 	h := NewOpenAIGatewayHandler(gateway, service.NewConcurrencyService(cache), billingCache, &service.APIKeyService{}, nil, nil, nil, nil, cfg)
+	zeroVideoPrice := 0.0
 	apiKey := &service.APIKey{
 		ID: 902, GroupID: &groupID,
-		User:  &service.User{ID: 903, Status: service.StatusActive},
-		Group: &service.Group{ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive, AllowImageGeneration: true},
+		User: &service.User{ID: 903, Status: service.StatusActive},
+		Group: &service.Group{
+			ID: groupID, Platform: service.PlatformGrok, Status: service.StatusActive,
+			AllowImageGeneration: true, VideoPrice480P: &zeroVideoPrice,
+		},
 	}
 	router := gin.New()
 	router.Use(func(c *gin.Context) {

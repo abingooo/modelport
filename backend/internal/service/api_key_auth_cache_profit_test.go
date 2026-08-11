@@ -16,6 +16,10 @@ import (
 
 func profitAuthTestAPIKey() *APIKey {
 	groupID := int64(50)
+	searchPrice := 5.0
+	audioRealtimePrice := 0.05
+	audioTTSPrice := 4.0
+	audioSTTPrice := 0.20
 	return &APIKey{
 		ID:      82,
 		UserID:  40,
@@ -40,6 +44,13 @@ func profitAuthTestAPIKey() *APIKey {
 			ProfitControlEnabled: true,
 			ProfitMinMargin:      0.2,
 			ProfitSafetyBuffer:   0.05,
+			VideoModelPrices: map[string]map[string]float64{
+				VideoPriceFamilyGrokImagineVideo15: {VideoBillingResolution720P: 0.14},
+			},
+			SearchPricePer1k:             &searchPrice,
+			AudioRealtimePricePerMin:     &audioRealtimePrice,
+			AudioTTSPricePerMillionChars: &audioTTSPrice,
+			AudioSTTPricePerHour:         &audioSTTPrice,
 		},
 	}
 }
@@ -53,7 +64,7 @@ func TestAPIKeyAuthSnapshotProfitControlRoundtrip(t *testing.T) {
 	snapshot := svc.snapshotFromAPIKey(context.Background(), apiKey)
 	require.NotNil(t, snapshot)
 	require.Equal(t, apiKeyAuthSnapshotVersion, snapshot.Version)
-	require.Equal(t, 19, snapshot.Version, "v19 起认证快照同时携带免费计费、Live 与利润控制字段")
+	require.Equal(t, 20, snapshot.Version, "v20 认证快照同时携带免费/利润控制与媒体定价字段")
 
 	// 模拟 L2 缓存的完整 JSON 往返（与 apiKeyCache.SetAuthCache/GetAuthCache 同构）。
 	payload, err := json.Marshal(&APIKeyAuthCacheEntry{Snapshot: snapshot})
@@ -70,6 +81,11 @@ func TestAPIKeyAuthSnapshotProfitControlRoundtrip(t *testing.T) {
 	require.InDelta(t, 0.2, materialized.Group.ProfitMinMargin, 1e-12)
 	require.InDelta(t, 0.05, materialized.Group.ProfitSafetyBuffer, 1e-12)
 	require.InDelta(t, 0.06, materialized.Group.RateMultiplier, 1e-12)
+	require.Equal(t, apiKey.Group.VideoModelPrices, materialized.Group.VideoModelPrices)
+	require.Equal(t, apiKey.Group.SearchPricePer1k, materialized.Group.SearchPricePer1k)
+	require.Equal(t, apiKey.Group.AudioRealtimePricePerMin, materialized.Group.AudioRealtimePricePerMin)
+	require.Equal(t, apiKey.Group.AudioTTSPricePerMillionChars, materialized.Group.AudioTTSPricePerMillionChars)
+	require.Equal(t, apiKey.Group.AudioSTTPricePerHour, materialized.Group.AudioSTTPricePerHour)
 
 	// 中间件语义：materialized.Group 进请求 ctx → 门必须按快照配置装上。
 	ctx := context.WithValue(context.Background(), ctxkey.Group, materialized.Group)
