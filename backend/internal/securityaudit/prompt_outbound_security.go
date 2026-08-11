@@ -40,19 +40,77 @@ func NormalizeBaseURL(raw string) (string, error) {
 }
 
 func ChatCompletionsURL(base string) (string, error) {
-	normalized, err := NormalizeBaseURL(base)
-	if err != nil {
-		return "", err
-	}
-	return normalized + "/v1/chat/completions", nil
+	return openAIEndpointURL(base, "/v1/chat/completions")
 }
 
 func ModelsURL(base string) (string, error) {
+	return openAIEndpointURL(base, "/v1/models")
+}
+
+func openAIEndpointURL(base, endpoint string) (string, error) {
 	normalized, err := NormalizeBaseURL(base)
 	if err != nil {
 		return "", err
 	}
-	return normalized + "/v1/models", nil
+	parsed, err := url.Parse(normalized)
+	if err != nil {
+		return "", infraerrors.BadRequest("prompt_audit_invalid_base_url", "审计节点地址无效")
+	}
+	endpoint = "/" + strings.TrimLeft(strings.TrimSpace(endpoint), "/")
+	relative := strings.TrimPrefix(endpoint, "/v1")
+	path := strings.TrimRight(parsed.Path, "/")
+	for _, resource := range []string{"/chat/completions", "/models"} {
+		if strings.HasSuffix(path, resource) {
+			prefix := strings.TrimSuffix(path, resource)
+			if hasOpenAIAPIVersionSuffix(prefix) {
+				path = prefix + relative
+				parsed.Path = path
+				parsed.RawPath = ""
+				return parsed.String(), nil
+			}
+		}
+	}
+	if hasOpenAIAPIVersionSuffix(path) {
+		path += relative
+	} else {
+		path += endpoint
+	}
+	parsed.Path = path
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
+func hasOpenAIAPIVersionSuffix(path string) bool {
+	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	if path == "" {
+		return false
+	}
+	segment := path[strings.LastIndex(path, "/")+1:]
+	segment = strings.ToLower(strings.TrimSpace(segment))
+	if len(segment) < 2 || segment[0] != 'v' || segment[1] < '0' || segment[1] > '9' {
+		return false
+	}
+	i := 2
+	for i < len(segment) && segment[i] >= '0' && segment[i] <= '9' {
+		i++
+	}
+	if i == len(segment) {
+		return true
+	}
+	if segment[i] == '.' {
+		i++
+		if i == len(segment) || segment[i] < '0' || segment[i] > '9' {
+			return false
+		}
+		for i < len(segment) && segment[i] >= '0' && segment[i] <= '9' {
+			i++
+		}
+		return i == len(segment)
+	}
+	suffix := segment[i:]
+	return strings.HasPrefix(suffix, "alpha") ||
+		strings.HasPrefix(suffix, "beta") ||
+		strings.HasPrefix(suffix, "preview")
 }
 
 func NewSecureHTTPClient(endpoint ActiveEndpoint) (*http.Client, error) {

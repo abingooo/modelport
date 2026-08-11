@@ -32,9 +32,33 @@ func TestNormalizeBaseURLAllowsAdministratorConfiguredDestinations(t *testing.T)
 		_, err := NormalizeBaseURL(raw)
 		require.Error(t, err, raw)
 	}
-	url, err := ChatCompletionsURL("https://guard.example.com/v1")
+	chatURLTests := map[string]string{
+		"https://guard.example.com/v1":                       "https://guard.example.com/v1/chat/completions",
+		"https://dashscope.aliyuncs.com/compatible-mode/v1":  "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+		"https://open.bigmodel.cn/api/paas/v4":               "https://open.bigmodel.cn/api/paas/v4/chat/completions",
+		"https://guard.example.com/api":                      "https://guard.example.com/api/v1/chat/completions",
+		"https://guard.example.com/proxy/models":             "https://guard.example.com/proxy/models/v1/chat/completions",
+		"https://guard.example.com/v1/chat/completions":      "https://guard.example.com/v1/chat/completions",
+		"https://dashscope.aliyuncs.com/compatible-mode/v1/": "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+	}
+	for baseURL, expected := range chatURLTests {
+		actual, err := ChatCompletionsURL(baseURL)
+		require.NoError(t, err, baseURL)
+		require.Equal(t, expected, actual, baseURL)
+	}
+
+	modelsURL, err := ModelsURL("https://dashscope.aliyuncs.com/compatible-mode/v1")
 	require.NoError(t, err)
-	require.Equal(t, "https://guard.example.com/v1/chat/completions", url)
+	require.Equal(t, "https://dashscope.aliyuncs.com/compatible-mode/v1/models", modelsURL)
+	modelsURL, err = ModelsURL("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions")
+	require.NoError(t, err)
+	require.Equal(t, "https://dashscope.aliyuncs.com/compatible-mode/v1/models", modelsURL)
+	chatURL, err := ChatCompletionsURL("https://dashscope.aliyuncs.com/compatible-mode/v1/models")
+	require.NoError(t, err)
+	require.Equal(t, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", chatURL)
+	modelsURL, err = ModelsURL("https://guard.example.com/proxy/chat/completions")
+	require.NoError(t, err)
+	require.Equal(t, "https://guard.example.com/proxy/chat/completions/v1/models", modelsURL)
 }
 
 func TestHTTPClientUsesDirectStandardDialer(t *testing.T) {

@@ -13,34 +13,39 @@
           <h2 class="text-base font-semibold text-gray-950 dark:text-white">{{ t('admin.instructionAudit.v2.auditScopes') }}</h2>
           <p class="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.auditScopesHint') }}</p>
         </div>
-        <button type="button" class="btn btn-primary shrink-0" :disabled="!groups.length" @click="openScopeForm()"><Icon name="plus" size="sm" />{{ t('admin.instructionAudit.v2.addScope') }}</button>
+        <button type="button" class="btn btn-primary shrink-0" :disabled="!selectableScopeGroups.length" @click="openScopeForm()"><Icon name="plus" size="sm" />{{ t('admin.instructionAudit.v2.addScope') }}</button>
       </div>
-      <div v-if="scopes.length" class="resource-grid">
-        <article v-for="scope in scopes" :key="scope.id" class="resource-card">
+      <div v-if="scopeGroups.length" class="resource-grid">
+        <article v-for="scopeGroup in scopeGroups" :key="scopeGroup.group_id" class="resource-card" :data-test="`scope-group-${scopeGroup.group_id}`">
           <header class="flex min-w-0 items-start justify-between gap-3">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
-                <h3 class="truncate text-sm font-semibold text-gray-950 dark:text-white">{{ scope.group_name }}</h3>
-                <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="scope.effective ? 'bg-primary-100 text-primary-700 dark:bg-primary-950/60 dark:text-primary-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'">{{ scope.effective ? t('admin.instructionAudit.v2.effective') : t('admin.instructionAudit.v2.ineffective') }}</span>
+                <h3 class="truncate text-sm font-semibold text-gray-950 dark:text-white">{{ scopeGroup.group_name }}</h3>
+                <span class="rounded-full px-2 py-0.5 text-[11px] font-semibold" :class="scopeGroup.effective ? 'bg-primary-100 text-primary-700 dark:bg-primary-950/60 dark:text-primary-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-950/50 dark:text-amber-200'">{{ scopeGroup.effective ? t('admin.instructionAudit.v2.effective') : t('admin.instructionAudit.v2.ineffective') }}</span>
               </div>
-              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">#{{ scope.group_id }} · {{ scope.group_platform || '-' }}</p>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">#{{ scopeGroup.group_id }} · {{ scopeGroup.group_platform || '-' }}</p>
             </div>
             <div class="flex shrink-0 items-center gap-1">
-              <button type="button" class="icon-btn" :title="t('common.edit')" @click="openScopeForm(scope)"><Icon name="edit" size="sm" /></button>
-              <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="scopeToDelete = scope"><Icon name="trash" size="sm" /></button>
+              <button type="button" class="icon-btn" :title="t('common.edit')" @click="openScopeForm(scopeGroup.scopes[0])"><Icon name="edit" size="sm" /></button>
+              <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="scopeGroupToDelete = scopeGroup"><Icon name="trash" size="sm" /></button>
             </div>
           </header>
           <div class="rounded-md bg-gray-50 px-3 py-3 dark:bg-dark-800/70">
             <p class="resource-label">{{ t('admin.instructionAudit.v2.clientScope') }}</p>
-            <div class="mt-1 flex items-center gap-2">
-              <Icon :name="scope.client_profile_id ? 'terminal' : 'globe'" size="sm" class="text-primary-500" />
-              <span class="text-sm font-medium text-gray-800 dark:text-gray-200">{{ scope.client_profile_name || t('admin.instructionAudit.v2.allClients') }}</span>
+            <div class="mt-1 flex min-w-0 items-start gap-2">
+              <Icon :name="scopeGroup.allClients ? 'globe' : 'terminal'" size="sm" class="mt-0.5 shrink-0 text-primary-500" />
+              <div class="flex min-w-0 flex-wrap gap-1.5" data-test="scope-client-summary">
+                <span v-if="scopeGroup.allClients" class="rounded bg-white px-2 py-1 text-xs font-medium text-gray-700 shadow-sm dark:bg-dark-700 dark:text-gray-200">{{ t('admin.instructionAudit.v2.allClients') }}</span>
+                <span v-for="scope in scopeGroup.scopes.filter((item) => item.client_profile_id != null)" :key="scope.id" class="rounded bg-white px-2 py-1 text-xs font-medium text-gray-700 shadow-sm dark:bg-dark-700 dark:text-gray-200">
+                  {{ scope.client_profile_name || scope.client_profile_key }}
+                </span>
+              </div>
             </div>
-            <p v-if="scope.client_profile_key" class="mt-1 font-mono text-[11px] text-gray-400">{{ scope.client_profile_key }}</p>
           </div>
           <footer class="mt-auto flex items-center justify-between gap-3 border-t border-gray-100 pt-3 text-xs dark:border-dark-700">
             <span class="text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.scopeStatus') }}</span>
-            <span :class="scope.enabled ? 'text-primary-700 dark:text-primary-300' : 'text-gray-400'">{{ scope.enabled ? t('common.enabled') : t('common.disabled') }}</span>
+            <span v-if="scopeGroup.mixedEnabled" class="text-amber-600 dark:text-amber-300">{{ t('admin.instructionAudit.v2.mixedScopeStatus') }}</span>
+            <span v-else :class="scopeGroup.enabled ? 'text-primary-700 dark:text-primary-300' : 'text-gray-400'">{{ scopeGroup.enabled ? t('common.enabled') : t('common.disabled') }}</span>
           </footer>
         </article>
       </div>
@@ -138,19 +143,33 @@
       <div class="space-y-4">
         <label class="block">
           <span class="input-label">{{ t('admin.instructionAudit.v2.downstreamGroup') }}</span>
-          <select v-model="scopeForm.groupId" class="input">
+          <select v-model="scopeForm.groupId" class="input" :disabled="Boolean(scopeForm.id)" data-test="scope-group">
             <option :value="0">{{ t('admin.instructionAudit.v2.selectGroup') }}</option>
-            <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }} · {{ group.platform }}</option>
+            <option v-for="group in scopeForm.id ? groups : selectableScopeGroups" :key="group.id" :value="group.id">{{ group.name }} · {{ group.platform }}</option>
           </select>
         </label>
-        <label class="block">
-          <span class="input-label">{{ t('admin.instructionAudit.v2.clientScope') }}</span>
-          <select v-model="scopeForm.clientProfileId" class="input">
-            <option :value="0">{{ t('admin.instructionAudit.v2.allClients') }}</option>
-            <option v-for="client in enabledClients" :key="client.id" :value="client.id">{{ client.name }}</option>
-          </select>
-          <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.clientScopeHint') }}</span>
-        </label>
+        <fieldset class="block min-w-0">
+          <legend class="input-label">{{ t('admin.instructionAudit.v2.clientScope') }}</legend>
+          <label class="mt-1 flex items-center gap-2 rounded-md border border-gray-200 px-3 py-2.5 text-sm dark:border-dark-600">
+            <input v-model="scopeForm.allClients" type="checkbox" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+            <span>{{ t('admin.instructionAudit.v2.allClients') }}</span>
+          </label>
+          <div v-if="scopeClients.length" class="mt-2 grid min-w-0 gap-2 sm:grid-cols-2">
+            <label v-for="client in scopeClients" :key="client.id" class="flex min-w-0 items-center gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm dark:border-dark-600" :class="scopeForm.allClients ? 'opacity-50' : !client.enabled ? 'opacity-70' : ''">
+              <input v-model="scopeForm.clientProfileIds" type="checkbox" :value="client.id" :disabled="scopeForm.allClients" :data-test="`scope-client-${client.id}`" class="rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+              <span class="min-w-0 truncate">{{ client.name }}</span>
+              <span v-if="!client.enabled" class="ml-auto shrink-0 text-[10px] text-gray-400">{{ t('common.disabled') }}</span>
+            </label>
+          </div>
+          <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.clientScopeMultipleHint') }}</span>
+        </fieldset>
+        <div v-if="scopeForm.mixedEnabled" class="rounded-md border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-200" data-test="mixed-scope-warning">
+          <p>{{ t('admin.instructionAudit.v2.mixedScopeStatusHint') }}</p>
+          <label class="mt-2 flex items-start gap-2 font-medium">
+            <input v-model="scopeForm.mixedEnabledAcknowledged" type="checkbox" class="mt-0.5 rounded border-amber-400 text-amber-600 focus:ring-amber-500" data-test="acknowledge-mixed-scope" />
+            <span>{{ t('admin.instructionAudit.v2.confirmMixedScopeStatus') }}</span>
+          </label>
+        </div>
         <label class="flex items-center justify-between gap-3 rounded-md border border-gray-200 px-3 py-3 dark:border-dark-600">
           <span class="text-sm font-medium text-gray-800 dark:text-gray-200">{{ t('common.enabled') }}</span>
           <input v-model="scopeForm.enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
@@ -158,7 +177,7 @@
       </div>
       <template #footer>
         <button type="button" class="btn btn-secondary" :disabled="saving" @click="closeScopeForm">{{ t('common.cancel') }}</button>
-        <button type="button" class="btn btn-primary" :disabled="saving || !scopeForm.groupId" @click="saveScope"><Icon name="check" size="sm" />{{ t('common.save') }}</button>
+        <button type="button" class="btn btn-primary" :disabled="saving || !scopeForm.groupId || (!scopeForm.allClients && !scopeForm.clientProfileIds.length) || (scopeForm.mixedEnabled && !scopeForm.mixedEnabledAcknowledged)" @click="saveScope"><Icon name="check" size="sm" />{{ t('common.save') }}</button>
       </template>
     </BaseDialog>
 
@@ -213,7 +232,7 @@
       </template>
     </BaseDialog>
 
-    <ConfirmDialog :show="Boolean(scopeToDelete)" :title="t('admin.instructionAudit.v2.deleteScopeTitle')" :message="t('admin.instructionAudit.v2.deleteScopeConfirm')" danger @confirm="deleteScope" @cancel="scopeToDelete = null" />
+    <ConfirmDialog :show="Boolean(scopeGroupToDelete)" :title="t('admin.instructionAudit.v2.deleteScopeTitle')" :message="t('admin.instructionAudit.v2.deleteScopeConfirm')" danger @confirm="deleteScopeGroup" @cancel="scopeGroupToDelete = null" />
     <ConfirmDialog :show="Boolean(clientToDelete)" :title="t('admin.instructionAudit.v2.deleteClientTitle')" :message="t('admin.instructionAudit.v2.deleteClientConfirm')" danger @confirm="deleteClient" @cancel="clientToDelete = null" />
     <ConfirmDialog :show="Boolean(allowlistToDelete)" :title="t('admin.instructionAudit.v2.deleteAllowlistTitle')" :message="t('admin.instructionAudit.v2.deleteAllowlistConfirm')" danger @confirm="deleteAllowlist" @cancel="allowlistToDelete = null" />
   </section>
@@ -239,6 +258,7 @@ import type {
 import { formatAuditDate } from '../v2Presentation'
 
 type Section = 'scopes' | 'clients' | 'allowlist'
+type ScopeGroup = InstructionScope & { scopes: InstructionScope[]; allClients: boolean; mixedEnabled: boolean }
 
 const props = defineProps<{
   scopes: InstructionScope[]
@@ -251,7 +271,7 @@ const { t } = useI18n()
 const appStore = useAppStore()
 const activeSection = ref<Section>('scopes')
 const saving = ref(false)
-const scopeToDelete = ref<InstructionScope | null>(null)
+const scopeGroupToDelete = ref<ScopeGroup | null>(null)
 const clientToDelete = ref<InstructionClientProfile | null>(null)
 const allowlistToDelete = ref<InstructionUserAllowlistEntry | null>(null)
 const userSearch = ref('')
@@ -259,7 +279,7 @@ const userSearching = ref(false)
 const userResults = ref<InstructionUserOption[]>([])
 const selectedUserId = ref(0)
 const allowlistNote = ref('')
-const scopeForm = reactive({ show: false, id: 0, groupId: 0, clientProfileId: 0, enabled: true })
+const scopeForm = reactive({ show: false, id: 0, groupId: 0, allClients: true, clientProfileIds: [] as number[], enabled: true, mixedEnabled: false, mixedEnabledAcknowledged: true })
 const clientForm = reactive({
   show: false,
   id: 0,
@@ -273,12 +293,30 @@ const clientForm = reactive({
   matchers: [] as InstructionClientMatcher[],
 })
 
+const scopeGroups = computed<ScopeGroup[]>(() => {
+  const groups = new Map<number, InstructionScope[]>()
+  for (const scope of props.scopes) {
+    const items = groups.get(scope.group_id) || []
+    items.push(scope)
+    groups.set(scope.group_id, items)
+  }
+  return [...groups.values()].map((scopes) => ({
+    ...scopes[0],
+    scopes,
+    allClients: scopes.some((scope) => scope.client_profile_id == null),
+    enabled: scopes.every((scope) => scope.enabled),
+    mixedEnabled: scopes.some((scope) => scope.enabled) && scopes.some((scope) => !scope.enabled),
+    effective: scopes.some((scope) => scope.effective),
+  }))
+})
 const tabs = computed(() => [
-  { value: 'scopes' as const, label: t('admin.instructionAudit.v2.auditScopes'), count: props.scopes.length },
+  { value: 'scopes' as const, label: t('admin.instructionAudit.v2.auditScopes'), count: scopeGroups.value.length },
   { value: 'clients' as const, label: t('admin.instructionAudit.v2.clientProfiles'), count: props.clients.length },
   { value: 'allowlist' as const, label: t('admin.instructionAudit.v2.userAllowlist'), count: props.allowlist.length },
 ])
-const enabledClients = computed(() => props.clients.filter((client) => client.enabled))
+const configuredGroupIDs = computed(() => new Set(props.scopes.map((scope) => scope.group_id)))
+const selectableScopeGroups = computed(() => props.groups.filter((group) => !configuredGroupIDs.value.has(group.id)))
+const scopeClients = computed(() => props.clients.filter((client) => client.enabled || scopeForm.clientProfileIds.includes(client.id)))
 const commonNameLabel = computed(() => t('common.name'))
 
 const EmptyPanel = defineComponent({
@@ -293,9 +331,23 @@ const EmptyPanel = defineComponent({
 })
 
 function openScopeForm(scope?: InstructionScope) {
-  Object.assign(scopeForm, scope
-    ? { show: true, id: scope.id, groupId: scope.group_id, clientProfileId: scope.client_profile_id ?? 0, enabled: scope.enabled }
-    : { show: true, id: 0, groupId: 0, clientProfileId: 0, enabled: true })
+  if (!scope) {
+    Object.assign(scopeForm, { show: true, id: 0, groupId: 0, allClients: true, clientProfileIds: [], enabled: true, mixedEnabled: false, mixedEnabledAcknowledged: true })
+    return
+  }
+  const groupScopes = props.scopes.filter((item) => item.group_id === scope.group_id)
+  const allClients = groupScopes.some((item) => item.client_profile_id == null)
+  const mixedEnabled = groupScopes.some((item) => item.enabled) && groupScopes.some((item) => !item.enabled)
+  Object.assign(scopeForm, {
+    show: true,
+    id: scope.id,
+    groupId: scope.group_id,
+    allClients,
+    clientProfileIds: [...new Set(groupScopes.flatMap((item) => item.client_profile_id == null ? [] : [item.client_profile_id]))],
+    enabled: groupScopes.every((item) => item.enabled),
+    mixedEnabled,
+    mixedEnabledAcknowledged: !mixedEnabled,
+  })
 }
 
 function closeScopeForm() {
@@ -303,9 +355,16 @@ function closeScopeForm() {
 }
 
 async function saveScope() {
+  const clientProfileIds = [...new Set(scopeForm.clientProfileIds)].filter((id) => id > 0)
+  if (!scopeForm.groupId || (!scopeForm.allClients && !clientProfileIds.length) || (scopeForm.mixedEnabled && !scopeForm.mixedEnabledAcknowledged)) return
   saving.value = true
   try {
-    await instructionAuditV2API.saveScope(scopeForm.id || null, { group_id: scopeForm.groupId, client_profile_id: scopeForm.clientProfileId || null, enabled: scopeForm.enabled })
+    await instructionAuditV2API.saveScopeSet({
+      group_id: scopeForm.groupId,
+      client_profile_ids: clientProfileIds,
+      all_clients: scopeForm.allClients,
+      enabled: scopeForm.enabled,
+    })
     appStore.showSuccess(t('common.saved'))
     scopeForm.show = false
     emit('changed')
@@ -316,12 +375,12 @@ async function saveScope() {
   }
 }
 
-async function deleteScope() {
-  if (!scopeToDelete.value) return
+async function deleteScopeGroup() {
+  if (!scopeGroupToDelete.value) return
   try {
-    await instructionAuditV2API.deleteScope(scopeToDelete.value!.id)
+    await instructionAuditV2API.deleteScopeSet(scopeGroupToDelete.value.group_id)
     appStore.showSuccess(t('admin.instructionAudit.v2.scopeDeleted'))
-    scopeToDelete.value = null
+    scopeGroupToDelete.value = null
     emit('changed')
   } catch (caught) {
     appStore.showError(extractApiErrorMessage(caught, t('common.error')))

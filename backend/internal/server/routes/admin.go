@@ -167,6 +167,8 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers)
 
 		instructionAudit.GET("/scopes", h.Admin.InstructionAudit.ListScopes)
 		instructionAudit.POST("/scopes", h.Admin.InstructionAudit.SaveScope)
+		instructionAudit.POST("/scopes/batch", h.Admin.InstructionAudit.SaveScopeSet)
+		instructionAudit.DELETE("/scopes/group/:id", h.Admin.InstructionAudit.DeleteScopeSet)
 		instructionAudit.PUT("/scopes/:id", h.Admin.InstructionAudit.SaveScope)
 		instructionAudit.DELETE("/scopes/:id", h.Admin.InstructionAudit.DeleteScope)
 		instructionAudit.GET("/groups", h.Admin.InstructionAudit.ListGroups)

@@ -298,3 +298,21 @@ func TestInstructionAuditV2ReviewPipelineMigrationReplacesCandidates(t *testing.
 	require.Contains(t, sql, "delete from instruction_audit_v2_hashes where status = 'candidate'")
 	require.NotContains(t, sql, "truncate")
 }
+
+func TestInstructionAuditV2SourceAccountMigrationBackfillsDurableSnapshots(t *testing.T) {
+	body, err := FS.ReadFile("220_instruction_audit_v2_source_accounts.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	for _, table := range []string{
+		"instruction_audit_v2_hashes",
+		"instruction_audit_v2_risk_hashes",
+		"instruction_audit_v2_review_jobs",
+	} {
+		require.Contains(t, sql, "alter table "+table)
+	}
+	require.Equal(t, 3, strings.Count(sql, "add column if not exists source_user_id"))
+	require.Equal(t, 3, strings.Count(sql, "add column if not exists source_user_email_snapshot"))
+	require.Equal(t, 3, strings.Count(sql, "source_user_email_snapshot = event.user_email_snapshot"))
+	require.NotContains(t, sql, "truncate")
+	require.NotContains(t, sql, "delete from")
+}

@@ -313,6 +313,28 @@ func (s *InstructionV2Service) SaveAdminScope(
 	if request.GroupID <= 0 {
 		return InstructionV2Scope{}, infraerrors.BadRequest("instruction_audit_v2_invalid_group", "下游分组无效")
 	}
+	if id > 0 {
+		items, err := s.repository.ListScopes(ctx)
+		if err != nil {
+			return InstructionV2Scope{}, err
+		}
+		var existing *InstructionV2Scope
+		for index := range items {
+			if items[index].ID == id {
+				existing = &items[index]
+				break
+			}
+		}
+		if existing == nil {
+			return InstructionV2Scope{}, instructionV2NotFoundError("审核范围")
+		}
+		if existing.GroupID != request.GroupID || !instructionV2OptionalIDEqual(existing.ClientProfileID, request.ClientProfileID) {
+			return InstructionV2Scope{}, infraerrors.Conflict(
+				"instruction_audit_v2_scope_identity_immutable",
+				"已有审核范围不能更换分组或客户端，请使用分组范围接口调整集合",
+			)
+		}
+	}
 	item, version, err := s.repository.SaveScope(ctx, id, request, actorID)
 	if err != nil {
 		return InstructionV2Scope{}, mapInstructionV2RepositoryError(err, "审核范围")
@@ -321,8 +343,48 @@ func (s *InstructionV2Service) SaveAdminScope(
 	return item, nil
 }
 
+func (s *InstructionV2Service) SaveAdminScopeSet(
+	ctx context.Context,
+	request SaveInstructionV2ScopeSetRequest,
+	actorID int64,
+) ([]InstructionV2Scope, error) {
+	if request.GroupID <= 0 || (!request.AllClients && len(request.ClientProfileIDs) == 0) {
+		return nil, infraerrors.BadRequest("instruction_audit_v2_invalid_scope", "审核范围请求无效")
+	}
+	ids, err := normalizeInstructionV2IDs(request.ClientProfileIDs, 1000)
+	if err != nil || (!request.AllClients && len(ids) == 0) {
+		return nil, infraerrors.BadRequest("instruction_audit_v2_invalid_client_scope", "客户端范围无效")
+	}
+	request.ClientProfileIDs = ids
+	items, version, err := s.repository.SaveScopeSet(ctx, request, actorID)
+	if err != nil {
+		return nil, mapInstructionV2RepositoryError(err, "审核范围")
+	}
+	s.refreshAfterMutation(ctx, version)
+	return items, nil
+}
+
+func instructionV2OptionalIDEqual(left, right *int64) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func (s *InstructionV2Service) DeleteAdminScope(ctx context.Context, id, actorID int64) error {
 	version, err := s.repository.DeleteScope(ctx, id, actorID)
+	if err != nil {
+		return mapInstructionV2RepositoryError(err, "审核范围")
+	}
+	s.refreshAfterMutation(ctx, version)
+	return nil
+}
+
+func (s *InstructionV2Service) DeleteAdminScopeSet(ctx context.Context, groupID, actorID int64) error {
+	if groupID <= 0 {
+		return infraerrors.BadRequest("instruction_audit_v2_invalid_group", "下游分组无效")
+	}
+	version, err := s.repository.DeleteScopeSet(ctx, groupID, actorID)
 	if err != nil {
 		return mapInstructionV2RepositoryError(err, "审核范围")
 	}
@@ -935,6 +997,7 @@ func (s *InstructionV2Service) TrustAdminEvent(
 			ContentBytes: item.ContentBytes, RawStorage: "full", RawCiphertext: hashCiphertext,
 			StoredBytes: len([]byte(plaintext)), ScopeIDs: []int64{*event.ScopeID},
 			ObservedField: fieldName, GlobalTrust: request.GlobalTrust,
+			SourceEventID: &event.ID, SourceUserID: event.UserID, SourceUserEmail: event.UserEmail,
 		})
 	}
 	hashes, version, err := s.repository.SaveManualHashes(ctx, writes, actorID)
@@ -1002,6 +1065,9 @@ func mapInstructionV2RepositoryError(err error, resource string) error {
 	}
 	if errors.Is(err, errInstructionV2ProfileInUse) {
 		return infraerrors.Conflict("instruction_audit_v2_client_in_use", "客户端规则仍被审核范围引用，请先删除关联范围")
+	}
+	if errors.Is(err, errInstructionV2InvalidScopeProfile) {
+		return infraerrors.BadRequest("instruction_audit_v2_invalid_client_scope", "客户端范围无效")
 	}
 	if errors.Is(err, errInstructionV2AINodeSlotInUse) {
 		return infraerrors.Conflict("instruction_audit_v2_ai_slot_in_use", "该 AI 槽位已有节点，请编辑现有节点")

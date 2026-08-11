@@ -119,6 +119,13 @@ export interface SaveInstructionScope {
   enabled: boolean
 }
 
+export interface SaveInstructionScopeSet {
+  group_id: number
+  client_profile_ids: number[]
+  all_clients: boolean
+  enabled: boolean
+}
+
 export interface InstructionUserAllowlistEntry {
   id: number
   user_id: number
@@ -165,6 +172,8 @@ export interface InstructionHash {
   stored_bytes: number
   ai_sampled: boolean
   source_event_id?: number | null
+  source_user_id?: number | null
+  source_user_email: string
   reviewer_node_id?: number | null
   reviewer_model: string
   prompt_version: string

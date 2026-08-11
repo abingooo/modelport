@@ -52,14 +52,16 @@ func upsertInstructionV2RiskTx(
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_v2_risk_hashes
 			(sha256, content_vault_id, observed_field, status, source, source_event_id,
-			 reviewer_node_id, reviewer_model, prompt_version, confidence, review_reason,
-			 review_category)
-		VALUES ($1, $2, $3, 'active', $4, NULLIF($5, 0), $6, $7, $8, $9, $10, $11)
+			 source_user_id, source_user_email_snapshot, reviewer_node_id, reviewer_model,
+			 prompt_version, confidence, review_reason, review_category)
+		VALUES ($1, $2, $3, 'active', $4, NULLIF($5, 0), NULLIF($6, 0), $7,
+		        $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (sha256) DO UPDATE
 		SET status = 'active', content_vault_id = EXCLUDED.content_vault_id,
 		    observed_field = EXCLUDED.observed_field, source = EXCLUDED.source,
-		    source_event_id = COALESCE(EXCLUDED.source_event_id,
-		        instruction_audit_v2_risk_hashes.source_event_id),
+		    source_event_id = EXCLUDED.source_event_id,
+		    source_user_id = EXCLUDED.source_user_id,
+		    source_user_email_snapshot = EXCLUDED.source_user_email_snapshot,
 		    reviewer_node_id = EXCLUDED.reviewer_node_id,
 		    reviewer_model = EXCLUDED.reviewer_model,
 		    prompt_version = EXCLUDED.prompt_version,
@@ -68,7 +70,8 @@ func upsertInstructionV2RiskTx(
 		    review_category = EXCLUDED.review_category,
 		    updated_at = NOW()
 		RETURNING id`, write.Vault.SHA256, vaultID, write.ObservedField, write.Source,
-		eventID, write.ReviewerNodeID, write.ReviewerModel, write.PromptVersion,
+		eventID, pointerInt64Value(write.SourceUserID), write.SourceUserEmail,
+		write.ReviewerNodeID, write.ReviewerModel, write.PromptVersion,
 		write.Confidence, write.ReviewReason, write.ReviewCategory).Scan(&riskID)
 	return riskID, err
 }
@@ -100,12 +103,13 @@ func upsertInstructionV2TrustedTx(
 		INSERT INTO instruction_audit_v2_hashes
 			(sha256, name, note, status, source, observed_field, content_bytes,
 			 raw_storage, raw_ciphertext, stored_bytes, ai_sampled, source_event_id,
-			 reviewer_node_id, reviewer_model, prompt_version, confidence, review_reason,
-			 review_category, global_trust, content_vault_id, created_by, updated_by)
+			 source_user_id, source_user_email_snapshot, reviewer_node_id, reviewer_model,
+			 prompt_version, confidence, review_reason, review_category, global_trust,
+			 content_vault_id, created_by, updated_by)
 		VALUES ($1, $2, $3, 'active', $4, $5, $6,
 		        'unavailable', NULL, 0, $7, NULLIF($8, 0),
-		        $9, $10, $11, $12, $13, $14, $15, $16,
-		        NULLIF($17, 0), NULLIF($17, 0))
+		        NULLIF($9, 0), $10, $11, $12, $13, $14, $15, $16, $17, $18,
+		        NULLIF($19, 0), NULLIF($19, 0))
 		ON CONFLICT (sha256) DO UPDATE
 		SET status = 'active',
 		    global_trust = instruction_audit_v2_hashes.global_trust OR EXCLUDED.global_trust,
@@ -113,20 +117,19 @@ func upsertInstructionV2TrustedTx(
 		        EXCLUDED.content_vault_id),
 		    observed_field = CASE WHEN instruction_audit_v2_hashes.observed_field = ''
 		        THEN EXCLUDED.observed_field ELSE instruction_audit_v2_hashes.observed_field END,
-		    source_event_id = COALESCE(EXCLUDED.source_event_id,
-		        instruction_audit_v2_hashes.source_event_id),
 		    reviewer_node_id = EXCLUDED.reviewer_node_id,
 		    reviewer_model = EXCLUDED.reviewer_model,
 		    prompt_version = EXCLUDED.prompt_version,
 		    confidence = EXCLUDED.confidence,
 		    review_reason = EXCLUDED.review_reason,
 		    review_category = EXCLUDED.review_category,
-		    updated_by = NULLIF($17, 0), updated_at = NOW()
+		    updated_by = NULLIF($19, 0), updated_at = NOW()
 		WHERE instruction_audit_v2_hashes.status <> 'revoked'
 		RETURNING id`, write.Vault.SHA256, "AI 可信 "+write.Vault.SHA256[:12],
 		"由指令审核复核通过", write.Source, write.ObservedField,
 		write.Vault.ContentBytes, write.Vault.ContentBytes != int64(write.Vault.StoredBytes),
-		eventID, write.ReviewerNodeID, write.ReviewerModel, write.PromptVersion,
+		eventID, pointerInt64Value(write.SourceUserID), write.SourceUserEmail,
+		write.ReviewerNodeID, write.ReviewerModel, write.PromptVersion,
 		write.Confidence, write.ReviewReason, write.ReviewCategory, write.GlobalTrust,
 		vaultID, actorID).Scan(&hashID)
 	if err != nil {
@@ -156,22 +159,21 @@ func upsertInstructionV2ReviewJobTx(
 	eventID int64,
 	write instructionV2ReviewJobWrite,
 ) (int64, error) {
-	vaultID, err := upsertInstructionV2VaultTx(ctx, tx, write.Vault)
-	if err != nil {
-		return 0, err
-	}
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, write.Vault.SHA256); err != nil {
-		return 0, err
-	}
+	// PersistInstructionV2Event holds the digest advisory lock. Lock an
+	// existing job before touching its vault to match worker finalization.
 	var existingID int64
 	var existingObserveOnly bool
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT id, observe_only
 		FROM instruction_audit_v2_review_jobs
 		WHERE sha256 = $1
 		FOR UPDATE`, write.Vault.SHA256).Scan(&existingID, &existingObserveOnly)
 	if err == nil {
 		if existingObserveOnly && !write.ObserveOnly {
+			vaultID, err := upsertInstructionV2VaultTx(ctx, tx, write.Vault)
+			if err != nil {
+				return 0, err
+			}
 			if _, err := tx.ExecContext(ctx, `
 				DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = $1`, existingID); err != nil {
 				return 0, err
@@ -179,14 +181,16 @@ func upsertInstructionV2ReviewJobTx(
 			_, err = tx.ExecContext(ctx, `
 				UPDATE instruction_audit_v2_review_jobs
 				SET content_vault_id = $2, selected_field = $3,
-				    source_event_id = NULLIF($4, 0), status = 'pending', final_result = '',
+				    source_event_id = NULLIF($4, 0), source_user_id = NULLIF($5, 0),
+				    source_user_email_snapshot = $6, status = 'pending', final_result = '',
 				    pass_votes = 0, reject_votes = 0, retry_round = 0,
 				    next_attempt_at = NOW(), lease_owner = '', lease_expires_at = NULL,
-				    prompt_version = $5, review_criteria = $6, config_version = $7,
-				    observe_only = FALSE, sampled = $8, sample_bytes = $9,
-				    content_bytes = $10, last_error = '', completed_at = NULL,
+				    prompt_version = $7, review_criteria = $8, config_version = $9,
+				    observe_only = FALSE, sampled = $10, sample_bytes = $11,
+				    content_bytes = $12, last_error = '', completed_at = NULL,
 				    updated_at = NOW()
 				WHERE id = $1`, existingID, vaultID, write.SelectedField, eventID,
+				pointerInt64Value(write.SourceUserID), write.SourceUserEmail,
 				write.PromptVersion, write.ReviewCriteria, write.ConfigVersion,
 				write.Sampled, write.SampleBytes, write.Vault.ContentBytes)
 			if err != nil {
@@ -195,9 +199,8 @@ func upsertInstructionV2ReviewJobTx(
 		} else {
 			_, err = tx.ExecContext(ctx, `
 				UPDATE instruction_audit_v2_review_jobs
-				SET source_event_id = COALESCE(source_event_id, NULLIF($2, 0)),
-				    updated_at = NOW()
-				WHERE id = $1`, existingID, eventID)
+				SET updated_at = NOW()
+				WHERE id = $1`, existingID)
 			if err != nil {
 				return 0, err
 			}
@@ -207,13 +210,20 @@ func upsertInstructionV2ReviewJobTx(
 	if !errors.Is(err, sql.ErrNoRows) {
 		return 0, err
 	}
+	vaultID, err := upsertInstructionV2VaultTx(ctx, tx, write.Vault)
+	if err != nil {
+		return 0, err
+	}
 	var jobID int64
 	err = tx.QueryRowContext(ctx, `
 		INSERT INTO instruction_audit_v2_review_jobs
-			(sha256, content_vault_id, selected_field, source_event_id, prompt_version,
-			 review_criteria, config_version, observe_only, sampled, sample_bytes, content_bytes)
-		VALUES ($1, $2, $3, NULLIF($4, 0), $5, $6, $7, $8, $9, $10, $11)
+			(sha256, content_vault_id, selected_field, source_event_id, source_user_id,
+			 source_user_email_snapshot, prompt_version, review_criteria, config_version,
+			 observe_only, sampled, sample_bytes, content_bytes)
+		VALUES ($1, $2, $3, NULLIF($4, 0), NULLIF($5, 0), $6, $7, $8, $9,
+		        $10, $11, $12, $13)
 		RETURNING id`, write.Vault.SHA256, vaultID, write.SelectedField, eventID,
+		pointerInt64Value(write.SourceUserID), write.SourceUserEmail,
 		write.PromptVersion, write.ReviewCriteria, write.ConfigVersion, write.ObserveOnly,
 		write.Sampled, write.SampleBytes, write.Vault.ContentBytes).Scan(&jobID)
 	return jobID, err
@@ -240,8 +250,7 @@ func (r *InstructionV2Repository) ResumeOrGetReviewJobBySHA(
 		SELECT job.id, job.status, job.observe_only, COALESCE(event.decision, '')
 		FROM instruction_audit_v2_review_jobs job
 		LEFT JOIN instruction_audit_v2_events event ON event.id = job.source_event_id
-		WHERE job.sha256 = $1
-		FOR UPDATE OF job`, write.Vault.SHA256).Scan(
+		WHERE job.sha256 = $1`, write.Vault.SHA256).Scan(
 		&result.JobID, &result.Status, &observeOnly, &result.SourceDecision,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -254,35 +263,9 @@ func (r *InstructionV2Repository) ResumeOrGetReviewJobBySHA(
 		return nil, err
 	}
 	if observeOnly && !write.ObserveOnly {
-		if _, err := tx.ExecContext(ctx, `
-			DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = $1`, result.JobID); err != nil {
-			return nil, err
-		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE instruction_audit_v2_review_jobs
-			SET selected_field = $2, status = 'pending', final_result = '',
-			    pass_votes = 0, reject_votes = 0, retry_round = 0,
-			    next_attempt_at = NOW(), lease_owner = '', lease_expires_at = NULL,
-			    prompt_version = $3, review_criteria = $4, config_version = $5,
-			    observe_only = FALSE, sampled = $6, sample_bytes = $7,
-			    content_bytes = $8, last_error = '', completed_at = NULL,
-			    updated_at = NOW()
-			WHERE id = $1`, result.JobID, write.SelectedField, write.PromptVersion,
-			write.ReviewCriteria, write.ConfigVersion, write.Sampled,
-			write.SampleBytes, write.Vault.ContentBytes); err != nil {
-			return nil, err
-		}
 		result.Status = "pending"
 		result.ResetForEnforcement = true
 	} else if result.Status == "failed" {
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE instruction_audit_v2_review_jobs
-			SET status = 'retry', retry_round = 0, next_attempt_at = NOW(),
-			    lease_owner = '', lease_expires_at = NULL, last_error = '',
-			    completed_at = NULL, updated_at = NOW()
-			WHERE id = $1`, result.JobID); err != nil {
-			return nil, err
-		}
 		result.Status = "retry"
 		result.Requeued = true
 	} else if result.Status != "pending" && result.Status != "retry" && result.Status != "processing" {
@@ -295,6 +278,82 @@ func (r *InstructionV2Repository) ResumeOrGetReviewJobBySHA(
 		return nil, err
 	}
 	return &result, nil
+}
+
+func lockInstructionV2ReviewReuseTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	write instructionV2ReviewReuseWrite,
+) error {
+	if write.Reuse.JobID <= 0 || strings.TrimSpace(write.Job.Vault.SHA256) == "" {
+		return errors.New("instruction audit review reuse write is incomplete")
+	}
+	return lockInstructionV2ReviewDigestTx(ctx, tx, write.Job.Vault.SHA256)
+}
+
+func lockInstructionV2ReviewDigestTx(ctx context.Context, tx *sql.Tx, digest string) error {
+	digest = strings.TrimSpace(digest)
+	if digest == "" {
+		return errors.New("instruction audit review digest is empty")
+	}
+	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, digest)
+	return err
+}
+
+func applyInstructionV2ReviewReuseTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	eventID int64,
+	write instructionV2ReviewReuseWrite,
+	userID *int64,
+	userEmail string,
+) (int64, error) {
+	if write.Reuse.JobID <= 0 || strings.TrimSpace(write.Job.Vault.SHA256) == "" {
+		return 0, errors.New("instruction audit review reuse write is incomplete")
+	}
+	var status string
+	var observeOnly bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT status, observe_only
+		FROM instruction_audit_v2_review_jobs
+		WHERE id = $1 AND sha256 = $2
+		FOR UPDATE`, write.Reuse.JobID, write.Job.Vault.SHA256).Scan(&status, &observeOnly); err != nil {
+		return 0, err
+	}
+	if write.Reuse.ResetForEnforcement && observeOnly {
+		if _, err := tx.ExecContext(ctx, `
+			DELETE FROM instruction_audit_v2_review_attempts WHERE job_id = $1`, write.Reuse.JobID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE instruction_audit_v2_review_jobs
+			SET selected_field = $2, source_event_id = $3,
+			    source_user_id = NULLIF($4, 0), source_user_email_snapshot = $5,
+			    status = 'pending', final_result = '',
+			    pass_votes = 0, reject_votes = 0, retry_round = 0,
+			    next_attempt_at = NOW(), lease_owner = '', lease_expires_at = NULL,
+			    prompt_version = $6, review_criteria = $7, config_version = $8,
+			    observe_only = FALSE, sampled = $9, sample_bytes = $10,
+			    content_bytes = $11, last_error = '', completed_at = NULL,
+			    updated_at = NOW()
+			WHERE id = $1`, write.Reuse.JobID, write.Job.SelectedField, eventID,
+			pointerInt64Value(userID), userEmail, write.Job.PromptVersion,
+			write.Job.ReviewCriteria, write.Job.ConfigVersion, write.Job.Sampled,
+			write.Job.SampleBytes, write.Job.Vault.ContentBytes); err != nil {
+			return 0, err
+		}
+	} else if write.Reuse.Requeued && status == "failed" {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE instruction_audit_v2_review_jobs
+			SET source_event_id = $2, source_user_id = NULLIF($3, 0),
+			    source_user_email_snapshot = $4, status = 'retry', retry_round = 0,
+			    next_attempt_at = NOW(), lease_owner = '', lease_expires_at = NULL,
+			    last_error = '', completed_at = NULL, updated_at = NOW()
+			WHERE id = $1`, write.Reuse.JobID, eventID, pointerInt64Value(userID), userEmail); err != nil {
+			return 0, err
+		}
+	}
+	return write.Reuse.JobID, nil
 }
 
 func (r *InstructionV2Repository) ClaimReviewJob(
@@ -329,7 +388,8 @@ func (r *InstructionV2Repository) ClaimReviewJob(
 		FROM candidate
 		WHERE job.id = candidate.id
 		RETURNING job.id, job.sha256, job.content_vault_id, job.selected_field,
-		          job.source_event_id, job.status, job.final_result, job.pass_votes,
+		          job.source_event_id, job.source_user_id, job.source_user_email_snapshot,
+		          job.status, job.final_result, job.pass_votes,
 		          job.reject_votes, job.retry_round, job.next_attempt_at,
 		          job.prompt_version, job.review_criteria, job.config_version,
 		          job.observe_only, job.sampled, job.lease_owner,
@@ -337,7 +397,8 @@ func (r *InstructionV2Repository) ClaimReviewJob(
 		          job.completed_at, job.created_at, job.updated_at`, owner,
 		leaseDuration.Milliseconds()).Scan(
 		&job.ID, &job.SHA256, &job.ContentVaultID, &job.SelectedField,
-		&job.SourceEventID, &job.Status, &job.FinalResult, &job.PassVotes,
+		&job.SourceEventID, &job.SourceUserID, &job.SourceUserEmail,
+		&job.Status, &job.FinalResult, &job.PassVotes,
 		&job.RejectVotes, &job.RetryRound, &job.NextAttemptAt,
 		&job.PromptVersion, &job.ReviewCriteria, &job.ConfigVersion, &job.ObserveOnly, &job.Sampled,
 		&job.LeaseOwner,
@@ -378,14 +439,15 @@ func (r *InstructionV2Repository) RecordReviewAttempts(
 	defer func() { _ = tx.Rollback() }()
 	var status, selectedField, promptVersion, currentLeaseOwner string
 	var observeOnly bool
-	var sourceEventID sql.NullInt64
+	var sourceEventID, sourceUserID sql.NullInt64
+	var sourceUserEmail string
 	var vaultID int64
 	if err := tx.QueryRowContext(ctx, `
 		SELECT status, selected_field, prompt_version, observe_only, lease_owner,
-		       source_event_id, content_vault_id
+		       source_event_id, source_user_id, source_user_email_snapshot, content_vault_id
 		FROM instruction_audit_v2_review_jobs WHERE id = $1 FOR UPDATE`, jobID).Scan(
 		&status, &selectedField, &promptVersion, &observeOnly, &currentLeaseOwner,
-		&sourceEventID, &vaultID,
+		&sourceEventID, &sourceUserID, &sourceUserEmail, &vaultID,
 	); err != nil {
 		return "", false, err
 	}
@@ -459,13 +521,19 @@ func (r *InstructionV2Repository) RecordReviewAttempts(
 		if sourceEventID.Valid {
 			eventID = sourceEventID.Int64
 		}
+		var sourceUserIDPointer *int64
+		if sourceUserID.Valid {
+			value := sourceUserID.Int64
+			sourceUserIDPointer = &value
+		}
 		if finalResult == "pass" {
 			_, err = upsertInstructionV2TrustedTx(ctx, tx, eventID, instructionV2TrustedWrite{
 				Vault: vault, Source: "ai_review", ObservedField: selectedField,
 				ReviewerNodeID: winning.NodeID, ReviewerModel: winning.ReviewerModel,
 				PromptVersion: promptVersion, Confidence: winning.Confidence,
 				ReviewReason: winning.Reason, ReviewCategory: winning.Category,
-				GlobalTrust: true,
+				GlobalTrust: true, SourceUserID: sourceUserIDPointer,
+				SourceUserEmail: sourceUserEmail,
 			}, 0)
 		} else {
 			_, err = upsertInstructionV2RiskTx(ctx, tx, eventID, instructionV2RiskWrite{
@@ -473,6 +541,7 @@ func (r *InstructionV2Repository) RecordReviewAttempts(
 				ReviewerNodeID: winning.NodeID, ReviewerModel: winning.ReviewerModel,
 				PromptVersion: promptVersion, Confidence: winning.Confidence,
 				ReviewReason: winning.Reason, ReviewCategory: winning.Category,
+				SourceUserID: sourceUserIDPointer, SourceUserEmail: sourceUserEmail,
 			})
 		}
 		if err != nil {
@@ -607,6 +676,7 @@ func (r *InstructionV2Repository) ListReviewJobs(
 	args = append(args, pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT j.id, j.sha256, j.content_vault_id, j.selected_field, j.source_event_id,
+		       j.source_user_id, j.source_user_email_snapshot,
 		       j.status, j.final_result, j.pass_votes, j.reject_votes, j.retry_round,
 		       j.next_attempt_at, j.prompt_version, j.review_criteria, j.config_version, j.observe_only,
 		       j.sampled, j.sample_bytes, j.content_bytes, j.last_error,
@@ -639,6 +709,7 @@ func (r *InstructionV2Repository) ListReviewJobs(
 func (r *InstructionV2Repository) GetReviewJob(ctx context.Context, id int64) (InstructionV2ReviewJob, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT j.id, j.sha256, j.content_vault_id, j.selected_field, j.source_event_id,
+		       j.source_user_id, j.source_user_email_snapshot,
 		       j.status, j.final_result, j.pass_votes, j.reject_votes, j.retry_round,
 		       j.next_attempt_at, j.prompt_version, j.review_criteria, j.config_version, j.observe_only,
 		       j.sampled, j.sample_bytes, j.content_bytes, j.last_error,
@@ -660,7 +731,8 @@ func scanInstructionV2ReviewJob(scanner instructionV2ReviewJobScanner) (Instruct
 	var item InstructionV2ReviewJob
 	err := scanner.Scan(
 		&item.ID, &item.SHA256, &item.ContentVaultID, &item.SelectedField,
-		&item.SourceEventID, &item.Status, &item.FinalResult, &item.PassVotes,
+		&item.SourceEventID, &item.SourceUserID, &item.SourceUserEmail,
+		&item.Status, &item.FinalResult, &item.PassVotes,
 		&item.RejectVotes, &item.RetryRound, &item.NextAttemptAt,
 		&item.PromptVersion, &item.ReviewCriteria, &item.ConfigVersion, &item.ObserveOnly, &item.Sampled,
 		&item.SampleBytes, &item.ContentBytes, &item.LastError, &item.CompletedAt,
@@ -735,7 +807,8 @@ func (r *InstructionV2Repository) GetRiskHash(ctx context.Context, id int64) (In
 func instructionV2RiskHashSelect() string {
 	return `
 		SELECT risk.id, risk.sha256, risk.content_vault_id, risk.observed_field,
-		       risk.status, risk.source, risk.source_event_id, risk.reviewer_node_id,
+		       risk.status, risk.source, risk.source_event_id,
+		       risk.source_user_id, risk.source_user_email_snapshot, risk.reviewer_node_id,
 		       risk.reviewer_model, risk.prompt_version, risk.confidence,
 		       risk.review_reason, risk.review_category, risk.human_review_status,
 		       risk.reviewed_by, risk.reviewed_at, risk.created_by, risk.updated_by,
@@ -751,7 +824,8 @@ func scanInstructionV2RiskHash(scanner instructionV2RiskHashScanner) (Instructio
 	var item InstructionV2RiskHash
 	err := scanner.Scan(
 		&item.ID, &item.SHA256, &item.ContentVaultID, &item.ObservedField,
-		&item.Status, &item.Source, &item.SourceEventID, &item.ReviewerNodeID,
+		&item.Status, &item.Source, &item.SourceEventID,
+		&item.SourceUserID, &item.SourceUserEmail, &item.ReviewerNodeID,
 		&item.ReviewerModel, &item.PromptVersion, &item.Confidence,
 		&item.ReviewReason, &item.ReviewCategory, &item.HumanReviewStatus,
 		&item.ReviewedBy, &item.ReviewedAt, &item.CreatedBy, &item.UpdatedBy,
@@ -808,7 +882,8 @@ func (r *InstructionV2Repository) UpdateRiskHash(
 	var vault instructionV2VaultWrite
 	err = tx.QueryRowContext(ctx, `
 		SELECT risk.id, risk.sha256, risk.content_vault_id, risk.observed_field,
-		       risk.status, risk.source, risk.source_event_id, risk.reviewer_node_id,
+		       risk.status, risk.source, risk.source_event_id,
+		       risk.source_user_id, risk.source_user_email_snapshot, risk.reviewer_node_id,
 		       risk.reviewer_model, risk.prompt_version, risk.confidence,
 		       risk.review_reason, risk.review_category, risk.human_review_status,
 		       vault.raw_ciphertext, vault.content_bytes, vault.stored_bytes
@@ -816,7 +891,8 @@ func (r *InstructionV2Repository) UpdateRiskHash(
 		JOIN instruction_audit_v2_content_vault vault ON vault.id = risk.content_vault_id
 		WHERE risk.id = $1 FOR UPDATE`, id).Scan(
 		&item.ID, &item.SHA256, &item.ContentVaultID, &item.ObservedField,
-		&item.Status, &item.Source, &item.SourceEventID, &item.ReviewerNodeID,
+		&item.Status, &item.Source, &item.SourceEventID,
+		&item.SourceUserID, &item.SourceUserEmail, &item.ReviewerNodeID,
 		&item.ReviewerModel, &item.PromptVersion, &item.Confidence,
 		&item.ReviewReason, &item.ReviewCategory, &item.HumanReviewStatus,
 		&vault.RawCiphertext, &vault.ContentBytes, &vault.StoredBytes,
@@ -846,7 +922,8 @@ func (r *InstructionV2Repository) UpdateRiskHash(
 				ReviewerNodeID: item.ReviewerNodeID, ReviewerModel: item.ReviewerModel,
 				PromptVersion: item.PromptVersion, Confidence: confidence,
 				ReviewReason: "人工复审确认安全", ReviewCategory: "human_approved",
-				GlobalTrust: true,
+				GlobalTrust: true, SourceUserID: item.SourceUserID,
+				SourceUserEmail: item.SourceUserEmail,
 			}, actorID)
 		}
 	case "disable":

@@ -19,12 +19,13 @@ import (
 )
 
 var (
-	errInstructionV2ConfigConflict  = errors.New("instruction audit v2 configuration conflict")
-	errInstructionV2BuiltInProfile  = errors.New("built-in instruction audit v2 client profile cannot be deleted")
-	errInstructionV2ProfileInUse    = errors.New("instruction audit v2 client profile is in use")
-	errInstructionV2AINodeSlotInUse = errors.New("instruction audit v2 AI node slot is in use")
-	errInstructionV2RevokedHash     = errors.New("revoked instruction audit v2 hash cannot be reactivated")
-	errInstructionV2ReviewLeaseLost = errors.New("instruction audit v2 review lease lost")
+	errInstructionV2ConfigConflict      = errors.New("instruction audit v2 configuration conflict")
+	errInstructionV2BuiltInProfile      = errors.New("built-in instruction audit v2 client profile cannot be deleted")
+	errInstructionV2ProfileInUse        = errors.New("instruction audit v2 client profile is in use")
+	errInstructionV2InvalidScopeProfile = errors.New("instruction audit v2 scope references an invalid client profile")
+	errInstructionV2AINodeSlotInUse     = errors.New("instruction audit v2 AI node slot is in use")
+	errInstructionV2RevokedHash         = errors.New("revoked instruction audit v2 hash cannot be reactivated")
+	errInstructionV2ReviewLeaseLost     = errors.New("instruction audit v2 review lease lost")
 )
 
 const (
@@ -478,13 +479,17 @@ func (s *InstructionV2Service) evaluateExistingInstructionV2Review(
 			SHA256:       prepared.SHA256,
 			ContentBytes: prepared.Bytes,
 		},
-		SelectedField:  evaluation.selectedFieldName,
-		PromptVersion:  evaluation.snapshot.PromptVersion,
-		ReviewCriteria: evaluation.snapshot.Config.ReviewCriteria,
-		ConfigVersion:  evaluation.snapshot.Config.ConfigVersion,
-		ObserveOnly:    evaluation.snapshot.Config.EffectiveMode == InstructionV2ModeObserve,
-		Sampled:        prepared.AISampled,
-		SampleBytes:    len([]byte(prepared.AISample)),
+		SelectedField:   evaluation.selectedFieldName,
+		PromptVersion:   evaluation.snapshot.PromptVersion,
+		ReviewCriteria:  evaluation.snapshot.Config.ReviewCriteria,
+		ConfigVersion:   evaluation.snapshot.Config.ConfigVersion,
+		ObserveOnly:     evaluation.snapshot.Config.EffectiveMode == InstructionV2ModeObserve,
+		Sampled:         prepared.AISampled,
+		SampleBytes:     len([]byte(prepared.AISample)),
+		SourceUserEmail: evaluation.request.UserEmail,
+	}
+	if evaluation.request.UserID > 0 {
+		write.SourceUserID = instructionV2Int64Pointer(evaluation.request.UserID)
 	}
 	reuse, err := s.repository.ResumeOrGetReviewJobBySHA(ctx, write)
 	if err != nil {
@@ -521,7 +526,11 @@ func (s *InstructionV2Service) evaluateExistingInstructionV2Review(
 		reason,
 	)
 	event.ReviewJobID = instructionV2Int64Pointer(reuse.JobID)
-	result, persistErr := s.persistCriticalEventWrite(ctx, instructionV2PersistEvent{Event: event})
+	persistWrite := instructionV2PersistEvent{Event: event}
+	if reuse.Requeued || reuse.ResetForEnforcement {
+		persistWrite.ReviewReuse = &instructionV2ReviewReuseWrite{Reuse: *reuse, Job: write}
+	}
+	result, persistErr := s.persistCriticalEventWrite(ctx, persistWrite)
 	if persistErr != nil {
 		slog.Error(
 			"instruction_audit_v2.review_reuse_event_persist_failed",

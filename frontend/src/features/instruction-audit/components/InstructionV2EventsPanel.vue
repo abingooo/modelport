@@ -93,7 +93,25 @@
         <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.eventCount', { count: page.total }) }}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <button type="button" class="btn btn-secondary btn-sm" :disabled="!selectedIds.length || deleting" @click="confirmBatchDelete = true">
+        <button
+          type="button"
+          class="btn btn-secondary btn-sm"
+          data-test="select-current-page"
+          :aria-pressed="allCurrentPageSelected"
+          :disabled="loading || deleting || !page.items.length"
+          @click="toggleCurrentPageSelection"
+        >
+          <Icon :name="allCurrentPageSelected ? 'x' : 'check'" size="sm" />
+          {{ t(allCurrentPageSelected ? 'admin.instructionAudit.v2.clearCurrentPageSelection' : 'admin.instructionAudit.v2.selectCurrentPage') }}
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm"
+          :class="selectedIds.length ? 'btn-danger' : 'btn-secondary'"
+          data-test="delete-selected"
+          :disabled="selectedIds.length === 0 || loading || deleting"
+          @click="confirmBatchDelete = true"
+        >
           <Icon name="trash" size="sm" />
           {{ t('admin.instructionAudit.v2.deleteSelected', { count: selectedIds.length }) }}
         </button>
@@ -116,7 +134,7 @@
       <article v-for="event in page.items" :key="event.id" class="audit-event-card">
         <header class="flex min-w-0 items-start justify-between gap-3">
           <div class="flex min-w-0 items-start gap-3">
-            <input type="checkbox" class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500" :checked="selectedIds.includes(event.id)" :aria-label="`#${event.id}`" @change="toggleSelection(event.id)" />
+            <input type="checkbox" class="mt-1 rounded border-gray-300 text-primary-600 focus:ring-primary-500" :checked="selectedIds.includes(event.id)" :disabled="loading || deleting" :aria-label="`#${event.id}`" :data-test="`select-event-${event.id}`" @change="toggleSelection(event.id)" />
             <div class="min-w-0">
               <div class="flex min-w-0 flex-wrap items-center gap-2">
                 <button type="button" class="font-semibold text-primary-700 hover:underline dark:text-primary-300" @click="filterEvent(event.id)">#{{ event.id }}</button>
@@ -130,7 +148,7 @@
             <button type="button" class="icon-btn" :title="t('admin.instructionAudit.v2.reviewEvidence')" @click="openEvidence(event)">
               <Icon name="eye" size="sm" />
             </button>
-            <button type="button" class="icon-btn text-red-600 dark:text-red-400" :title="t('common.delete')" @click="eventToDelete = event">
+            <button type="button" class="icon-btn text-red-600 dark:text-red-400" :disabled="loading || deleting" :title="t('common.delete')" @click="eventToDelete = event">
               <Icon name="trash" size="sm" />
             </button>
           </div>
@@ -219,7 +237,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -273,10 +291,12 @@ const deleting = ref(false)
 const error = ref('')
 const advancedOpen = ref(false)
 const selectedIds = ref<number[]>([])
+const allCurrentPageSelected = computed(() => page.items.length > 0 && page.items.every((event) => selectedIds.value.includes(event.id)))
 const evidenceEvent = ref<InstructionEvent | null>(null)
 const eventToDelete = ref<InstructionEvent | null>(null)
 const eventToTrust = ref<InstructionEvent | null>(null)
 const confirmBatchDelete = ref(false)
+let latestLoadRequest = 0
 
 const filters = reactive({
   q: '',
@@ -317,22 +337,29 @@ function requestFilters(): InstructionEventFilters {
 }
 
 async function loadEvents() {
+  const requestId = ++latestLoadRequest
   loading.value = true
   error.value = ''
   const activeFilters = requestFilters()
   emit('filters-change', activeFilters)
   try {
     const next = await instructionAuditV2API.listEvents({ ...activeFilters, page: page.page, page_size: page.page_size })
+    if (requestId !== latestLoadRequest) return
     Object.assign(page, next)
     selectedIds.value = selectedIds.value.filter((id) => next.items.some((item) => item.id === id))
   } catch (caught) {
+    if (requestId !== latestLoadRequest) return
+    Object.assign(page, { items: [], total: 0, pages: 0 })
+    clearSelection()
+    eventToDelete.value = null
     error.value = extractApiErrorMessage(caught, t('common.error'))
   } finally {
-    loading.value = false
+    if (requestId === latestLoadRequest) loading.value = false
   }
 }
 
 function applyFilters() {
+  clearSelection()
   page.page = 1
   loadEvents()
 }
@@ -350,20 +377,42 @@ function filterEvent(id: number) {
 }
 
 function changePage(value: number) {
+  clearSelection()
   page.page = value
   loadEvents()
 }
 
 function changePageSize(value: number) {
+  clearSelection()
   page.page_size = value
   page.page = 1
   loadEvents()
+}
+
+function clearSelection() {
+  selectedIds.value = []
+  confirmBatchDelete.value = false
+}
+
+function clampPageAfterDelete(deleted: number) {
+  const remaining = Math.max(0, page.total - Math.max(0, deleted))
+  const lastPage = Math.max(1, Math.ceil(remaining / page.page_size))
+  page.page = Math.min(page.page, lastPage)
 }
 
 function toggleSelection(id: number) {
   selectedIds.value = selectedIds.value.includes(id)
     ? selectedIds.value.filter((item) => item !== id)
     : [...selectedIds.value, id]
+}
+
+function toggleCurrentPageSelection() {
+  const currentPageIds = new Set(page.items.map((event) => event.id))
+  if (allCurrentPageSelected.value) {
+    selectedIds.value = selectedIds.value.filter((id) => !currentPageIds.has(id))
+    return
+  }
+  selectedIds.value = [...new Set([...selectedIds.value, ...currentPageIds])]
 }
 
 function openEvidence(event: InstructionEvent) {
@@ -387,6 +436,7 @@ async function deleteSingle() {
   deleting.value = true
   try {
     await instructionAuditV2API.deleteEvent(eventToDelete.value!.id)
+    clampPageAfterDelete(1)
     appStore.showSuccess(t('admin.instructionAudit.v2.eventDeleted'))
     eventToDelete.value = null
     await loadEvents()
@@ -402,6 +452,7 @@ async function deleteBatch() {
   deleting.value = true
   try {
     const deleted = await instructionAuditV2API.deleteEvents([...selectedIds.value])
+    clampPageAfterDelete(deleted)
     appStore.showSuccess(t('admin.instructionAudit.v2.eventsDeleted', { count: deleted }))
     selectedIds.value = []
     confirmBatchDelete.value = false

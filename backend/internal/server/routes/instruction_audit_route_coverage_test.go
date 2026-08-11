@@ -115,6 +115,8 @@ func TestInstructionAuditAdminRoutesExposeGroupAndClientScopes(t *testing.T) {
 	for _, route := range []string{
 		`instructionAudit.GET("/scopes"`,
 		`instructionAudit.POST("/scopes"`,
+		`instructionAudit.POST("/scopes/batch"`,
+		`instructionAudit.DELETE("/scopes/group/:id"`,
 		`instructionAudit.DELETE("/scopes/:id"`,
 		`instructionAudit.GET("/client-profiles"`,
 		`instructionAudit.GET("/groups"`,

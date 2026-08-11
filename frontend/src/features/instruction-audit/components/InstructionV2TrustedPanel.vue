@@ -82,6 +82,26 @@
             <dt class="hash-label">{{ t('admin.instructionAudit.v2.scopeCount') }}</dt>
             <dd class="mt-1 text-sm text-gray-800 dark:text-gray-200">{{ hash.scopes.length }}</dd>
           </div>
+          <div class="min-w-0" data-test="hash-source-account">
+            <dt class="hash-label">{{ t('admin.instructionAudit.v2.sourceAccount') }}</dt>
+            <dd class="mt-1 break-words text-xs text-gray-800 dark:text-gray-200">
+              <template v-if="hash.source_user_email">
+                {{ hash.source_user_email }}
+                <span v-if="hash.source_user_id != null" class="text-gray-500 dark:text-gray-400"> · #{{ hash.source_user_id }}</span>
+                <span v-else class="text-amber-600 dark:text-amber-300"> · {{ t('admin.instructionAudit.v2.sourceAccountDeleted') }}</span>
+              </template>
+              <template v-else-if="hash.source_user_id != null">#{{ hash.source_user_id }}</template>
+              <template v-else-if="isManualHash(hash)">{{ t('admin.instructionAudit.v2.sourceAccountNotApplicable') }}</template>
+              <template v-else>{{ t('admin.instructionAudit.v2.sourceAccountUnknown') }}</template>
+            </dd>
+          </div>
+          <div v-if="hash.source_event_id != null || hasSourceAccount(hash)" class="min-w-0" data-test="hash-source-event">
+            <dt class="hash-label">{{ t('admin.instructionAudit.v2.sourceEvent') }}</dt>
+            <dd class="mt-1 break-words text-xs text-gray-800 dark:text-gray-200">
+              <template v-if="hash.source_event_id != null">#{{ hash.source_event_id }}</template>
+              <template v-else>{{ t('admin.instructionAudit.v2.sourceEventPurged') }}</template>
+            </dd>
+          </div>
         </dl>
 
         <div class="min-w-0">
@@ -275,6 +295,15 @@ function changePageSize(value: number) {
   page.page_size = value
   page.page = 1
   loadHashes()
+}
+
+function hasSourceAccount(hash: InstructionHash): boolean {
+  return hash.source_user_id != null || Boolean(hash.source_user_email)
+}
+
+function isManualHash(hash: InstructionHash): boolean {
+  return (hash.source === 'manual' || hash.source === 'import') &&
+    hash.source_event_id == null && !hasSourceAccount(hash)
 }
 
 function resetForm() {

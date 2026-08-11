@@ -16,6 +16,17 @@ func (r *InstructionV2Repository) PersistInstructionV2Event(ctx context.Context,
 		return instructionV2PersistResult{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if write.ReviewReuse != nil {
+		// The event FK takes a KEY SHARE lock on the reused job. Take the
+		// digest lock first so every review writer follows the same lock order.
+		if err := lockInstructionV2ReviewReuseTx(ctx, tx, *write.ReviewReuse); err != nil {
+			return instructionV2PersistResult{}, err
+		}
+	} else if write.ReviewJob != nil {
+		if err := lockInstructionV2ReviewDigestTx(ctx, tx, write.ReviewJob.Vault.SHA256); err != nil {
+			return instructionV2PersistResult{}, err
+		}
+	}
 	eventID, err := insertInstructionV2Event(ctx, tx, write.Event)
 	if err != nil {
 		return instructionV2PersistResult{}, err
@@ -46,8 +57,24 @@ func (r *InstructionV2Repository) PersistInstructionV2Event(ctx context.Context,
 		}
 	}
 	result := instructionV2PersistResult{EventID: eventID}
+	if write.ReviewReuse != nil {
+		jobID, reuseErr := applyInstructionV2ReviewReuseTx(
+			ctx, tx, eventID, *write.ReviewReuse, write.Event.UserID, write.Event.UserEmail,
+		)
+		if reuseErr != nil {
+			return instructionV2PersistResult{}, reuseErr
+		}
+		result.JobID = &jobID
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE instruction_audit_v2_events SET review_job_id = $2 WHERE id = $1`, eventID, jobID); err != nil {
+			return instructionV2PersistResult{}, err
+		}
+	}
 	if write.Trusted != nil {
-		hashID, trustedErr := upsertInstructionV2TrustedTx(ctx, tx, eventID, *write.Trusted, 0)
+		trusted := *write.Trusted
+		trusted.SourceUserID = write.Event.UserID
+		trusted.SourceUserEmail = write.Event.UserEmail
+		hashID, trustedErr := upsertInstructionV2TrustedTx(ctx, tx, eventID, trusted, 0)
 		if trustedErr != nil {
 			return instructionV2PersistResult{}, trustedErr
 		}
@@ -58,14 +85,20 @@ func (r *InstructionV2Repository) PersistInstructionV2Event(ctx context.Context,
 		}
 	}
 	if write.Risk != nil {
-		riskID, riskErr := upsertInstructionV2RiskTx(ctx, tx, eventID, *write.Risk)
+		risk := *write.Risk
+		risk.SourceUserID = write.Event.UserID
+		risk.SourceUserEmail = write.Event.UserEmail
+		riskID, riskErr := upsertInstructionV2RiskTx(ctx, tx, eventID, risk)
 		if riskErr != nil {
 			return instructionV2PersistResult{}, riskErr
 		}
 		result.RiskID = &riskID
 	}
 	if write.ReviewJob != nil {
-		jobID, jobErr := upsertInstructionV2ReviewJobTx(ctx, tx, eventID, *write.ReviewJob)
+		job := *write.ReviewJob
+		job.SourceUserID = write.Event.UserID
+		job.SourceUserEmail = write.Event.UserEmail
+		jobID, jobErr := upsertInstructionV2ReviewJobTx(ctx, tx, eventID, job)
 		if jobErr != nil {
 			return instructionV2PersistResult{}, jobErr
 		}

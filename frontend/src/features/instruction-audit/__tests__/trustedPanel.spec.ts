@@ -33,7 +33,7 @@ const DialogStub = defineComponent({
 })
 const EmptyStub = { template: '<span />' }
 
-function hash(id: number, rawStorage: InstructionHash['raw_storage']): InstructionHash {
+function hash(id: number, rawStorage: InstructionHash['raw_storage'], overrides: Partial<InstructionHash> = {}): InstructionHash {
   return {
     id,
     sha256: String(id).repeat(64),
@@ -48,6 +48,7 @@ function hash(id: number, rawStorage: InstructionHash['raw_storage']): Instructi
     raw_storage: rawStorage,
     stored_bytes: rawStorage === 'unavailable' ? 0 : 28,
     ai_sampled: false,
+    source_user_email: '',
     reviewer_model: '',
     prompt_version: '',
     review_reason: '',
@@ -58,6 +59,7 @@ function hash(id: number, rawStorage: InstructionHash['raw_storage']): Instructi
     scopes: [],
     created_at: '2026-08-10T09:30:00Z',
     updated_at: '2026-08-10T09:30:00Z',
+    ...overrides,
   }
 }
 
@@ -99,5 +101,73 @@ describe('InstructionV2TrustedPanel plaintext availability', () => {
     await flushPromises()
     expect(mocks.revealHashRaw).toHaveBeenCalledOnce()
     expect(mocks.revealHashRaw).toHaveBeenCalledWith(1)
+  })
+
+  it('shows request-account snapshots and distinguishes deleted accounts and purged events', async () => {
+    mocks.listHashes.mockResolvedValue({
+      items: [
+        hash(1, 'full', { source: 'ai_review', source_event_id: 801, source_user_id: 42, source_user_email: 'active@example.com' }),
+        hash(2, 'full', { source: 'ai_review', source_event_id: 802, source_user_id: null, source_user_email: 'deleted@example.com' }),
+        hash(3, 'full', { source: 'ai_review', source_event_id: null, source_user_id: 43, source_user_email: 'retained@example.com' }),
+      ],
+      total: 3,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mount(InstructionV2TrustedPanel, {
+      props: { scopes: [], refreshKey: 0 },
+      global: {
+        stubs: {
+          BaseDialog: DialogStub,
+          ConfirmDialog: EmptyStub,
+          Pagination: EmptyStub,
+          Icon: EmptyStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const cards = wrapper.findAll('article')
+    expect(cards[0].get('[data-test="hash-source-account"]').text()).toContain('active@example.com')
+    expect(cards[0].get('[data-test="hash-source-account"]').text()).toContain('#42')
+    expect(cards[0].get('[data-test="hash-source-event"]').text()).toContain('#801')
+    expect(cards[1].get('[data-test="hash-source-account"]').text()).toContain('deleted@example.com')
+    expect(cards[1].get('[data-test="hash-source-account"]').text()).toContain('admin.instructionAudit.v2.sourceAccountDeleted')
+    expect(cards[2].get('[data-test="hash-source-event"]').text()).toContain('admin.instructionAudit.v2.sourceEventPurged')
+  })
+
+  it('distinguishes administrator imports from historical records without an account snapshot', async () => {
+    mocks.listHashes.mockResolvedValue({
+      items: [
+        hash(1, 'unavailable', { source: 'import' }),
+        hash(2, 'full', { source: 'ai_review' }),
+        hash(3, 'full', { source: 'manual', source_event_id: 803, source_user_id: 44, source_user_email: 'trusted@example.com' }),
+      ],
+      total: 3,
+      page: 1,
+      page_size: 20,
+      pages: 1,
+    })
+
+    const wrapper = mount(InstructionV2TrustedPanel, {
+      props: { scopes: [], refreshKey: 0 },
+      global: {
+        stubs: {
+          BaseDialog: DialogStub,
+          ConfirmDialog: EmptyStub,
+          Pagination: EmptyStub,
+          Icon: EmptyStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const cards = wrapper.findAll('article')
+    expect(cards[0].get('[data-test="hash-source-account"]').text()).toContain('admin.instructionAudit.v2.sourceAccountNotApplicable')
+    expect(cards[1].get('[data-test="hash-source-account"]').text()).toContain('admin.instructionAudit.v2.sourceAccountUnknown')
+    expect(cards[2].get('[data-test="hash-source-account"]').text()).toContain('trusted@example.com')
+    expect(cards[2].get('[data-test="hash-source-event"]').text()).toContain('#803')
   })
 })
