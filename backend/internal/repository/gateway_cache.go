@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -15,6 +16,7 @@ import (
 
 const stickySessionPrefix = "sticky_session:"
 const liveCallPrefix = "live:call:"
+const defaultGrokVoiceLibraryReservationTTL = 10 * time.Minute
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -47,6 +49,191 @@ func (c *gatewayCache) SetSessionAccountID(ctx context.Context, groupID int64, s
 	return c.rdb.Set(ctx, key, accountID, ttl).Err()
 }
 
+var claimSessionAccountIDWithTTLScript = redis.NewScript(`
+	local current = redis.call('GET', KEYS[1])
+	if current == false then
+		if ARGV[2] == '0' then
+			redis.call('SET', KEYS[1], ARGV[1])
+		else
+			redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+		end
+		return ARGV[1]
+	end
+	if current == ARGV[1] then
+		if ARGV[2] == '0' then
+			redis.call('PERSIST', KEYS[1])
+		else
+			redis.call('PEXPIRE', KEYS[1], ARGV[2])
+		end
+	end
+	return current
+`)
+
+// ClaimSessionAccountID creates a non-expiring binding without overwriting an
+// existing owner. It returns the account currently bound after the claim.
+func (c *gatewayCache) ClaimSessionAccountID(ctx context.Context, groupID int64, sessionHash string, accountID int64) (int64, error) {
+	return c.ClaimSessionAccountIDWithTTL(ctx, groupID, sessionHash, accountID, 0)
+}
+
+// ClaimSessionAccountIDWithTTL atomically creates or refreshes a binding when
+// accountID owns it. A conflicting owner and its TTL are left unchanged.
+func (c *gatewayCache) ClaimSessionAccountIDWithTTL(
+	ctx context.Context,
+	groupID int64,
+	sessionHash string,
+	accountID int64,
+	ttl time.Duration,
+) (int64, error) {
+	ttlMillis := int64(0)
+	if ttl > 0 {
+		ttlMillis = ttl.Milliseconds()
+		if ttlMillis < 1 {
+			ttlMillis = 1
+		}
+	}
+	boundAccountID, err := claimSessionAccountIDWithTTLScript.Run(
+		ctx,
+		c.rdb,
+		[]string{buildSessionKey(groupID, sessionHash)},
+		strconv.FormatInt(accountID, 10),
+		strconv.FormatInt(ttlMillis, 10),
+	).Text()
+	if err != nil {
+		return 0, err
+	}
+	parsed, err := strconv.ParseInt(boundAccountID, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse claimed session account ID: %w", err)
+	}
+	return parsed, nil
+}
+
+var commitGrokVoiceLibraryReservationScript = redis.NewScript(`
+	local pending = redis.call('GET', KEYS[2])
+	if pending == false or pending ~= ARGV[1] then
+		return 0
+	end
+	local library = redis.call('GET', KEYS[1])
+	if library ~= false and library ~= ARGV[2] then
+		return -1
+	end
+	local resource = redis.call('GET', KEYS[3])
+	if resource ~= false and resource ~= ARGV[2] then
+		return -2
+	end
+	redis.call('SET', KEYS[1], ARGV[2])
+	redis.call('SET', KEYS[3], ARGV[2])
+	redis.call('DEL', KEYS[2])
+	return 1
+`)
+
+var reserveGrokVoiceLibraryScript = redis.NewScript(`
+	local library = redis.call('GET', KEYS[1])
+	if library ~= false and library ~= ARGV[1] then
+		return -1
+	end
+	if redis.call('GET', KEYS[2]) ~= false then
+		return 0
+	end
+	redis.call('SET', KEYS[2], ARGV[2], 'PX', ARGV[3])
+	return 1
+`)
+
+var releaseGrokVoiceLibraryReservationScript = redis.NewScript(`
+	if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+		return 0
+	end
+	return redis.call('DEL', KEYS[1])
+`)
+
+func (c *gatewayCache) ReserveGrokVoiceLibrary(
+	ctx context.Context,
+	groupID int64,
+	libraryKey string,
+	accountID int64,
+	token string,
+	ttl time.Duration,
+) (bool, error) {
+	if ttl <= 0 {
+		ttl = defaultGrokVoiceLibraryReservationTTL
+	}
+	libraryRedisKey := buildSessionKey(groupID, libraryKey)
+	pendingKey := buildSessionKey(groupID, libraryKey+":pending")
+	value := fmt.Sprintf("%d:%s", accountID, token)
+	ttlMillis := ttl.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = 1
+	}
+	result, err := reserveGrokVoiceLibraryScript.Run(
+		ctx,
+		c.rdb,
+		[]string{libraryRedisKey, pendingKey},
+		accountID,
+		value,
+		ttlMillis,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	if result < 0 {
+		return false, errors.New("grok custom voice library account conflict")
+	}
+	return result == 1, nil
+}
+
+func (c *gatewayCache) CommitGrokVoiceLibraryReservation(
+	ctx context.Context,
+	groupID int64,
+	libraryKey, resourceKey string,
+	accountID int64,
+	token string,
+) error {
+	libraryRedisKey := buildSessionKey(groupID, libraryKey)
+	pendingRedisKey := buildSessionKey(groupID, libraryKey+":pending")
+	resourceRedisKey := buildSessionKey(groupID, resourceKey)
+	value := fmt.Sprintf("%d:%s", accountID, token)
+	// The upstream voice already exists when commit runs. Persist ownership even
+	// if the downstream request was canceled while the response was in flight.
+	commitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	result, err := commitGrokVoiceLibraryReservationScript.Run(
+		commitCtx,
+		c.rdb,
+		[]string{libraryRedisKey, pendingRedisKey, resourceRedisKey},
+		value,
+		accountID,
+	).Int()
+	if err != nil {
+		return err
+	}
+	switch result {
+	case 1:
+		return nil
+	case -1:
+		return errors.New("grok custom voice library account conflict")
+	case -2:
+		return errors.New("grok custom voice resource account conflict")
+	default:
+		return errors.New("grok custom voice library reservation expired")
+	}
+}
+
+func (c *gatewayCache) ReleaseGrokVoiceLibraryReservation(
+	ctx context.Context,
+	groupID int64,
+	libraryKey string,
+	accountID int64,
+	token string,
+) error {
+	pendingRedisKey := buildSessionKey(groupID, libraryKey+":pending")
+	value := fmt.Sprintf("%d:%s", accountID, token)
+	// Reservation cleanup must survive a downstream disconnect. The token check
+	// in the script makes this safe even when the expired lock was reacquired.
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	return releaseGrokVoiceLibraryReservationScript.Run(releaseCtx, c.rdb, []string{pendingRedisKey}, value).Err()
+}
+
 func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, sessionHash string, ttl time.Duration) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Expire(ctx, key, ttl).Err()
@@ -62,6 +249,68 @@ func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, ses
 func (c *gatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Del(ctx, key).Err()
+}
+
+const (
+	grokVideoPendingBillingPrefix = "grok_video_pending:"
+	grokVideoBilledPrefix         = "grok_video_billed:"
+)
+
+func (c *gatewayCache) SetGrokVideoPendingBilling(ctx context.Context, key string, payload []byte, ttl time.Duration) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" || len(payload) == 0 {
+		return errors.New("invalid grok video pending billing payload")
+	}
+	if ttl <= 0 {
+		ttl = 24 * time.Hour
+	}
+	return c.rdb.Set(ctx, grokVideoPendingBillingPrefix+key, payload, ttl).Err()
+}
+
+func (c *gatewayCache) GetGrokVideoPendingBilling(ctx context.Context, key string) ([]byte, error) {
+	if c == nil || c.rdb == nil {
+		return nil, errors.New("gateway cache unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, errors.New("invalid grok video pending billing key")
+	}
+	val, err := c.rdb.Get(ctx, grokVideoPendingBillingPrefix+key).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return val, nil
+}
+
+func (c *gatewayCache) ClaimGrokVideoBilled(ctx context.Context, key string, ttl time.Duration) (bool, error) {
+	if c == nil || c.rdb == nil {
+		return false, errors.New("gateway cache unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false, errors.New("invalid grok video billed key")
+	}
+	if ttl <= 0 {
+		ttl = 48 * time.Hour
+	}
+	return c.rdb.SetNX(ctx, grokVideoBilledPrefix+key, "1", ttl).Result()
+}
+
+func (c *gatewayCache) ReleaseGrokVideoBilled(ctx context.Context, key string) error {
+	if c == nil || c.rdb == nil {
+		return errors.New("gateway cache unavailable")
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return errors.New("invalid grok video billed key")
+	}
+	return c.rdb.Del(ctx, grokVideoBilledPrefix+key).Err()
 }
 
 // Compile-time assertion: gatewayCache must implement CyberSessionBlockStore.

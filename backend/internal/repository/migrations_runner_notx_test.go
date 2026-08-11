@@ -196,6 +196,95 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_instruction_audit_events_pass_cleanu
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+func TestApplyMigrationsFS_NonTransactionalMigration_UsageModelMismatchIndexDropsInvalidIndexBeforeRetry(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	defer func() { _ = db.Close() }()
+
+	prepareMigrationsBootstrapExpectations(mock)
+	mock.ExpectQuery("SELECT checksum FROM schema_migrations WHERE filename = \\$1").
+		WithArgs(usageLogsUpstreamModelMismatchIndexMigration).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT EXISTS \\(").
+		WithArgs(usageLogsUpstreamModelMismatchIndex).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectExec("DROP INDEX CONCURRENTLY IF EXISTS idx_usage_logs_upstream_model_mismatch_created_at").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_usage_logs_upstream_model_mismatch_created_at").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("INSERT INTO schema_migrations \\(filename, checksum\\) VALUES \\(\\$1, \\$2\\)").
+		WithArgs(usageLogsUpstreamModelMismatchIndexMigration, sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("SELECT pg_advisory_unlock\\(\\$1\\)").
+		WithArgs(migrationsAdvisoryLockID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	fsys := fstest.MapFS{
+		usageLogsUpstreamModelMismatchIndexMigration: &fstest.MapFile{Data: []byte(`
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_usage_logs_upstream_model_mismatch_created_at
+    ON usage_logs (created_at DESC, id DESC)
+    WHERE upstream_model_mismatch IS TRUE;
+`)},
+	}
+
+	err = applyMigrationsFS(context.Background(), db, fsys)
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestMigrationChecksumCompatibilityRulesUseTrimmedContentHashes(t *testing.T) {
+	tests := []struct {
+		name       string
+		current    string
+		historical []string
+		rawHash    string
+	}{
+		{
+			name:       "195_channel_monitor_mode.sql",
+			current:    "73c39ac374c722253135041466108836845828a6065b499c60e7f27d6b92c21c",
+			historical: []string{"f20366e106e3a54c73d4a67df3ba87734427ed859bc4ae42b0708e4cbcbacb56"},
+			rawHash:    "13f3792f3e3e53ee96e26415c884cf8062c77172824b54fcc9a8c0c2b1f185ec",
+		},
+		{
+			name:       "218_group_audio_voice_pricing.sql",
+			current:    "a99ade7d0d464c67bf56814570050cc363ffad64eae2cb1e1ed760065f0b3585",
+			historical: []string{"343a955e52348ce92c35753e78ca3f8e5a76060c20af71061ca5e04c6ed84085"},
+			rawHash:    "40ee9f3a2af0e0a5e99dabc878fd0fe98be1011f26bcfcefcac7197f7081f0e7",
+		},
+		{
+			name:       "219_group_search_price_per_1k.sql",
+			current:    "430c2e3595342fe22c59e9676e9b18ea376f076324b77174a21e6f181f57f4b5",
+			historical: []string{"833578274d0eed24d39355298d5659b33e5484c869b331ffd815187c221552d2"},
+			rawHash:    "e86786ebcc3b14206fd2d321380a4e50e80cdadbfcf4962c639255e6a14008db",
+		},
+		{
+			name:    "220_clear_non_grok_video_generation_config.sql",
+			current: "cf4dbfa75ac27d93a30a6a14439fe7dccfc911c043358363d5ec47946aa0e28b",
+			historical: []string{
+				"353c8e8e1805f2a6fd61311e03118e7dd8388f264cfd9af9e0cabe2a696388c4",
+				"3d08d905a7bca1f56f14b6d2a2a0dcb07480ff52c21393b4e2db1b3a3f83b3d0",
+			},
+			rawHash: "85e320b9ec64f2d3fcd8cf705b2b4e76a7b49f7a57140c14bff97f32691c818b",
+		},
+	}
+
+	unknown := "0000000000000000000000000000000000000000000000000000000000000000"
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rule, ok := migrationChecksumCompatibilityRules[tt.name]
+			require.True(t, ok)
+			require.Equal(t, tt.current, rule.fileChecksum)
+			for _, historical := range tt.historical {
+				require.True(t, isMigrationChecksumCompatible(tt.name, historical, tt.current))
+				require.True(t, isMigrationChecksumCompatible(tt.name, tt.current, historical))
+			}
+			require.False(t, isMigrationChecksumCompatible(tt.name, unknown, tt.current))
+			require.False(t, isMigrationChecksumCompatible(tt.name, tt.historical[0], unknown))
+			require.False(t, isMigrationChecksumCompatible(tt.name, tt.historical[0], tt.rawHash))
+		})
+	}
+}
+
 func TestApplyMigrationsFS_PaymentOrdersOutTradeNoUniqueMigration_FailsFastOnDuplicatePrecheck(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)

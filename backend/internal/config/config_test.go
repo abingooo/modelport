@@ -538,6 +538,19 @@ func TestLoadOpenAICompactModelFromEnv(t *testing.T) {
 	require.Equal(t, "gpt-5.3-codex", cfg.Gateway.OpenAICompactModel)
 }
 
+func TestLoadDefaultGrokFreeQuotaSoftGate(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.Grok.PasswordAuthEnabled)
+	require.True(t, cfg.Gateway.Grok.FreeQuotaSoftGateEnabled)
+	require.Equal(t, int64(500_000), cfg.Gateway.Grok.FreeQuotaTokenLimit)
+	require.Equal(t, 95, cfg.Gateway.Grok.FreeQuotaSoftGatePercent)
+	require.Equal(t, 24, cfg.Gateway.Grok.FreeQuotaWindowHours)
+	require.Equal(t, 60, cfg.Gateway.Grok.FreeQuotaStatsCacheSeconds)
+}
+
 func TestLoadDefaultOpenAIHTTP2Enabled(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -573,6 +586,52 @@ func TestLoadOpenAIHTTP2DisabledFromEnv(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.False(t, cfg.Gateway.OpenAIHTTP2.Enabled)
+}
+
+func TestLoadGrokVoiceHTTPTimeout(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, DefaultGrokVoiceHTTPTimeoutSeconds, cfg.Gateway.Grok.VoiceHTTPTimeoutSeconds)
+	})
+
+	t.Run("environment override", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_GROK_VOICE_HTTP_TIMEOUT_SECONDS", "45")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.Equal(t, 45, cfg.Gateway.Grok.VoiceHTTPTimeoutSeconds)
+	})
+}
+
+func TestGrokVoiceHTTPTimeoutConfigValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		seconds int
+		valid   bool
+	}{
+		{name: "minimum", seconds: 1, valid: true},
+		{name: "maximum", seconds: MaxGrokVoiceHTTPTimeoutSeconds, valid: true},
+		{name: "zero", seconds: 0, valid: false},
+		{name: "above maximum", seconds: MaxGrokVoiceHTTPTimeoutSeconds + 1, valid: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			cfg, err := Load()
+			require.NoError(t, err)
+			cfg.Gateway.Grok.VoiceHTTPTimeoutSeconds = tc.seconds
+
+			err = cfg.Validate()
+			if tc.valid {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, "gateway.grok.voice_http_timeout_seconds")
+		})
+	}
 }
 
 func TestLoadDefaultOpenAIResponseHeaderTimeoutUnlimited(t *testing.T) {
@@ -1760,6 +1819,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway openai high effort first output timeout too large",
 			mutate:  func(c *Config) { c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds = 1801 },
 			wantErr: "gateway.openai_high_effort_first_output_timeout_seconds",
+		},
+		{
+			name:    "gateway grok voice http timeout disabled",
+			mutate:  func(c *Config) { c.Gateway.Grok.VoiceHTTPTimeoutSeconds = 0 },
+			wantErr: "gateway.grok.voice_http_timeout_seconds",
+		},
+		{
+			name:    "gateway grok voice http timeout too large",
+			mutate:  func(c *Config) { c.Gateway.Grok.VoiceHTTPTimeoutSeconds = MaxGrokVoiceHTTPTimeoutSeconds + 1 },
+			wantErr: "gateway.grok.voice_http_timeout_seconds",
 		},
 		{
 			name:    "gateway max idle conns",
