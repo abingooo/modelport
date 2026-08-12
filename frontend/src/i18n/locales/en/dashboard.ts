@@ -731,7 +731,7 @@ export default {
       },
       firstRecharge: {
         title: 'Invitee First Top-up',
-        rule: 'The inviter receives {inviter}; the invitee receives {percent}% of the amount paid as balance'
+        rule: 'The inviter receives {inviter}; the invitee\'s total first-top-up benefit is {percent}% of the amount paid, including this order\'s tier bonus without stacking'
       }
     },
     progress: {

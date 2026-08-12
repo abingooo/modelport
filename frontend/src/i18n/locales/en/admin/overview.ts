@@ -476,7 +476,7 @@ export default {
           defaultInviterHint: 'An explicit affiliate code always takes priority; otherwise the specified user is bound automatically',
           defaultInviterUserId: 'Default Inviter User ID',
           firstRecharge: 'Invitee First Top-up Reward',
-          firstRechargeHint: 'Triggered once by the first completed balance top-up',
+          firstRechargeHint: 'Triggered once by the first completed balance top-up; this order\'s tier bonus is deducted so the rewards do not stack',
           inviterBonus: 'Inviter Balance Reward',
           trialAmount: 'Trial Benefit Value',
           trialGroup: 'Trial Group',
@@ -509,6 +509,9 @@ export default {
           quota_amount: 'Reward Quota',
           validity_days: 'Validity Days',
           bonus_percent: 'Reward Percentage',
+          nominal_reward_amount: 'Nominal First Top-up Reward',
+          recharge_bonus_offset_amount: 'Tier Bonus Offset',
+          net_reward_amount: 'Net First Top-up Reward',
           program_version: 'Program Version',
           sync_with: 'Linked Reward'
         }

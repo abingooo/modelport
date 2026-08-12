@@ -32,12 +32,25 @@ func createAffiliateRewardPaymentOrder(
 	payAmount float64,
 	suffix string,
 ) int64 {
+	return createAffiliateRewardPaymentOrderWithBonus(t, ctx, client, user, completedAt, payAmount, 0, suffix)
+}
+
+func createAffiliateRewardPaymentOrderWithBonus(
+	t *testing.T,
+	ctx context.Context,
+	client *dbent.Client,
+	user *service.User,
+	completedAt time.Time,
+	payAmount float64,
+	rechargeBonusAmount float64,
+	suffix string,
+) int64 {
 	t.Helper()
-	order, err := client.PaymentOrder.Create().
+	create := client.PaymentOrder.Create().
 		SetUserID(user.ID).
 		SetUserEmail(user.Email).
 		SetUserName(user.Username).
-		SetAmount(payAmount).
+		SetAmount(payAmount + rechargeBonusAmount).
 		SetPayAmount(payAmount).
 		SetFeeRate(0).
 		SetRechargeCode("AFF-REWARD-" + suffix).
@@ -52,8 +65,17 @@ func createAffiliateRewardPaymentOrder(
 		SetClientIP("198.51.100.20").
 		SetSrcHost("modelport.test").
 		SetCreatedAt(completedAt.Add(-time.Minute)).
-		SetUpdatedAt(completedAt).
-		Save(ctx)
+		SetUpdatedAt(completedAt)
+	if rechargeBonusAmount > 0 {
+		create.SetProviderSnapshot(map[string]any{
+			"schema_version":            2,
+			"recharge_principal_amount": payAmount,
+			"recharge_base_amount":      payAmount,
+			"recharge_bonus_amount":     rechargeBonusAmount,
+			"recharge_bonus_percent":    rechargeBonusAmount / payAmount * 100,
+		})
+	}
+	order, err := create.Save(ctx)
 	require.NoError(t, err)
 	return order.ID
 }
@@ -240,6 +262,106 @@ WHERE payment_order_id = $1 AND reward_type = $2`, firstOrderID, service.Affilia
 	require.Equal(t, 2, querySingleInt(t, ctx, client, `
 SELECT COUNT(*) FROM referral.reward_reviews
 WHERE payment_order_id = $1 AND status = 'rejected'`, firstOrderID))
+}
+
+func TestAffiliateRewardRepositoryOffsetsRechargeBonusFromFirstRechargeReward(t *testing.T) {
+	tests := []struct {
+		name                string
+		rechargeBonusAmount float64
+		wantInviteeReview   bool
+		wantInviteeReward   float64
+	}{
+		{name: "no tier bonus", wantInviteeReview: true, wantInviteeReward: 10},
+		{name: "partial tier offset", rechargeBonusAmount: 5, wantInviteeReview: true, wantInviteeReward: 5},
+		{name: "full tier offset", rechargeBonusAmount: 10},
+		{name: "tier exceeds first recharge reward", rechargeBonusAmount: 12},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx := testEntTx(t)
+			ctx := dbent.NewTxContext(context.Background(), tx)
+			client := tx.Client()
+			repo := NewAffiliateRepository(client, integrationDB).(*affiliateRepository)
+
+			suffix := fmt.Sprint(time.Now().UnixNano())
+			inviter := mustCreateUser(t, client, &service.User{Email: "offset-inviter-" + suffix + "@example.com"})
+			invitee := mustCreateUser(t, client, &service.User{Email: "offset-invitee-" + suffix + "@example.com"})
+			_, err := repo.EnsureUserAffiliate(ctx, inviter.ID)
+			require.NoError(t, err)
+			_, err = repo.EnsureUserAffiliate(ctx, invitee.ID)
+			require.NoError(t, err)
+			bound, err := repo.BindInviter(ctx, invitee.ID, inviter.ID)
+			require.NoError(t, err)
+			require.True(t, bound)
+
+			orderID := createAffiliateRewardPaymentOrderWithBonus(
+				t, ctx, client, invitee, time.Now().UTC(), 100, test.rechargeBonusAmount, suffix,
+			)
+			config := affiliateRewardIntegrationConfig(50)
+			config.Registration.Enabled = false
+			created, err := repo.CreateFirstRechargeRewardReviews(ctx, orderID, config)
+			require.NoError(t, err)
+			require.True(t, created, "the inviter reward must still be created")
+			config.FirstRecharge.InviteeBonusPercent = 20
+			created, err = repo.CreateFirstRechargeRewardReviews(ctx, orderID, config)
+			require.NoError(t, err)
+			require.False(t, created, "a settled first recharge must ignore later config changes")
+
+			var inviteeReviewCount int
+			var inviteeReward float64
+			err = client.QueryRowContext(ctx, `
+SELECT COUNT(*), COALESCE(SUM(reward_amount), 0)::double precision
+FROM referral.reward_reviews
+WHERE payment_order_id = $1 AND reward_type = $2`,
+				orderID, service.AffiliateRewardTypeFirstRechargeInviteeBonus).
+				Scan(&inviteeReviewCount, &inviteeReward)
+			require.NoError(t, err)
+			if test.wantInviteeReview {
+				require.Equal(t, 1, inviteeReviewCount)
+				require.InDelta(t, test.wantInviteeReward, inviteeReward, 1e-9)
+			} else {
+				require.Zero(t, inviteeReviewCount)
+				require.Zero(t, inviteeReward)
+			}
+
+			require.Equal(t, 1, querySingleInt(t, ctx, client, `
+SELECT COUNT(*) FROM referral.reward_reviews
+WHERE payment_order_id = $1 AND reward_type = $2`, orderID, service.AffiliateRewardTypeFirstRechargeInviterBonus))
+			var settled bool
+			var settledPercent, settledNominal, settledOffset, settledNet float64
+			err = client.QueryRowContext(ctx, `
+SELECT (provider_snapshot->>'first_recharge_benefit_settled')::boolean,
+       (provider_snapshot->>'first_recharge_bonus_percent')::double precision,
+       (provider_snapshot->>'first_recharge_nominal_reward_amount')::double precision,
+       (provider_snapshot->>'first_recharge_tier_offset_amount')::double precision,
+       (provider_snapshot->>'first_recharge_net_reward_amount')::double precision
+FROM payment_orders
+WHERE id = $1`, orderID).
+				Scan(&settled, &settledPercent, &settledNominal, &settledOffset, &settledNet)
+			require.NoError(t, err)
+			require.True(t, settled)
+			require.InDelta(t, 10, settledPercent, 1e-9)
+			require.InDelta(t, 10, settledNominal, 1e-9)
+			require.InDelta(t, test.rechargeBonusAmount, settledOffset, 1e-9)
+			require.InDelta(t, test.wantInviteeReward, settledNet, 1e-9)
+			if test.wantInviteeReview {
+				var nominal, offset, net float64
+				err = client.QueryRowContext(ctx, `
+SELECT (risk_flags->>'nominal_reward_amount')::double precision,
+       (risk_flags->>'recharge_bonus_offset_amount')::double precision,
+       (risk_flags->>'net_reward_amount')::double precision
+FROM referral.reward_reviews
+WHERE payment_order_id = $1 AND reward_type = $2`,
+					orderID, service.AffiliateRewardTypeFirstRechargeInviteeBonus).
+					Scan(&nominal, &offset, &net)
+				require.NoError(t, err)
+				require.InDelta(t, 10, nominal, 1e-9)
+				require.InDelta(t, test.rechargeBonusAmount, offset, 1e-9)
+				require.InDelta(t, test.wantInviteeReward, net, 1e-9)
+			}
+		})
+	}
 }
 
 func TestAffiliateRewardRepositoryGroupedApprovalIsIdempotent(t *testing.T) {

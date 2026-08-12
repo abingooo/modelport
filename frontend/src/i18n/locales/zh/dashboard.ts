@@ -736,7 +736,7 @@ export default {
       },
       firstRecharge: {
         title: '好友首充',
-        rule: '邀请人可得 {inviter}；好友可获实付金额 {percent}% 的余额奖励'
+        rule: '邀请人可得 {inviter}；好友首充总福利为实付金额的 {percent}%（包含本单阶梯赠送，不重复叠加）'
       }
     },
     progress: {
