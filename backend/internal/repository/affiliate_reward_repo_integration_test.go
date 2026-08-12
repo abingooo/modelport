@@ -310,13 +310,16 @@ func TestAffiliateRewardRepositoryOffsetsRechargeBonusFromFirstRechargeReward(t 
 
 			var inviteeReviewCount int
 			var inviteeReward float64
-			err = client.QueryRowContext(ctx, `
+			rows, err := client.QueryContext(ctx, `
 SELECT COUNT(*), COALESCE(SUM(reward_amount), 0)::double precision
 FROM referral.reward_reviews
 WHERE payment_order_id = $1 AND reward_type = $2`,
-				orderID, service.AffiliateRewardTypeFirstRechargeInviteeBonus).
-				Scan(&inviteeReviewCount, &inviteeReward)
+				orderID, service.AffiliateRewardTypeFirstRechargeInviteeBonus)
 			require.NoError(t, err)
+			require.True(t, rows.Next(), "expected invitee reward aggregate")
+			require.NoError(t, rows.Scan(&inviteeReviewCount, &inviteeReward))
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
 			if test.wantInviteeReview {
 				require.Equal(t, 1, inviteeReviewCount)
 				require.InDelta(t, test.wantInviteeReward, inviteeReward, 1e-9)
@@ -330,16 +333,19 @@ SELECT COUNT(*) FROM referral.reward_reviews
 WHERE payment_order_id = $1 AND reward_type = $2`, orderID, service.AffiliateRewardTypeFirstRechargeInviterBonus))
 			var settled bool
 			var settledPercent, settledNominal, settledOffset, settledNet float64
-			err = client.QueryRowContext(ctx, `
+			rows, err = client.QueryContext(ctx, `
 SELECT (provider_snapshot->>'first_recharge_benefit_settled')::boolean,
        (provider_snapshot->>'first_recharge_bonus_percent')::double precision,
        (provider_snapshot->>'first_recharge_nominal_reward_amount')::double precision,
        (provider_snapshot->>'first_recharge_tier_offset_amount')::double precision,
        (provider_snapshot->>'first_recharge_net_reward_amount')::double precision
 FROM payment_orders
-WHERE id = $1`, orderID).
-				Scan(&settled, &settledPercent, &settledNominal, &settledOffset, &settledNet)
+WHERE id = $1`, orderID)
 			require.NoError(t, err)
+			require.True(t, rows.Next(), "expected settled payment order")
+			require.NoError(t, rows.Scan(&settled, &settledPercent, &settledNominal, &settledOffset, &settledNet))
+			require.NoError(t, rows.Err())
+			require.NoError(t, rows.Close())
 			require.True(t, settled)
 			require.InDelta(t, 10, settledPercent, 1e-9)
 			require.InDelta(t, 10, settledNominal, 1e-9)
@@ -347,15 +353,18 @@ WHERE id = $1`, orderID).
 			require.InDelta(t, test.wantInviteeReward, settledNet, 1e-9)
 			if test.wantInviteeReview {
 				var nominal, offset, net float64
-				err = client.QueryRowContext(ctx, `
+				rows, err = client.QueryContext(ctx, `
 SELECT (risk_flags->>'nominal_reward_amount')::double precision,
        (risk_flags->>'recharge_bonus_offset_amount')::double precision,
        (risk_flags->>'net_reward_amount')::double precision
 FROM referral.reward_reviews
 WHERE payment_order_id = $1 AND reward_type = $2`,
-					orderID, service.AffiliateRewardTypeFirstRechargeInviteeBonus).
-					Scan(&nominal, &offset, &net)
+					orderID, service.AffiliateRewardTypeFirstRechargeInviteeBonus)
 				require.NoError(t, err)
+				require.True(t, rows.Next(), "expected invitee reward review")
+				require.NoError(t, rows.Scan(&nominal, &offset, &net))
+				require.NoError(t, rows.Err())
+				require.NoError(t, rows.Close())
 				require.InDelta(t, 10, nominal, 1e-9)
 				require.InDelta(t, test.rechargeBonusAmount, offset, 1e-9)
 				require.InDelta(t, test.wantInviteeReward, net, 1e-9)
