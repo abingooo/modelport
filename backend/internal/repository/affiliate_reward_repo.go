@@ -477,11 +477,11 @@ SET provider_snapshot = (
         END
     ) || jsonb_build_object(
         'first_recharge_benefit_settled', true,
-        'first_recharge_bonus_percent', $2,
-        'first_recharge_nominal_reward_amount', $3,
-        'first_recharge_tier_offset_amount', $4,
-        'first_recharge_net_reward_amount', $5,
-        'first_recharge_program_version', $6,
+        'first_recharge_bonus_percent', $2::double precision,
+        'first_recharge_nominal_reward_amount', $3::double precision,
+        'first_recharge_tier_offset_amount', $4::double precision,
+        'first_recharge_net_reward_amount', $5::double precision,
+        'first_recharge_program_version', $6::integer,
         'first_recharge_benefit_settled_at', NOW()
     )
 WHERE id = $1`, orderID, bonusPercent, nominalAmount, rechargeBonusAmount, netAmount, programVersion)
