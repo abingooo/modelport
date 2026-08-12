@@ -698,7 +698,7 @@ export default {
         balanceRechargeMultiplierHint: '用户每支付 1 CNY 可获得多少 USD 余额',
         balanceRechargePreview: '预览：1 CNY = {usd} USD',
         rechargeBonusEnabled: '启用充值阶梯赠送',
-        rechargeBonusEnabledHint: '赠送按基础到账余额计算，并与首充邀请奖励独立叠加',
+        rechargeBonusEnabledHint: '赠送按基础到账余额计算；首充奖励会扣除本单阶梯赠送，二者不重复叠加',
         rechargeBonusTiers: '赠送阶梯',
         rechargeBonusTiersHint: '按用户输入的充值本金匹配最高门槛，最多可配置 20 档',
         rechargeBonusMinAmount: '最低充值本金',

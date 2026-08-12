@@ -476,7 +476,7 @@ export default {
           defaultInviterHint: '注册请求提供返利码时始终优先使用返利码；未提供时自动绑定指定用户',
           defaultInviterUserId: '默认邀请人用户 ID',
           firstRecharge: '好友首充奖励',
-          firstRechargeHint: '仅首笔已完成的余额充值触发一次',
+          firstRechargeHint: '仅首笔已完成的余额充值触发一次；会扣除本单已到账的阶梯赠送，不重复叠加',
           inviterBonus: '邀请人余额奖励',
           trialAmount: '体验权益价值',
           trialGroup: '体验分组',
@@ -509,6 +509,9 @@ export default {
           quota_amount: '奖励额度',
           validity_days: '有效天数',
           bonus_percent: '奖励比例',
+          nominal_reward_amount: '首充名义奖励',
+          recharge_bonus_offset_amount: '阶梯赠送抵扣',
+          net_reward_amount: '首充净奖励',
           program_version: '规则版本',
           sync_with: '关联奖励'
         }

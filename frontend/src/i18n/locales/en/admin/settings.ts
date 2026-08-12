@@ -703,7 +703,7 @@ export default {
         balanceRechargeMultiplierHint: 'How many USD balance the user receives for each 1 CNY paid',
         balanceRechargePreview: 'Preview: 1 CNY = {usd} USD',
         rechargeBonusEnabled: 'Enable Tiered Recharge Bonus',
-        rechargeBonusEnabledHint: 'The bonus is calculated from base credited balance and stacks independently with first-recharge referral rewards',
+        rechargeBonusEnabledHint: 'Calculated from base credited balance; first-recharge rewards deduct this order\'s tier bonus so the two do not stack',
         rechargeBonusTiers: 'Bonus Tiers',
         rechargeBonusTiersHint: 'The highest threshold reached by the entered principal applies, with up to 20 tiers',
         rechargeBonusMinAmount: 'Minimum Principal',

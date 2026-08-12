@@ -275,6 +275,9 @@ func (r *affiliateRepository) CreateFirstRechargeRewardReviews(
 		if order.Status != "COMPLETED" || order.OrderType != "balance" || order.PayAmount <= 0 || order.RefundAmount != 0 || order.InviterID == nil {
 			return nil
 		}
+		if order.FirstRechargeBenefitSettled {
+			return nil
+		}
 		prior, err := hasPriorCompletedBalanceOrder(txCtx, txClient, order)
 		if err != nil {
 			return err
@@ -288,13 +291,20 @@ func (r *affiliateRepository) CreateFirstRechargeRewardReviews(
 			return err
 		}
 		firstRecharge := config.FirstRecharge
+		nominalAmount, amount := calculateFirstRechargeInviteeReward(
+			order.PayAmount,
+			firstRecharge.InviteeBonusPercent,
+			order.RechargeBonusAmount,
+		)
 		if firstRecharge.InviteeBonusPercent > 0 {
-			amount := roundAffiliateReward(order.PayAmount * firstRecharge.InviteeBonusPercent / 100)
 			if amount > 0 {
 				flags, err := service.MergeAffiliateRewardFlags(risk, map[string]any{
-					"benefit":         "first_recharge_invitee_bonus",
-					"bonus_percent":   firstRecharge.InviteeBonusPercent,
-					"program_version": config.Version,
+					"benefit":                      "first_recharge_invitee_bonus",
+					"bonus_percent":                firstRecharge.InviteeBonusPercent,
+					"nominal_reward_amount":        nominalAmount,
+					"recharge_bonus_offset_amount": order.RechargeBonusAmount,
+					"net_reward_amount":            amount,
+					"program_version":              config.Version,
 				})
 				if err != nil {
 					return err
@@ -339,23 +349,34 @@ ON CONFLICT (payment_order_id, reward_type) WHERE payment_order_id IS NOT NULL D
 			affected, _ := result.RowsAffected()
 			created = created || affected > 0
 		}
-		return nil
+		return markFirstRechargeBenefitSettled(
+			txCtx,
+			txClient,
+			order.ID,
+			firstRecharge.InviteeBonusPercent,
+			nominalAmount,
+			order.RechargeBonusAmount,
+			amount,
+			config.Version,
+		)
 	})
 	return created, err
 }
 
 type affiliateFirstRechargeOrder struct {
-	ID                 int64
-	UserID             int64
-	InviterID          *int64
-	Status             string
-	OrderType          string
-	PayAmount          float64
-	Amount             float64
-	RefundAmount       float64
-	OccurredAt         time.Time
-	UserCreatedAt      time.Time
-	PaymentTradeNumber string
+	ID                          int64
+	UserID                      int64
+	InviterID                   *int64
+	Status                      string
+	OrderType                   string
+	PayAmount                   float64
+	Amount                      float64
+	RefundAmount                float64
+	RechargeBonusAmount         float64
+	FirstRechargeBenefitSettled bool
+	OccurredAt                  time.Time
+	UserCreatedAt               time.Time
+	PaymentTradeNumber          string
 }
 
 func queryAffiliateFirstRechargeOrder(ctx context.Context, client affiliateQueryExecer, orderID int64) (*affiliateFirstRechargeOrder, error) {
@@ -368,6 +389,7 @@ SELECT po.id,
        po.pay_amount::double precision,
        po.amount::double precision,
        po.refund_amount::double precision,
+       COALESCE(po.provider_snapshot::text, '{}'),
        COALESCE(po.completed_at, po.paid_at, po.created_at),
        u.created_at,
        COALESCE(po.payment_trade_no, '')
@@ -375,7 +397,7 @@ FROM payment_orders po
 JOIN users u ON u.id = po.user_id
 LEFT JOIN user_affiliates ua ON ua.user_id = po.user_id
 WHERE po.id = $1
-FOR UPDATE OF po`, orderID)
+FOR NO KEY UPDATE OF po, u`, orderID)
 	if err != nil {
 		return nil, err
 	}
@@ -388,6 +410,7 @@ FOR UPDATE OF po`, orderID)
 	}
 	var order affiliateFirstRechargeOrder
 	var inviterID sql.NullInt64
+	var providerSnapshot []byte
 	if err := rows.Scan(
 		&order.ID,
 		&order.UserID,
@@ -397,6 +420,7 @@ FOR UPDATE OF po`, orderID)
 		&order.PayAmount,
 		&order.Amount,
 		&order.RefundAmount,
+		&providerSnapshot,
 		&order.OccurredAt,
 		&order.UserCreatedAt,
 		&order.PaymentTradeNumber,
@@ -406,7 +430,65 @@ FOR UPDATE OF po`, orderID)
 	if inviterID.Valid {
 		order.InviterID = &inviterID.Int64
 	}
+	order.RechargeBonusAmount, order.FirstRechargeBenefitSettled = parseFirstRechargeBenefitSnapshot(providerSnapshot, order.Amount)
 	return &order, rows.Err()
+}
+
+func parseFirstRechargeBenefitSnapshot(raw []byte, creditedAmount float64) (float64, bool) {
+	var snapshot map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return 0, false
+	}
+	var settled bool
+	if value, ok := snapshot["first_recharge_benefit_settled"]; ok {
+		_ = json.Unmarshal(value, &settled)
+	}
+	bonusAmount := parseFirstRechargeSnapshotAmount(snapshot["recharge_bonus_amount"])
+	if creditedAmount <= 0 || bonusAmount > creditedAmount {
+		bonusAmount = 0
+	}
+	return bonusAmount, settled
+}
+
+func parseFirstRechargeSnapshotAmount(raw json.RawMessage) float64 {
+	if len(raw) == 0 {
+		return 0
+	}
+	var amount float64
+	if err := json.Unmarshal(raw, &amount); err != nil || math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 {
+		return 0
+	}
+	return amount
+}
+
+func markFirstRechargeBenefitSettled(
+	ctx context.Context,
+	client affiliateQueryExecer,
+	orderID int64,
+	bonusPercent, nominalAmount, rechargeBonusAmount, netAmount float64,
+	programVersion int,
+) error {
+	_, err := client.ExecContext(ctx, `
+UPDATE payment_orders
+SET provider_snapshot = (
+        CASE
+            WHEN jsonb_typeof(provider_snapshot) = 'object' THEN provider_snapshot
+            ELSE '{}'::jsonb
+        END
+    ) || jsonb_build_object(
+        'first_recharge_benefit_settled', true,
+        'first_recharge_bonus_percent', $2::double precision,
+        'first_recharge_nominal_reward_amount', $3::double precision,
+        'first_recharge_tier_offset_amount', $4::double precision,
+        'first_recharge_net_reward_amount', $5::double precision,
+        'first_recharge_program_version', $6::integer,
+        'first_recharge_benefit_settled_at', NOW()
+    )
+WHERE id = $1`, orderID, bonusPercent, nominalAmount, rechargeBonusAmount, netAmount, programVersion)
+	if err != nil {
+		return fmt.Errorf("mark first recharge benefit settled: %w", err)
+	}
+	return nil
 }
 
 func hasPriorCompletedBalanceOrder(ctx context.Context, client affiliateQueryExecer, order *affiliateFirstRechargeOrder) (bool, error) {
@@ -511,6 +593,12 @@ LEFT JOIN (
 
 func roundAffiliateReward(value float64) float64 {
 	return math.Round(value*1e8) / 1e8
+}
+
+func calculateFirstRechargeInviteeReward(payAmount, bonusPercent, rechargeBonusAmount float64) (float64, float64) {
+	nominalAmount := roundAffiliateReward(payAmount * bonusPercent / 100)
+	netAmount := roundAffiliateReward(math.Max(0, nominalAmount-math.Max(0, rechargeBonusAmount)))
+	return nominalAmount, netAmount
 }
 
 func (r *affiliateRepository) ValidateAffiliateRewardProgram(ctx context.Context, config service.AffiliateRewardProgramConfig) error {
