@@ -31,14 +31,14 @@ type createChannelRequest struct {
 	Name                       string                           `json:"name" binding:"required,max=100"`
 	Description                string                           `json:"description"`
 	GroupIDs                   []int64                          `json:"group_ids"`
-	ModelPricing               []channelModelPricingRequest     `json:"model_pricing"`
+	ModelPricing               []channelModelPricingRequest     `json:"model_pricing" binding:"dive"`
 	ModelMapping               map[string]map[string]string     `json:"model_mapping"`
-	BillingModelSource         string                           `json:"billing_model_source" binding:"omitempty,oneof=requested upstream channel_mapped"`
+	BillingModelSource         string                           `json:"billing_model_source" binding:"omitempty,oneof=requested upstream channel_mapped response_model"`
 	RestrictModels             bool                             `json:"restrict_models"`
 	Features                   string                           `json:"features"`
 	FeaturesConfig             map[string]any                   `json:"features_config"`
 	ApplyPricingToAccountStats bool                             `json:"apply_pricing_to_account_stats"`
-	AccountStatsPricingRules   []accountStatsPricingRuleRequest `json:"account_stats_pricing_rules"`
+	AccountStatsPricingRules   []accountStatsPricingRuleRequest `json:"account_stats_pricing_rules" binding:"dive"`
 }
 
 type updateChannelRequest struct {
@@ -46,20 +46,20 @@ type updateChannelRequest struct {
 	Description                *string                           `json:"description"`
 	Status                     string                            `json:"status" binding:"omitempty,oneof=active disabled"`
 	GroupIDs                   *[]int64                          `json:"group_ids"`
-	ModelPricing               *[]channelModelPricingRequest     `json:"model_pricing"`
+	ModelPricing               *[]channelModelPricingRequest     `json:"model_pricing" binding:"omitempty,dive"`
 	ModelMapping               map[string]map[string]string      `json:"model_mapping"`
-	BillingModelSource         string                            `json:"billing_model_source" binding:"omitempty,oneof=requested upstream channel_mapped"`
+	BillingModelSource         string                            `json:"billing_model_source" binding:"omitempty,oneof=requested upstream channel_mapped response_model"`
 	RestrictModels             *bool                             `json:"restrict_models"`
 	Features                   *string                           `json:"features"`
 	FeaturesConfig             map[string]any                    `json:"features_config"`
 	ApplyPricingToAccountStats *bool                             `json:"apply_pricing_to_account_stats"`
-	AccountStatsPricingRules   *[]accountStatsPricingRuleRequest `json:"account_stats_pricing_rules"`
+	AccountStatsPricingRules   *[]accountStatsPricingRuleRequest `json:"account_stats_pricing_rules" binding:"omitempty,dive"`
 }
 
 type channelModelPricingRequest struct {
 	Platform         string                   `json:"platform" binding:"omitempty,max=50"`
 	Models           []string                 `json:"models" binding:"required,min=1,max=100"`
-	BillingMode      string                   `json:"billing_mode" binding:"omitempty,oneof=token per_request image"`
+	BillingMode      string                   `json:"billing_mode" binding:"omitempty,oneof=token per_request image video"`
 	InputPrice       *float64                 `json:"input_price" binding:"omitempty,min=0"`
 	OutputPrice      *float64                 `json:"output_price" binding:"omitempty,min=0"`
 	CacheWritePrice  *float64                 `json:"cache_write_price" binding:"omitempty,min=0"`
@@ -87,7 +87,7 @@ type accountStatsPricingRuleRequest struct {
 	Name       string                       `json:"name"`
 	GroupIDs   []int64                      `json:"group_ids"`
 	AccountIDs []int64                      `json:"account_ids"`
-	Pricing    []channelModelPricingRequest `json:"pricing"`
+	Pricing    []channelModelPricingRequest `json:"pricing" binding:"dive"`
 }
 
 type channelResponse struct {

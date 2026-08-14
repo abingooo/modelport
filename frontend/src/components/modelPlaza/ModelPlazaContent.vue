@@ -194,9 +194,24 @@ const groupOptions = computed<PlazaFilterGroupData[]>(() =>
   }))
 )
 
+const isOfficialGroupSelected = computed(
+  () => selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID
+)
+
 const billingModes = computed(() => {
-  const modes = (props.response?.groups ?? []).flatMap((group) => group.models.map(plazaBillingMode))
+  const modes = (props.response?.groups ?? []).flatMap((group) =>
+    group.models.map((model) => plazaBillingMode(model, isOfficialGroupSelected.value))
+  )
   return [...new Set(modes)]
+})
+
+watch(billingModes, (availableModes) => {
+  if (
+    selectedBillingMode.value !== 'all' &&
+    !availableModes.some((mode) => mode === selectedBillingMode.value)
+  ) {
+    selectedBillingMode.value = 'all'
+  }
 })
 
 const showOfficialPricing = computed(() =>
@@ -210,10 +225,6 @@ const showOfficialPricing = computed(() =>
     })
   )
 )
-const isOfficialGroupSelected = computed(
-  () => selectedGroupId.value === PLAZA_OFFICIAL_GROUP_ID
-)
-
 function hasOfficialPricingForPlatform(platform: string): boolean {
   return (props.response?.groups ?? []).some((group) =>
     group.models.some((model) => {
@@ -275,7 +286,10 @@ const filteredGroups = computed(() => {
         const platform = model.platform || group.platform
         if (officialOnly && !plazaHasOfficialPricing(model)) return false
         if (selectedPlatform.value !== 'all' && platform !== selectedPlatform.value) return false
-        if (selectedBillingMode.value !== 'all' && plazaBillingMode(model) !== selectedBillingMode.value) return false
+        if (
+          selectedBillingMode.value !== 'all' &&
+          plazaBillingMode(model, officialOnly) !== selectedBillingMode.value
+        ) return false
         if (!query || groupMatches) return true
         return `${model.name} ${plazaProviderLabel(platform)}`.toLocaleLowerCase().includes(query)
       })

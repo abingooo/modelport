@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -424,6 +425,216 @@ func TestPricingRequestToService_NilPriceFields(t *testing.T) {
 	require.Nil(t, r.CacheReadPrice)
 	require.Nil(t, r.ImageOutputPrice)
 	require.Nil(t, r.PerRequestPrice)
+}
+
+func TestCreateChannelRequestBillingModeBinding(t *testing.T) {
+	tests := []struct {
+		name         string
+		body         string
+		wantErr      bool
+		wantMainMode string
+		wantRuleMode string
+	}{
+		{
+			name: "video pricing in main channel pricing",
+			body: `{
+				"name":"video-channel",
+				"model_pricing":[{
+					"platform":"grok",
+					"models":["grok-imagine-video-1.5"],
+					"billing_mode":"video",
+					"per_request_price":0.25
+				}]
+			}`,
+			wantMainMode: "video",
+		},
+		{
+			name: "video pricing in account stats rule",
+			body: `{
+				"name":"video-stats-channel",
+				"account_stats_pricing_rules":[{
+					"name":"video-override",
+					"group_ids":[1],
+					"pricing":[{
+						"platform":"grok",
+						"models":["grok-imagine-video-1.5"],
+						"billing_mode":"video",
+						"per_request_price":0.25
+					}]
+				}]
+			}`,
+			wantRuleMode: "video",
+		},
+		{
+			name: "unknown main pricing mode remains rejected",
+			body: `{
+				"name":"invalid-channel",
+				"model_pricing":[{
+					"platform":"grok",
+					"models":["grok-imagine-video-1.5"],
+					"billing_mode":"hourly",
+					"per_request_price":0.25
+				}]
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "unknown account stats pricing mode remains rejected",
+			body: `{
+				"name":"invalid-stats-channel",
+				"account_stats_pricing_rules":[{
+					"name":"invalid-override",
+					"account_ids":[1],
+					"pricing":[{
+						"platform":"grok",
+						"models":["grok-imagine-video-1.5"],
+						"billing_mode":"hourly",
+						"per_request_price":0.25
+					}]
+				}]
+			}`,
+			wantErr: true,
+		},
+	}
+
+	gin.SetMode(gin.TestMode)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPost, "/admin/channels", strings.NewReader(tt.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			var req createChannelRequest
+			err := ctx.ShouldBindJSON(&req)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.wantMainMode != "" {
+				require.Len(t, req.ModelPricing, 1)
+				require.Equal(t, tt.wantMainMode, req.ModelPricing[0].BillingMode)
+			}
+			if tt.wantRuleMode != "" {
+				require.Len(t, req.AccountStatsPricingRules, 1)
+				require.Len(t, req.AccountStatsPricingRules[0].Pricing, 1)
+				require.Equal(t, tt.wantRuleMode, req.AccountStatsPricingRules[0].Pricing[0].BillingMode)
+			}
+		})
+	}
+}
+
+func TestUpdateChannelRequestBillingModeBinding(t *testing.T) {
+	tests := []struct {
+		name               string
+		body               string
+		wantErr            bool
+		wantPricingOmitted bool
+		wantRulesOmitted   bool
+		wantMainMode       string
+		wantRuleMode       string
+	}{
+		{
+			name:               "omitted pricing fields",
+			body:               `{}`,
+			wantPricingOmitted: true,
+			wantRulesOmitted:   true,
+		},
+		{
+			name: "video pricing in main channel pricing",
+			body: `{
+				"model_pricing":[{
+					"platform":"grok",
+					"models":["grok-imagine-video-1.5"],
+					"billing_mode":"video",
+					"per_request_price":0.25
+				}]
+			}`,
+			wantRulesOmitted: true,
+			wantMainMode:     "video",
+		},
+		{
+			name: "video pricing in account stats rule",
+			body: `{
+				"account_stats_pricing_rules":[{
+					"name":"video-override",
+					"group_ids":[1],
+					"pricing":[{
+						"platform":"grok",
+						"models":["grok-imagine-video-1.5"],
+						"billing_mode":"video",
+						"per_request_price":0.25
+					}]
+				}]
+			}`,
+			wantPricingOmitted: true,
+			wantRuleMode:       "video",
+		},
+		{
+			name: "unknown main pricing mode is rejected",
+			body: `{
+				"model_pricing":[{
+					"platform":"grok",
+					"models":["grok-imagine-video-1.5"],
+					"billing_mode":"hourly",
+					"per_request_price":0.25
+				}]
+			}`,
+			wantErr: true,
+		},
+		{
+			name: "unknown account stats pricing mode is rejected",
+			body: `{
+				"account_stats_pricing_rules":[{
+					"name":"invalid-override",
+					"account_ids":[1],
+					"pricing":[{
+						"platform":"grok",
+						"models":["grok-imagine-video-1.5"],
+						"billing_mode":"hourly",
+						"per_request_price":0.25
+					}]
+				}]
+			}`,
+			wantErr: true,
+		},
+	}
+
+	gin.SetMode(gin.TestMode)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = httptest.NewRequest(http.MethodPut, "/admin/channels/1", strings.NewReader(tt.body))
+			ctx.Request.Header.Set("Content-Type", "application/json")
+
+			var req updateChannelRequest
+			err := ctx.ShouldBindJSON(&req)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+
+			require.NoError(t, err)
+			if tt.wantPricingOmitted {
+				require.Nil(t, req.ModelPricing)
+			}
+			if tt.wantRulesOmitted {
+				require.Nil(t, req.AccountStatsPricingRules)
+			}
+			if tt.wantMainMode != "" {
+				require.NotNil(t, req.ModelPricing)
+				require.Len(t, *req.ModelPricing, 1)
+				require.Equal(t, tt.wantMainMode, (*req.ModelPricing)[0].BillingMode)
+			}
+			if tt.wantRuleMode != "" {
+				require.NotNil(t, req.AccountStatsPricingRules)
+				require.Len(t, *req.AccountStatsPricingRules, 1)
+				require.Len(t, (*req.AccountStatsPricingRules)[0].Pricing, 1)
+				require.Equal(t, tt.wantRuleMode, (*req.AccountStatsPricingRules)[0].Pricing[0].BillingMode)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

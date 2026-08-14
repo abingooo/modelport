@@ -45,7 +45,10 @@ func TestListPlazaGroups_GroupCentricAggregation(t *testing.T) {
 		plazaPricedChannel(2, "chB", []int64{10}, "anthropic", "claude-opus"),
 	}
 	groups := []Group{
-		{ID: 10, Name: "g-main", Description: "desc", Platform: "anthropic", RateMultiplier: 1, IsFree: true},
+		{
+			ID: 10, Name: "g-main", Description: "desc", Platform: "anthropic", RateMultiplier: 1, IsFree: true,
+			VideoRateIndependent: true, VideoRateMultiplier: 0.4,
+		},
 		{ID: 20, Name: "g-empty", Platform: "anthropic", RateMultiplier: 0.5},
 	}
 	svc := newPlazaChannelService(channels, groups, nil)
@@ -55,6 +58,8 @@ func TestListPlazaGroups_GroupCentricAggregation(t *testing.T) {
 	require.Equal(t, int64(10), out[0].ID)
 	require.Equal(t, "desc", out[0].Description)
 	require.True(t, out[0].IsFree)
+	require.True(t, out[0].VideoRateIndependent)
+	require.InDelta(t, 0.4, out[0].VideoRateMultiplier, 1e-12)
 	require.Len(t, out[0].Models, 2)
 	// 组内模型按名称排序
 	require.Equal(t, "claude-opus", out[0].Models[0].Name)
@@ -328,6 +333,188 @@ func TestListPlazaGroups_GroupImagePriceIgnoredForNonImageModes(t *testing.T) {
 	require.Empty(t, p.Intervals)
 	require.NotNil(t, p.InputPrice)
 	require.Nil(t, p.PerRequestPrice)
+}
+
+func TestListPlazaGroups_GroupTokenPricingPartiallyOverlaysChannelWithoutChangingOfficialPrice(t *testing.T) {
+	channelInput := 1e-6
+	channelOutput := 2e-6
+	channelCacheWrite := 3e-6
+	channelCacheRead := 4e-6
+	channelImageInput := 5e-6
+	channelImageOutput := 6e-6
+	channelLongContextInput := 7e-6
+	groupInput := 10e-6
+	groupImageOutput := 60e-6
+	channel := Channel{
+		ID: 1, Name: "official", Status: StatusActive, GroupIDs: []int64{10},
+		ModelPricing: []ChannelModelPricing{{
+			Platform:         PlatformOpenAI,
+			Models:           []string{"gpt-display"},
+			BillingMode:      BillingModeToken,
+			InputPrice:       &channelInput,
+			OutputPrice:      &channelOutput,
+			CacheWritePrice:  &channelCacheWrite,
+			CacheReadPrice:   &channelCacheRead,
+			ImageInputPrice:  &channelImageInput,
+			ImageOutputPrice: &channelImageOutput,
+			Intervals:        []PricingInterval{{MinTokens: 200000, InputPrice: &channelLongContextInput}},
+			UserVisible:      true,
+		}},
+	}
+	groups := []Group{{
+		ID: 10, Name: "group", Platform: PlatformOpenAI, RateMultiplier: 1,
+		ModelPricing: []ChannelModelPricing{{
+			Platform:         PlatformOpenAI,
+			Models:           []string{"gpt-*"},
+			BillingMode:      BillingModeToken,
+			InputPrice:       &groupInput,
+			ImageOutputPrice: &groupImageOutput,
+		}},
+	}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Models, 1)
+	model := out[0].Models[0]
+
+	require.NotNil(t, model.Pricing)
+	require.InDelta(t, channelInput, *model.Pricing.InputPrice, 1e-12)
+	require.InDelta(t, channelImageOutput, *model.Pricing.ImageOutputPrice, 1e-12)
+	require.Len(t, model.Pricing.Intervals, 1, "official pricing keeps the channel interval")
+	require.NotNil(t, model.DisplayPricing)
+	require.NotSame(t, model.Pricing, model.DisplayPricing)
+	require.Empty(t, model.DisplayPricing.Intervals, "group token pricing does not bill channel intervals")
+	require.InDelta(t, groupInput, *model.DisplayPricing.InputPrice, 1e-12)
+	require.InDelta(t, channelOutput, *model.DisplayPricing.OutputPrice, 1e-12)
+	require.InDelta(t, channelCacheWrite, *model.DisplayPricing.CacheWritePrice, 1e-12)
+	require.InDelta(t, channelCacheRead, *model.DisplayPricing.CacheReadPrice, 1e-12)
+	require.InDelta(t, channelImageInput, *model.DisplayPricing.ImageInputPrice, 1e-12)
+	require.InDelta(t, groupImageOutput, *model.DisplayPricing.ImageOutputPrice, 1e-12)
+
+	// The source fixture and official pricing remain untouched by the display overlay.
+	require.InDelta(t, channelInput, *channel.ModelPricing[0].InputPrice, 1e-12)
+	require.InDelta(t, channelImageOutput, *channel.ModelPricing[0].ImageOutputPrice, 1e-12)
+}
+
+func TestListPlazaGroups_GroupModelPricingExactBeatsEarlierWildcard(t *testing.T) {
+	wildcardInput := 8e-6
+	exactInput := 2e-6
+	channel := plazaPricedChannel(1, "official", []int64{10}, PlatformOpenAI, "gpt-display")
+	groups := []Group{{
+		ID: 10, Name: "group", Platform: PlatformOpenAI, RateMultiplier: 1,
+		ModelPricing: []ChannelModelPricing{
+			{Platform: PlatformOpenAI, Models: []string{"gpt-*"}, BillingMode: BillingModeToken, InputPrice: &wildcardInput},
+			{Platform: PlatformOpenAI, Models: []string{"GPT-DISPLAY"}, BillingMode: BillingModeToken, InputPrice: &exactInput},
+		},
+	}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	require.Len(t, out[0].Models, 1)
+	require.InDelta(t, exactInput, *out[0].Models[0].DisplayPricing.InputPrice, 1e-12)
+	require.InDelta(t, 3e-6, *out[0].Models[0].Pricing.InputPrice, 1e-12)
+}
+
+func TestListPlazaGroups_GroupTokenPricingDoesNotInheritMediaChannelFields(t *testing.T) {
+	channelPrice := 0.20
+	groupInput := 2e-6
+	channel := Channel{
+		ID: 1, Name: "official", Status: StatusActive, GroupIDs: []int64{10},
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformOpenAI, Models: []string{"mixed-mode-model"}, BillingMode: BillingModeImage,
+			PerRequestPrice: &channelPrice, UserVisible: true,
+		}},
+	}
+	groups := []Group{{
+		ID: 10, Name: "group", Platform: PlatformOpenAI, RateMultiplier: 1,
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformOpenAI, Models: []string{"mixed-mode-model"}, BillingMode: BillingModeToken,
+			InputPrice: &groupInput,
+		}},
+	}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	model := out[0].Models[0]
+	require.Equal(t, BillingModeImage, model.Pricing.BillingMode)
+	require.InDelta(t, channelPrice, *model.Pricing.PerRequestPrice, 1e-12)
+	require.Equal(t, BillingModeToken, model.DisplayPricing.BillingMode)
+	require.InDelta(t, groupInput, *model.DisplayPricing.InputPrice, 1e-12)
+	require.Nil(t, model.DisplayPricing.PerRequestPrice)
+}
+
+func TestListPlazaGroups_GroupModelMediaPricingBeatsLegacyImagePrice(t *testing.T) {
+	channelPrice := 0.20
+	legacyGroupPrice := 0.02
+	groupDefaultPrice := 0.07
+	groupTierPrice := 0.08
+	channel := Channel{
+		ID: 1, Name: "official", Status: StatusActive, GroupIDs: []int64{10},
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformOpenAI, Models: []string{"gpt-image"}, BillingMode: BillingModeImage,
+			PerRequestPrice: &channelPrice, UserVisible: true,
+		}},
+	}
+	groups := []Group{{
+		ID: 10, Name: "group", Platform: PlatformOpenAI, RateMultiplier: 1,
+		ImagePrice1K: &legacyGroupPrice,
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformOpenAI, Models: []string{"gpt-image"}, BillingMode: BillingModeImage,
+			PerRequestPrice: &groupDefaultPrice,
+			Intervals:       []PricingInterval{{TierLabel: "1K", PerRequestPrice: &groupTierPrice}},
+		}},
+	}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	model := out[0].Models[0]
+	require.InDelta(t, channelPrice, *model.Pricing.PerRequestPrice, 1e-12)
+	require.InDelta(t, groupDefaultPrice, *model.DisplayPricing.PerRequestPrice, 1e-12)
+	require.Len(t, model.DisplayPricing.Intervals, 1)
+	require.InDelta(t, groupTierPrice, *model.DisplayPricing.Intervals[0].PerRequestPrice, 1e-12)
+}
+
+func TestListPlazaGroups_LegacyVideoPricingOverlaysChannelTiers(t *testing.T) {
+	channelDefault := 0.20
+	channel720P := 0.30
+	group480P := 0.02
+	group1080P := 0.04
+	channel := Channel{
+		ID: 1, Name: "official", Status: StatusActive, GroupIDs: []int64{10},
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformGrok, Models: []string{"grok-imagine-video-1.5"}, BillingMode: BillingModeVideo,
+			PerRequestPrice: &channelDefault,
+			Intervals:       []PricingInterval{{TierLabel: "720p", PerRequestPrice: &channel720P}},
+			UserVisible:     true,
+		}},
+	}
+	groups := []Group{{
+		ID: 10, Name: "group", Platform: PlatformGrok, RateMultiplier: 1,
+		VideoPrice480P: &group480P,
+		VideoModelPrices: map[string]map[string]float64{
+			VideoPriceFamilyGrokImagineVideo15: {VideoBillingResolution1080P: group1080P},
+		},
+	}}
+
+	out, err := newPlazaChannelService([]Channel{channel}, groups, nil).ListPlazaGroups(context.Background())
+	require.NoError(t, err)
+	require.Len(t, out, 1)
+	model := out[0].Models[0]
+	require.InDelta(t, channelDefault, *model.Pricing.PerRequestPrice, 1e-12)
+	require.Len(t, model.Pricing.Intervals, 1)
+	require.Len(t, model.DisplayPricing.Intervals, 3)
+	tiers := make(map[string]float64, 3)
+	for _, interval := range model.DisplayPricing.Intervals {
+		require.NotNil(t, interval.PerRequestPrice)
+		tiers[interval.TierLabel] = *interval.PerRequestPrice
+	}
+	require.InDelta(t, group480P, tiers[VideoBillingResolution480P], 1e-12)
+	require.InDelta(t, channel720P, tiers[VideoBillingResolution720P], 1e-12)
+	require.InDelta(t, group1080P, tiers[VideoBillingResolution1080P], 1e-12)
 }
 
 func TestListPlazaGroups_RepoErrorsPropagate(t *testing.T) {

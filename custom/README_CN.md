@@ -46,7 +46,7 @@ docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml ps
 ```bash
 docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml build \
   --build-arg NODE_IMAGE=dockerproxy.net/library/node:24-alpine \
-  --build-arg GOLANG_IMAGE=dockerproxy.net/library/golang:1.26.5-alpine \
+  --build-arg GOLANG_IMAGE=dockerproxy.net/library/golang:1.26.6-alpine \
   --build-arg ALPINE_IMAGE=dockerproxy.net/library/alpine:3.21 \
   sub2api
 docker compose --env-file deploy/.env -f deploy/docker-compose.dev.yml up -d

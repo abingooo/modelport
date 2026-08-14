@@ -154,7 +154,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 	}
 	defer func() { _ = conn.CloseNow() }()
 
-	relayDuration, proxyErr := h.gatewayService.ProxyGrokRealtime(
+	relayDuration, audioObserved, proxyErr := h.gatewayService.ProxyGrokRealtime(
 		c.Request.Context(), c, conn, selection.Account, token, upstreamModel,
 		service.GrokVoiceRequestOwner{GroupID: apiKey.GroupID, UserID: subject.UserID},
 	)
@@ -162,9 +162,9 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 	if proxyErr != nil {
 		reqLog.Info("grok_realtime.proxy_failed", zap.Error(proxyErr))
 	}
-	// Both normal and failed relays consumed upstream audio time and must be
-	// billed before an unexpected close returns from the handler.
-	if result := newGrokRealtimeUsageResult(requestedModel, upstreamModel, relayDuration); result != nil {
+	// Both normal and failed relays that carried audio consumed upstream audio
+	// time and must be billed before an unexpected close returns from the handler.
+	if result := grokRealtimeBillingResult(requestedModel, upstreamModel, relayDuration, audioObserved); result != nil {
 		h.recordGrokVoiceUsage(c, apiKey, selection.Account, subscription, "realtime", nil, result)
 	}
 	if unexpectedProxyError {
@@ -173,8 +173,8 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 	}
 }
 
-func newGrokRealtimeUsageResult(requestedModel, upstreamModel string, elapsed time.Duration) *service.OpenAIForwardResult {
-	if elapsed <= 0 {
+func grokRealtimeBillingResult(requestedModel, upstreamModel string, elapsed time.Duration, audioObserved bool) *service.OpenAIForwardResult {
+	if !audioObserved || elapsed <= 0 {
 		return nil
 	}
 	return &service.OpenAIForwardResult{

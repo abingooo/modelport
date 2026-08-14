@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -312,6 +313,160 @@ func TestAdminService_CreateAndUpdateGroup_RejectUnsupportedPlatform(t *testing.
 
 	_, err = svc.UpdateGroup(context.Background(), 9, &UpdateGroupInput{Platform: "retired-provider"})
 	require.ErrorContains(t, err, "unsupported platform")
+}
+
+func TestAdminService_GroupModelPricingValidation(t *testing.T) {
+	t.Run("create defaults long context pricing to enabled", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "default-long-context", Platform: PlatformAnthropic, RateMultiplier: 1,
+		})
+
+		require.NoError(t, err)
+		require.True(t, group.LongContextPricingEnabled)
+		require.True(t, repo.created.LongContextPricingEnabled)
+	})
+
+	t.Run("create preserves explicit long context opt out", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{}
+		svc := &adminServiceImpl{groupRepo: repo}
+		disabled := false
+
+		group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "disabled-long-context", Platform: PlatformAnthropic, RateMultiplier: 1,
+			LongContextPricingEnabled: &disabled,
+		})
+
+		require.NoError(t, err)
+		require.False(t, group.LongContextPricingEnabled)
+		require.False(t, repo.created.LongContextPricingEnabled)
+	})
+
+	t.Run("ordinary group rejects a different pricing platform", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "bad-platform", Platform: PlatformAnthropic, RateMultiplier: 1,
+			ModelPricing: []ChannelModelPricing{{
+				Platform: PlatformOpenAI, Models: []string{"gpt-5"}, BillingMode: BillingModeToken,
+				InputPrice: testPtrFloat64(1e-6),
+			}},
+		})
+
+		require.ErrorContains(t, err, "must match group platform")
+		require.Nil(t, repo.created)
+	})
+
+	t.Run("composite group rejects overlapping patterns across platforms", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "ambiguous-composite", Platform: PlatformComposite, RateMultiplier: 1,
+			ModelPricing: []ChannelModelPricing{
+				{Platform: PlatformAnthropic, Models: []string{"shared-*"}, BillingMode: BillingModeToken, InputPrice: testPtrFloat64(1e-6)},
+				{Platform: PlatformOpenAI, Models: []string{"shared-model"}, BillingMode: BillingModeToken, InputPrice: testPtrFloat64(2e-6)},
+			},
+		})
+
+		require.Equal(t, "GROUP_MODEL_PRICING_PATTERN_CONFLICT", infraerrors.Reason(err))
+		require.Nil(t, repo.created)
+	})
+
+	t.Run("composite group rejects overlapping patterns within one platform", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "ambiguous-composite-same-platform", Platform: PlatformComposite, RateMultiplier: 1,
+			ModelPricing: []ChannelModelPricing{
+				{Platform: PlatformOpenAI, Models: []string{"gpt-*"}, BillingMode: BillingModeToken, InputPrice: testPtrFloat64(1e-6)},
+				{Platform: PlatformOpenAI, Models: []string{"gpt-5"}, BillingMode: BillingModeToken, InputPrice: testPtrFloat64(2e-6)},
+			},
+		})
+
+		require.Equal(t, "GROUP_MODEL_PRICING_PATTERN_CONFLICT", infraerrors.Reason(err))
+		require.Nil(t, repo.created)
+	})
+
+	t.Run("create rejects an unsupported billing mode", func(t *testing.T) {
+		repo := &groupRepoStubForAdmin{}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		_, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+			Name: "unsupported-mode", Platform: PlatformOpenAI, RateMultiplier: 1,
+			ModelPricing: []ChannelModelPricing{{
+				Platform: PlatformOpenAI, Models: []string{"gpt-5"}, BillingMode: BillingMode("hourly"),
+			}},
+		})
+
+		require.Equal(t, "INVALID_BILLING_MODE", infraerrors.Reason(err))
+		require.Nil(t, repo.created)
+	})
+
+	t.Run("update rejects an unsupported billing mode", func(t *testing.T) {
+		existing := &Group{ID: 9, Name: "priced", Platform: PlatformOpenAI, RateMultiplier: 1}
+		repo := &groupRepoStubForAdmin{getByID: existing}
+		svc := &adminServiceImpl{groupRepo: repo}
+		pricing := []ChannelModelPricing{{
+			Platform: PlatformOpenAI, Models: []string{"gpt-5"}, BillingMode: BillingMode("hourly"),
+		}}
+
+		_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{ModelPricing: &pricing})
+
+		require.Equal(t, "INVALID_BILLING_MODE", infraerrors.Reason(err))
+		require.Nil(t, repo.updated)
+	})
+
+	t.Run("accepts every supported billing mode and defaults empty to token", func(t *testing.T) {
+		modes := []BillingMode{"", BillingModeToken, BillingModePerRequest, BillingModeImage, BillingModeVideo}
+		for _, mode := range modes {
+			t.Run(string(mode), func(t *testing.T) {
+				repo := &groupRepoStubForAdmin{}
+				svc := &adminServiceImpl{groupRepo: repo}
+				pricing := ChannelModelPricing{
+					Platform: PlatformOpenAI, Models: []string{"model-1"}, BillingMode: mode,
+				}
+				if mode == BillingModePerRequest || mode == BillingModeImage || mode == BillingModeVideo {
+					pricing.PerRequestPrice = testPtrFloat64(0)
+				}
+
+				group, err := svc.CreateGroup(context.Background(), &CreateGroupInput{
+					Name: "supported-mode", Platform: PlatformOpenAI, RateMultiplier: 1,
+					ModelPricing: []ChannelModelPricing{pricing},
+				})
+
+				require.NoError(t, err)
+				require.Len(t, group.ModelPricing, 1)
+				expectedMode := mode
+				if expectedMode == "" {
+					expectedMode = BillingModeToken
+				}
+				require.Equal(t, expectedMode, group.ModelPricing[0].BillingMode)
+			})
+		}
+	})
+
+	t.Run("platform-only update validates existing pricing", func(t *testing.T) {
+		existing := &Group{
+			ID: 9, Name: "anthropic-priced", Platform: PlatformAnthropic, RateMultiplier: 1,
+			ModelPricing: []ChannelModelPricing{{
+				Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+				InputPrice: testPtrFloat64(1e-6),
+			}},
+		}
+		repo := &groupRepoStubForAdmin{getByID: existing}
+		svc := &adminServiceImpl{groupRepo: repo}
+
+		_, err := svc.UpdateGroup(context.Background(), existing.ID, &UpdateGroupInput{Platform: PlatformOpenAI})
+
+		require.Equal(t, "GROUP_MODEL_PRICING_PLATFORM_MISMATCH", infraerrors.Reason(err))
+		require.Nil(t, repo.updated)
+		require.Equal(t, PlatformAnthropic, existing.Platform)
+	})
 }
 
 func TestAdminService_CreateGroup_WithVideoPricing(t *testing.T) {

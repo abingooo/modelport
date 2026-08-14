@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { validateIntervals, type IntervalFormEntry } from '../types'
+import {
+  findPricingModelConflict,
+  isMissingRequiredUnitPrice,
+  validatePricingEntryPrices,
+  validateIntervals,
+  type IntervalFormEntry,
+  type PricingFormEntry,
+} from '../types'
 
 function makeInterval(over: Partial<IntervalFormEntry>): IntervalFormEntry {
   return {
@@ -19,6 +26,99 @@ function makeInterval(over: Partial<IntervalFormEntry>): IntervalFormEntry {
 function t(key: string, params?: Record<string, unknown>): string {
   return `${key}${params ? ` ${JSON.stringify(params)}` : ''}`
 }
+
+function makePricingEntry(over: Partial<PricingFormEntry>): PricingFormEntry {
+  return {
+    models: ['gpt-5'],
+    billing_mode: 'token',
+    input_price: null,
+    output_price: null,
+    cache_write_price: null,
+    cache_read_price: null,
+    image_input_price: null,
+    image_output_price: null,
+    per_request_price: null,
+    user_visible: true,
+    intervals: [],
+    ...over,
+  }
+}
+
+describe('isMissingRequiredUnitPrice', () => {
+  it.each(['per_request', 'image', 'video'] as const)(
+    'requires a fallback price or tier for %s billing',
+    (billingMode) => {
+      expect(isMissingRequiredUnitPrice({
+        billing_mode: billingMode,
+        per_request_price: null,
+        intervals: [],
+      })).toBe(true)
+    },
+  )
+
+  it('accepts an explicit zero fallback price', () => {
+    expect(isMissingRequiredUnitPrice({
+      billing_mode: 'video',
+      per_request_price: 0,
+      intervals: [],
+    })).toBe(false)
+  })
+
+  it('accepts tier pricing without a fallback price', () => {
+    expect(isMissingRequiredUnitPrice({
+      billing_mode: 'video',
+      per_request_price: null,
+      intervals: [makeInterval({ tier_label: '1080p', per_request_price: 0.2 })],
+    })).toBe(false)
+  })
+
+  it('does not require a unit price for token billing', () => {
+    expect(isMissingRequiredUnitPrice({
+      billing_mode: 'token',
+      per_request_price: null,
+      intervals: [],
+    })).toBe(false)
+  })
+})
+
+describe('findPricingModelConflict', () => {
+  it('detects exact and wildcard overlap case-insensitively', () => {
+    expect(findPricingModelConflict(['GPT-*', 'gpt-5'])).toEqual([
+      'GPT-*',
+      'gpt-5',
+    ])
+  })
+
+  it('matches backend normalization for Claude dot and hyphen spellings', () => {
+    expect(findPricingModelConflict([
+      'claude-3.5-sonnet',
+      'claude-3-5-sonnet',
+    ])).toEqual(['claude-3.5-sonnet', 'claude-3-5-sonnet'])
+  })
+})
+
+describe('validatePricingEntryPrices', () => {
+  it('accepts empty and explicit zero prices', () => {
+    expect(validatePricingEntryPrices(makePricingEntry({ input_price: 0 }), t)).toBeNull()
+  })
+
+  it('rejects negative top-level prices', () => {
+    expect(validatePricingEntryPrices(
+      makePricingEntry({ image_output_price: -0.01 }),
+      t,
+    )).toContain('priceValidation.negative')
+  })
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, 'not-a-number'])(
+    'rejects non-finite top-level price %s',
+    (value) => {
+      expect(validatePricingEntryPrices(
+        makePricingEntry({ per_request_price: value }),
+        t,
+      )).toContain('priceValidation.finite')
+    },
+  )
+})
 
 describe('validateIntervals', () => {
   describe('token mode', () => {
@@ -55,7 +155,7 @@ describe('validateIntervals', () => {
     })
   })
 
-  describe('image / per_request mode', () => {
+  describe('image / per_request / video mode', () => {
     it('allows multiple unbounded tiers identified by label', () => {
       const intervals: IntervalFormEntry[] = [
         makeInterval({ tier_label: '1K', per_request_price: 0.04 }),
@@ -64,6 +164,7 @@ describe('validateIntervals', () => {
       ]
       expect(validateIntervals(intervals, 'image', t)).toBeNull()
       expect(validateIntervals(intervals, 'per_request', t)).toBeNull()
+      expect(validateIntervals(intervals, 'video', t)).toBeNull()
     })
 
 	it('rejects duplicate tier labels case-insensitively', () => {
@@ -79,6 +180,20 @@ describe('validateIntervals', () => {
         makeInterval({ tier_label: '1K', per_request_price: -1 }),
       ]
       expect(validateIntervals(intervals, 'image', t)).toContain('negativePrice')
+    })
+
+    it('rejects non-finite prices', () => {
+      const intervals: IntervalFormEntry[] = [
+        makeInterval({ tier_label: '1K', per_request_price: Number.POSITIVE_INFINITY }),
+      ]
+      expect(validateIntervals(intervals, 'image', t)).toContain('nonFinitePrice')
+    })
+
+    it('rejects a tier with no price fields', () => {
+      const intervals: IntervalFormEntry[] = [
+        makeInterval({ tier_label: '1080p' }),
+      ]
+      expect(validateIntervals(intervals, 'video', t)).toContain('missingPrice')
     })
 
     it('still rejects max <= min on a single tier', () => {

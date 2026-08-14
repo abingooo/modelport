@@ -5,6 +5,14 @@ import (
 	"strings"
 )
 
+type accountStatsUsage struct {
+	Tokens               UsageTokens
+	RequestCount         int
+	VideoCount           int
+	VideoResolution      string
+	VideoDurationSeconds int
+}
+
 // resolveAccountStatsCost 计算账号统计定价费用。
 // 返回 nil 表示不覆盖，使用默认公式（total_cost × account_rate_multiplier）。
 //
@@ -16,6 +24,7 @@ import (
 //
 // upstreamModel 是最终发往上游的模型 ID。
 // totalCost 是本次请求的客户计费（倍率前），用于优先级 2。
+// serviceTier 是最终参与用户计费的 OpenAI 服务层级，用于优先级 3。
 func resolveAccountStatsCost(
 	ctx context.Context,
 	channelService *ChannelService,
@@ -23,9 +32,9 @@ func resolveAccountStatsCost(
 	accountID int64,
 	groupID int64,
 	upstreamModel string,
-	tokens UsageTokens,
-	requestCount int,
+	usage accountStatsUsage,
 	totalCost float64,
+	serviceTier string,
 ) *float64 {
 	if channelService == nil || upstreamModel == "" {
 		return nil
@@ -38,7 +47,7 @@ func resolveAccountStatsCost(
 	platform := channelService.GetGroupPlatform(ctx, groupID)
 
 	// 优先级 1：自定义规则（始终尝试）
-	if cost := tryCustomRules(channel, accountID, groupID, platform, upstreamModel, tokens, requestCount); cost != nil {
+	if cost := tryCustomRules(channel, accountID, groupID, platform, upstreamModel, usage); cost != nil {
 		return cost
 	}
 
@@ -53,20 +62,22 @@ func resolveAccountStatsCost(
 
 	// 优先级 3：模型定价文件（LiteLLM）默认价格
 	if billingService != nil {
-		return tryModelFilePricing(billingService, upstreamModel, tokens)
+		return tryModelFilePricing(billingService, upstreamModel, usage.Tokens, serviceTier)
 	}
 
 	return nil
 }
 
-// tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的标准价格计算费用。
-func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens) *float64 {
+// tryModelFilePricing 使用模型定价文件（LiteLLM/fallback）中的价格计算费用。
+func tryModelFilePricing(billingService *BillingService, model string, tokens UsageTokens, serviceTier string) *float64 {
 	pricing, err := billingService.GetModelPricing(model)
 	if err != nil || pricing == nil {
 		return nil
 	}
-	if billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
-		breakdown, err := billingService.CalculateCost(model, tokens, 1)
+	normalizedTier := normalizeBillingServiceTier(serviceTier)
+	if normalizedTier == "priority" || normalizedTier == "flex" ||
+		billingService.shouldApplySessionLongContextPricing(tokens, pricing) {
+		breakdown, err := billingService.CalculateCostWithServiceTier(model, tokens, 1, normalizedTier)
 		if err != nil || breakdown == nil || breakdown.TotalCost <= 0 {
 			return nil
 		}
@@ -86,7 +97,7 @@ func tryModelFilePricing(billingService *BillingService, model string, tokens Us
 // tryCustomRules 遍历自定义规则，按数组顺序先命中为准。
 func tryCustomRules(
 	channel *Channel, accountID, groupID int64,
-	platform, model string, tokens UsageTokens, requestCount int,
+	platform, model string, usage accountStatsUsage,
 ) *float64 {
 	modelLower := strings.ToLower(model)
 	for _, rule := range channel.AccountStatsPricingRules {
@@ -97,7 +108,7 @@ func tryCustomRules(
 		if pricing == nil {
 			continue // 规则匹配但模型不在规则定价中，继续下一条
 		}
-		return calculateStatsCost(pricing, tokens, requestCount)
+		return calculateStatsCost(pricing, usage)
 	}
 	return nil
 }
@@ -166,24 +177,46 @@ func isPlatformMatch(queryPlatform, pricingPlatform string) bool {
 }
 
 // calculateStatsCost 使用给定的定价计算费用（不含任何倍率，原始费用）。
-func calculateStatsCost(pricing *ChannelModelPricing, tokens UsageTokens, requestCount int) *float64 {
+func calculateStatsCost(pricing *ChannelModelPricing, usage accountStatsUsage) *float64 {
 	if pricing == nil {
 		return nil
 	}
 	switch pricing.BillingMode {
 	case BillingModePerRequest, BillingModeImage:
-		return calculatePerRequestStatsCost(pricing, requestCount)
+		return calculatePerRequestStatsCost(pricing, usage.RequestCount)
+	case BillingModeVideo:
+		return calculateVideoStatsCost(pricing, usage)
 	default:
-		return calculateTokenStatsCost(pricing, tokens)
+		return calculateTokenStatsCost(pricing, usage.Tokens)
 	}
 }
 
 // calculatePerRequestStatsCost 按次/图片计费。
 func calculatePerRequestStatsCost(pricing *ChannelModelPricing, requestCount int) *float64 {
-	if pricing.PerRequestPrice == nil || *pricing.PerRequestPrice <= 0 {
+	if pricing.PerRequestPrice == nil || *pricing.PerRequestPrice < 0 {
 		return nil
 	}
 	cost := *pricing.PerRequestPrice * float64(requestCount)
+	return &cost
+}
+
+// calculateVideoStatsCost 按视频输出秒数计费。分辨率层级价格优先于默认每秒价。
+func calculateVideoStatsCost(pricing *ChannelModelPricing, usage accountStatsUsage) *float64 {
+	if usage.VideoCount <= 0 {
+		return nil
+	}
+
+	unitPrice := pricing.PerRequestPrice
+	resolution := NormalizeVideoBillingResolutionOrDefault(usage.VideoResolution)
+	if tier := pricing.GetTierByLabel(resolution); tier != nil && tier.PerRequestPrice != nil {
+		unitPrice = tier.PerRequestPrice
+	}
+	if unitPrice == nil || *unitPrice < 0 {
+		return nil
+	}
+
+	durationSeconds := NormalizeVideoBillingDurationSecondsOrDefault(usage.VideoDurationSeconds)
+	cost := *unitPrice * float64(usage.VideoCount) * float64(durationSeconds)
 	return &cost
 }
 
@@ -237,11 +270,24 @@ func applyAccountStatsCost(
 	if model == "" {
 		model = requestedModel
 	}
-	requestCount := 1
-	if usageLog != nil && usageLog.ImageCount > 0 {
-		requestCount = usageLog.ImageCount
+	usage := accountStatsUsage{Tokens: tokens, RequestCount: 1}
+	serviceTier := ""
+	if usageLog != nil {
+		if usageLog.ImageCount > 0 {
+			usage.RequestCount = usageLog.ImageCount
+		}
+		usage.VideoCount = usageLog.VideoCount
+		if usageLog.VideoResolution != nil {
+			usage.VideoResolution = *usageLog.VideoResolution
+		}
+		if usageLog.VideoDurationSeconds != nil {
+			usage.VideoDurationSeconds = *usageLog.VideoDurationSeconds
+		}
+		if usageLog.ServiceTier != nil {
+			serviceTier = *usageLog.ServiceTier
+		}
 	}
 	usageLog.AccountStatsCost = resolveAccountStatsCost(
-		ctx, cs, bs, accountID, groupID, model, tokens, requestCount, totalCost,
+		ctx, cs, bs, accountID, groupID, model, usage, totalCost, serviceTier,
 	)
 }

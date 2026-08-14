@@ -308,6 +308,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	if !IsSupportedGroupPlatform(platform) {
 		return nil, infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", platform))
 	}
+	modelPricing, err := normalizeGroupModelPricing(platform, input.ModelPricing)
+	if err != nil {
+		return nil, err
+	}
+	longContextPricingEnabled := true
+	if input.LongContextPricingEnabled != nil {
+		longContextPricingEnabled = *input.LongContextPricingEnabled
+	}
 	maxReasoningEffort, err := normalizeMaxReasoningEffortForPlatform(platform, input.MaxReasoningEffort)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_MAX_REASONING_EFFORT", "%v", err)
@@ -447,6 +455,8 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		DailyLimitUSD:                   dailyLimit,
 		WeeklyLimitUSD:                  weeklyLimit,
 		MonthlyLimitUSD:                 monthlyLimit,
+		LongContextPricingEnabled:       longContextPricingEnabled,
+		ModelPricing:                    modelPricing,
 		AllowImageGeneration:            allowImageGeneration,
 		ImageRateIndependent:            input.ImageRateIndependent,
 		ImageRateMultiplier:             imageRateMultiplier,
@@ -620,18 +630,34 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		return nil, err
 	}
 
+	// 渠道缓存里存了 groupID → platform 的映射，改了平台要让它失效（见函数末尾）
+	previousPlatform := group.Platform
+	targetPlatform := group.Platform
+	if input.Platform != "" {
+		if !IsSupportedGroupPlatform(input.Platform) {
+			return nil, infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", input.Platform))
+		}
+		targetPlatform = input.Platform
+	}
+	if input.ModelPricing != nil || targetPlatform != group.Platform {
+		pricing := group.ModelPricing
+		if input.ModelPricing != nil {
+			pricing = *input.ModelPricing
+		}
+		modelPricing, normalizeErr := normalizeGroupModelPricing(targetPlatform, pricing)
+		if normalizeErr != nil {
+			return nil, normalizeErr
+		}
+		group.ModelPricing = modelPricing
+	}
+
 	if input.Name != "" {
 		group.Name = input.Name
 	}
 	if input.Description != nil {
 		group.Description = *input.Description
 	}
-	if input.Platform != "" {
-		if !IsSupportedGroupPlatform(input.Platform) {
-			return nil, infraerrors.BadRequest("UNSUPPORTED_PLATFORM", fmt.Sprintf("unsupported platform: %s", input.Platform))
-		}
-		group.Platform = input.Platform
-	}
+	group.Platform = targetPlatform
 	if input.RateMultiplier != nil {
 		if *input.RateMultiplier <= 0 {
 			return nil, errors.New("rate_multiplier must be > 0")
@@ -646,6 +672,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.Status != "" {
 		group.Status = input.Status
+	}
+	if input.LongContextPricingEnabled != nil {
+		group.LongContextPricingEnabled = *input.LongContextPricingEnabled
 	}
 
 	// 订阅相关字段
@@ -851,6 +880,13 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, id)
 	}
 
+	// 平台变了就失效渠道缓存：该缓存持有 groupID → platform，而渠道定价 / 模型映射 /
+	// 模型白名单都按平台严格隔离。不失效的话，缓存最长 10 分钟仍按旧平台匹配，
+	// 期间定价查不到会静默回落到 LiteLLM 价格表、映射与白名单也不生效。
+	if group.Platform != previousPlatform && s.channelCacheInvalidator != nil {
+		s.channelCacheInvalidator.InvalidateCache()
+	}
+
 	// 如果指定了复制账号的源分组，同步绑定（替换当前分组的账号）
 	if len(input.CopyAccountsFromGroupIDs) > 0 {
 		// 去重源分组 IDs
@@ -920,6 +956,63 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 
 	return group, nil
+}
+
+func normalizeGroupModelPricing(platform string, pricing []ChannelModelPricing) ([]ChannelModelPricing, error) {
+	out := make([]ChannelModelPricing, len(pricing))
+	for i := range pricing {
+		out[i] = pricing[i].Clone()
+		out[i].ID = 0
+		out[i].ChannelID = 0
+		out[i].Platform = strings.TrimSpace(out[i].Platform)
+		if out[i].Platform == "" {
+			out[i].Platform = platform
+		}
+		if platform != PlatformComposite && out[i].Platform != platform {
+			return nil, infraerrors.Newf(
+				http.StatusBadRequest,
+				"GROUP_MODEL_PRICING_PLATFORM_MISMATCH",
+				"group model pricing platform %q must match group platform %q",
+				out[i].Platform,
+				platform,
+			)
+		}
+		if out[i].BillingMode == "" {
+			out[i].BillingMode = BillingModeToken
+		}
+		for j := range out[i].Models {
+			out[i].Models[j] = strings.TrimSpace(out[i].Models[j])
+		}
+		if len(out[i].Models) == 0 {
+			return nil, infraerrors.New(http.StatusBadRequest, "GROUP_MODEL_PRICING_MODELS_REQUIRED", "group model pricing entry requires at least one model")
+		}
+	}
+	if platform == PlatformComposite {
+		if err := validateCompositeGroupPricingPatterns(out); err != nil {
+			return nil, err
+		}
+	}
+	if err := validatePricingEntries(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Group pricing resolution receives only a model name. A Composite group
+// therefore cannot safely contain the same matching range on two platforms.
+func validateCompositeGroupPricingPatterns(pricing []ChannelModelPricing) error {
+	entries := make([]modelEntry, 0)
+	for _, price := range pricing {
+		for _, model := range price.Models {
+			entries = append(entries, toPricingModelEntry(model))
+		}
+	}
+	return detectConflicts(
+		entries,
+		PlatformComposite,
+		"GROUP_MODEL_PRICING_PATTERN_CONFLICT",
+		"group model pricing patterns",
+	)
 }
 
 func (s *adminServiceImpl) DeleteGroup(ctx context.Context, id int64) error {

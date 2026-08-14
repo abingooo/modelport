@@ -212,7 +212,12 @@ import { formatScaled } from '@/utils/pricing'
 import { platformAccentColor } from '@/utils/platformColors'
 import { formatPeakRateWindow, hasPeakRate, serverTimezoneLabel } from '@/utils/peak-rate'
 import { useAppStore } from '@/stores/app'
-import { BILLING_MODE_IMAGE, BILLING_MODE_TOKEN, type BillingMode } from '@/constants/channel'
+import {
+  BILLING_MODE_IMAGE,
+  BILLING_MODE_TOKEN,
+  BILLING_MODE_VIDEO,
+  type BillingMode
+} from '@/constants/channel'
 import type { GroupPlatform } from '@/types'
 import type { UserPricingInterval } from '@/api/channels'
 import type { PlazaModelCardData, PlazaModelOffer } from './modelPlazaPresentation'
@@ -267,7 +272,7 @@ const hasDisplayPricing = computed(() =>
   isOfficialPricing.value ? hasOfficialPricing.value : activePricing.value != null
 )
 const billingMode = computed(() =>
-  plazaBillingMode(currentModel.value) as BillingMode
+  plazaBillingMode(currentModel.value, isOfficialPricing.value) as BillingMode
 )
 const providerLabel = computed(() => plazaProviderLabel(props.card.platform))
 const accentStyle = computed(() => ({ '--plaza-accent': platformAccentColor(props.card.platform) }))
@@ -342,11 +347,11 @@ const requestPriceRows = computed(() => {
   return [{ label: t('modelPlaza.card.defaultSpecification'), price: currentPrice(pricing.per_request_price) }]
 })
 
-const perUnitSuffix = computed(() =>
-  billingMode.value === BILLING_MODE_IMAGE
-    ? t('modelPlaza.table.perUnitImage')
-    : t('modelPlaza.table.perUnitRequest')
-)
+const perUnitSuffix = computed(() => {
+  if (billingMode.value === BILLING_MODE_IMAGE) return t('modelPlaza.table.perUnitImage')
+  if (billingMode.value === BILLING_MODE_VIDEO) return t('modelPlaza.table.perUnitSecond')
+  return t('modelPlaza.table.perUnitRequest')
+})
 
 function selectGroup(value: string | number | boolean | null) {
   if (typeof value === 'number' || value === PLAZA_OFFICIAL_GROUP_ID) {

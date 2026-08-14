@@ -655,7 +655,8 @@ export default {
     billingModes: {
       token: '按量计费',
       per_request: '按次计费',
-      image: '按图片计费'
+      image: '按图片计费',
+      video: '视频按秒计费'
     },
     provider: {
       modelCount: '{count} 个模型'
@@ -696,6 +697,7 @@ export default {
       unitPerMillion: '￥ / 1M token',
       perUnitRequest: '/ 次',
       perUnitImage: '/ 张',
+      perUnitSecond: '/ 秒',
       perRequest: '按次计费',
       perImage: '按图片计费'
     },

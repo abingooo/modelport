@@ -762,7 +762,6 @@ const adminNavItems = computed((): NavItem[] => {
       path: '/admin/security-audit',
       label: t('nav.securityAudit'),
       icon: ShieldIcon,
-      hideInSimpleMode: true,
       expandOnly: true,
       children: [
         { path: '/admin/risk-control', label: t('nav.contentModeration'), icon: ShieldIcon, featureFlag: flagRiskControl },

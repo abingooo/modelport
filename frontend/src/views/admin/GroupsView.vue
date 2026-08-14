@@ -1455,6 +1455,36 @@
         </div>
 
 
+        <div class="border-t border-gray-200 pt-4 mt-4 dark:border-dark-400">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t("admin.groups.modelPricing.title") }}</h4>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.modelPricing.description") }}</p>
+            </div>
+            <button type="button" class="btn btn-secondary" @click="addGroupPricing(createForm.model_pricing, createForm.platform)">
+              <Icon name="plus" size="sm" class="mr-1" />{{ t("admin.groups.modelPricing.add") }}
+            </button>
+          </div>
+          <label class="mt-3 flex items-start gap-2">
+            <input v-model="createForm.long_context_pricing_enabled" type="checkbox" class="mt-0.5" />
+            <span><span class="block text-sm text-gray-700 dark:text-gray-300">{{ t("admin.groups.modelPricing.longContext") }}</span><span class="block text-xs text-gray-500">{{ t("admin.groups.modelPricing.longContextHint") }}</span></span>
+          </label>
+          <div class="mt-3 space-y-2">
+            <PricingEntryCard
+              v-for="(entry, index) in createForm.model_pricing"
+              :key="index"
+              :entry="entry"
+              :platform="createForm.platform === 'composite' ? entry.platform : createForm.platform"
+              :platform-options="createForm.platform === 'composite' ? compositeRoutePlatformOptions : []"
+              :show-plaza-visibility="false"
+              :auto-fill-default-pricing="false"
+              hide-token-intervals
+              @update="createForm.model_pricing[index] = $event"
+              @remove="createForm.model_pricing.splice(index, 1)"
+            />
+          </div>
+        </div>
+
         <!-- Grok Voice 显式定价（仅 grok 平台） -->
         <div
           v-if="createForm.platform === 'grok'"
@@ -3133,6 +3163,36 @@
         </div>
 
 
+        <div class="border-t border-gray-200 pt-4 mt-4 dark:border-dark-400">
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t("admin.groups.modelPricing.title") }}</h4>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t("admin.groups.modelPricing.description") }}</p>
+            </div>
+            <button type="button" class="btn btn-secondary" @click="addGroupPricing(editForm.model_pricing, editForm.platform)">
+              <Icon name="plus" size="sm" class="mr-1" />{{ t("admin.groups.modelPricing.add") }}
+            </button>
+          </div>
+          <label class="mt-3 flex items-start gap-2">
+            <input v-model="editForm.long_context_pricing_enabled" type="checkbox" class="mt-0.5" />
+            <span><span class="block text-sm text-gray-700 dark:text-gray-300">{{ t("admin.groups.modelPricing.longContext") }}</span><span class="block text-xs text-gray-500">{{ t("admin.groups.modelPricing.longContextHint") }}</span></span>
+          </label>
+          <div class="mt-3 space-y-2">
+            <PricingEntryCard
+              v-for="(entry, index) in editForm.model_pricing"
+              :key="index"
+              :entry="entry"
+              :platform="editForm.platform === 'composite' ? entry.platform : editForm.platform"
+              :platform-options="editForm.platform === 'composite' ? compositeRoutePlatformOptions : []"
+              :show-plaza-visibility="false"
+              :auto-fill-default-pricing="false"
+              hide-token-intervals
+              @update="editForm.model_pricing[index] = $event"
+              @remove="editForm.model_pricing.splice(index, 1)"
+            />
+          </div>
+        </div>
+
         <!-- Grok Voice 显式定价（仅 grok 平台） -->
         <div
           v-if="editForm.platform === 'grok'"
@@ -4316,6 +4376,8 @@ import GroupRateMultipliersModal from "@/components/admin/group/GroupRateMultipl
 import GroupRPMOverridesModal from "@/components/admin/group/GroupRPMOverridesModal.vue";
 import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import ReasoningEffortPolicyFields from "@/components/admin/group/ReasoningEffortPolicyFields.vue";
+import PricingEntryCard from "@/components/admin/channel/PricingEntryCard.vue";
+import type { PricingFormEntry } from "@/components/admin/channel/types";
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import { extractApiErrorMessage } from "@/utils/apiError";
@@ -4343,6 +4405,13 @@ import {
   setModelsListCandidates,
 } from "./groupsModelsList";
 import { createModelsListCandidatesTracker } from "./groupsModelsListCandidates";
+import {
+  createGroupPricingEntry,
+  groupPricingFromAPI,
+  groupPricingToAPI,
+  validateGroupPricingEntries,
+  type GroupPricingValidationError,
+} from "./groupsModelPricing";
 import { normalizeSupportedModelScopesForPlatform } from "./groupsSupportedModelScopes";
 import {
   isProfitControlPlatform,
@@ -4374,6 +4443,11 @@ import {
   serializeVideoModelPrices,
   videoModelPriceFamilyRows,
 } from "./groupsVideoModelPricing";
+
+const addGroupPricing = (
+  entries: PricingFormEntry[],
+  platform: GroupPlatform,
+) => entries.push(createGroupPricingEntry(platform));
 
 const { t } = useI18n();
 const appStore = useAppStore();
@@ -4845,6 +4919,8 @@ const createForm = reactive({
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
+  long_context_pricing_enabled: true,
+  model_pricing: [] as PricingFormEntry[],
   // 图片生成计费配置
   allow_image_generation: false,
   image_rate_independent: false,
@@ -5202,6 +5278,8 @@ const editForm = reactive({
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
+  long_context_pricing_enabled: true,
+  model_pricing: [] as PricingFormEntry[],
   // 图片生成计费配置
   allow_image_generation: false,
   image_rate_independent: false,
@@ -5669,6 +5747,8 @@ const closeCreateModal = () => {
   createForm.video_price_720p = null;
   createForm.video_price_1080p = null;
   createForm.video_model_prices = createVideoModelPricesForm();
+  createForm.long_context_pricing_enabled = true;
+  createForm.model_pricing = [];
   createForm.web_search_price_per_call = null;
   createForm.search_price_per_1k = null;
   createForm.audio_realtime_price_per_min = null;
@@ -5741,9 +5821,49 @@ const validateProfitControlForm = (form: ProfitControlFormState): boolean => {
   return true;
 };
 
+const groupPricingValidationMessage = (
+  error: GroupPricingValidationError,
+): string => {
+  switch (error.code) {
+    case "modelsRequired":
+      return t("admin.groups.modelPricing.modelsRequired", {
+        index: error.entryIndex,
+      });
+    case "modelConflict":
+      return t("admin.groups.modelPricing.modelConflict", {
+        model1: error.model1,
+        model2: error.model2,
+      });
+    case "unitPriceRequired":
+      return t("admin.groups.modelPricing.unitPriceRequired", {
+        models: error.models.join(", "),
+      });
+    case "invalidPrices":
+      return t("admin.groups.modelPricing.invalidPrices", {
+        models: error.models.join(", "),
+        detail: error.detail,
+      });
+    case "invalidIntervals":
+      return t("admin.groups.modelPricing.invalidIntervals", {
+        models: error.models.join(", "),
+        detail: error.detail,
+      });
+  }
+};
+
+const validateGroupPricingForm = (pricing: PricingFormEntry[]): boolean => {
+  const error = validateGroupPricingEntries(pricing, t);
+  if (!error) return true;
+  appStore.showError(groupPricingValidationMessage(error));
+  return false;
+};
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
+    return;
+  }
+  if (!validateGroupPricingForm(createForm.model_pricing)) {
     return;
   }
   if (
@@ -5768,6 +5888,10 @@ const handleCreateGroup = async () => {
     // 构建请求数据，包含模型路由配置
     const requestData = {
       ...createGroupForm,
+      model_pricing: groupPricingToAPI(
+        createForm.model_pricing,
+        createForm.platform,
+      ),
       daily_limit_usd: normalizeOptionalLimit(
         createForm.daily_limit_usd as number | string | null,
       ),
@@ -5884,6 +6008,12 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.daily_limit_usd = group.daily_limit_usd;
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
+  editForm.long_context_pricing_enabled =
+    group.long_context_pricing_enabled ?? true;
+  editForm.model_pricing = groupPricingFromAPI(
+    group.model_pricing,
+    group.platform,
+  );
   editForm.allow_image_generation = group.allow_image_generation ?? false;
   editForm.image_rate_independent = group.image_rate_independent ?? false;
   editForm.image_rate_multiplier = group.image_rate_multiplier ?? 1;
@@ -5983,6 +6113,8 @@ const closeEditModal = () => {
   editForm.video_price_720p = null;
   editForm.video_price_1080p = null;
   editForm.video_model_prices = createVideoModelPricesForm();
+  editForm.long_context_pricing_enabled = true;
+  editForm.model_pricing = [];
   editForm.web_search_price_per_call = null;
   editForm.search_price_per_1k = null;
   editForm.audio_realtime_price_per_min = null;
@@ -5997,6 +6129,9 @@ const handleUpdateGroup = async () => {
   if (!editingGroup.value) return;
   if (!editForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
+    return;
+  }
+  if (!validateGroupPricingForm(editForm.model_pricing)) {
     return;
   }
   if (
@@ -6015,6 +6150,10 @@ const handleUpdateGroup = async () => {
     // 转换 fallback_group_id: null -> 0 (后端使用 0 表示清除)
     const payload = {
       ...editForm,
+      model_pricing: groupPricingToAPI(
+        editForm.model_pricing,
+        editForm.platform,
+      ),
       daily_limit_usd: normalizeOptionalLimit(
         editForm.daily_limit_usd as number | string | null,
       ),

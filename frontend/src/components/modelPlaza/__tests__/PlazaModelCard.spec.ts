@@ -241,4 +241,81 @@ describe('PlazaModelCard', () => {
     await nextTick()
     expect(wrapper.text()).toContain('￥0.05')
   })
+
+  it('uses the billing mode of the active group or official price', async () => {
+    const tokenDisplayPricing = pricing({ input_price: 1e-6, output_price: 2e-6 })
+    const mixedModeModel = model(tokenDisplayPricing)
+    mixedModeModel.pricing = pricing({
+      billing_mode: 'image',
+      input_price: null,
+      output_price: null,
+      cache_write_price: null,
+      cache_read_price: null,
+      intervals: [
+        {
+          min_tokens: 0,
+          max_tokens: null,
+          tier_label: '1K',
+          input_price: null,
+          output_price: null,
+          cache_write_price: null,
+          cache_read_price: null,
+          per_request_price: 0.1
+        }
+      ]
+    })
+    const wrapper = mountCard({
+      key: 'grok:mixed-mode',
+      name: 'mixed-mode',
+      platform: 'grok',
+      offers: [{ group: group(1, 'Mixed'), model: mixedModeModel }]
+    })
+
+    expect(wrapper.text()).toContain('modelPlaza.billingModes.token')
+    expect(wrapper.find('.price-grid').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('1K')
+
+    wrapper.findComponent(Select).vm.$emit('update:modelValue', '__official__')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('modelPlaza.billingModes.image')
+    expect(wrapper.find('.price-grid').exists()).toBe(false)
+    expect(wrapper.text()).toContain('1K')
+    expect(wrapper.text()).toContain('￥0.1')
+    expect(wrapper.text()).toContain('modelPlaza.table.perUnitImage')
+  })
+
+  it('labels video tier prices as per-second prices', () => {
+    const videoModel = model(pricing({
+      billing_mode: 'video',
+      input_price: null,
+      output_price: null,
+      cache_write_price: null,
+      cache_read_price: null,
+      intervals: [
+        {
+          min_tokens: 0,
+          max_tokens: null,
+          tier_label: '720p',
+          input_price: null,
+          output_price: null,
+          cache_write_price: null,
+          cache_read_price: null,
+          per_request_price: 0.07
+        }
+      ]
+    }))
+    const wrapper = mountCard({
+      key: 'grok:video',
+      name: 'grok-video',
+      platform: 'grok',
+      offers: [{ group: group(1, 'Video'), model: videoModel }]
+    })
+
+    expect(wrapper.text()).toContain('modelPlaza.billingModes.video')
+    expect(wrapper.text()).toContain('720p')
+    expect(wrapper.text()).toContain('￥0.07')
+    expect(wrapper.text()).toContain('modelPlaza.table.perUnitSecond')
+    expect(wrapper.text()).not.toContain('modelPlaza.table.perUnitRequest')
+  })
 })

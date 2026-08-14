@@ -59,8 +59,9 @@ export function plazaProviderLabel(platform: string): string {
   return PROVIDER_LABELS[platform] ?? (platform || 'API')
 }
 
-export function plazaBillingMode(model: PlazaModel): BillingMode {
-  return (model.pricing?.billing_mode || BILLING_MODE_TOKEN) as BillingMode
+export function plazaBillingMode(model: PlazaModel, officialPricing = false): BillingMode {
+  const pricing = officialPricing ? model.pricing : model.display_pricing
+  return (pricing?.billing_mode || BILLING_MODE_TOKEN) as BillingMode
 }
 
 export function plazaHasOfficialPricing(model: PlazaModel): boolean {
@@ -96,7 +97,7 @@ export function plazaModelSortPrice(model: PlazaModel | undefined, officialPrici
   if (!model) return null
   const pricing: UserSupportedModelPricing | null = officialPricing ? model.pricing : model.display_pricing
   if (!pricing) return null
-  if (plazaBillingMode(model) === BILLING_MODE_TOKEN) {
+  if (plazaBillingMode(model, officialPricing) === BILLING_MODE_TOKEN) {
     const intervalPrices = pricing.intervals.flatMap((interval) => [
       interval.output_price,
       interval.input_price,

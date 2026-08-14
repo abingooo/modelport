@@ -16,6 +16,7 @@ export interface IntervalFormEntry {
 }
 
 export interface PricingFormEntry {
+  platform?: string
   models: string[]
   billing_mode: BillingMode
   input_price: number | string | null
@@ -27,6 +28,53 @@ export interface PricingFormEntry {
   per_request_price: number | string | null
   user_visible: boolean
   intervals: IntervalFormEntry[]
+}
+
+type UnitPricedEntry = Pick<
+  PricingFormEntry,
+  'billing_mode' | 'per_request_price' | 'intervals'
+>
+
+/** Whether a unit-priced entry is missing both its fallback price and tier prices. */
+export function isMissingRequiredUnitPrice(entry: UnitPricedEntry): boolean {
+  const requiresUnitPrice = entry.billing_mode === 'per_request' ||
+    entry.billing_mode === 'image' ||
+    entry.billing_mode === 'video'
+
+  return requiresUnitPrice &&
+    (entry.per_request_price == null || entry.per_request_price === '') &&
+    (!entry.intervals || entry.intervals.length === 0)
+}
+
+const entryPriceFields = [
+  ['input_price', 'inputPrice'],
+  ['output_price', 'outputPrice'],
+  ['cache_write_price', 'cacheWritePrice'],
+  ['cache_read_price', 'cacheReadPrice'],
+  ['image_input_price', 'imageInputPrice'],
+  ['image_output_price', 'imageTokenPrice'],
+  ['per_request_price', 'perRequestPrice'],
+] as const
+
+/** Validate populated top-level prices before conversion can turn bad values into null. */
+export function validatePricingEntryPrices(
+  entry: PricingFormEntry,
+  t: TranslateFn,
+): string | null {
+  for (const [field, labelKey] of entryPriceFields) {
+    const value = entry[field]
+    if (value == null || value === '') continue
+
+    const fieldLabel = t(`admin.channels.form.${labelKey}`)
+    const numberValue = Number(value)
+    if (!Number.isFinite(numberValue)) {
+      return t('admin.channels.priceValidation.finite', { field: fieldLabel })
+    }
+    if (numberValue < 0) {
+      return t('admin.channels.priceValidation.negative', { field: fieldLabel })
+    }
+  }
+  return null
 }
 
 // 价格转换：后端存 per-token，前端显示 per-MTok ($/1M tokens)
@@ -87,12 +135,16 @@ interface ModelPattern {
   wildcard: boolean
 }
 
-function toModelPattern(model: string): ModelPattern {
-  const lower = model.toLowerCase()
+function toModelPattern(model: string, pricingNormalization = false): ModelPattern {
+  const lower = pricingNormalization ? model.trim().toLowerCase() : model.toLowerCase()
   const wildcard = lower.endsWith('*')
+  let prefix = wildcard ? lower.slice(0, -1) : lower
+  if (pricingNormalization && prefix.startsWith('claude-')) {
+    prefix = prefix.replace(/\./g, '-')
+  }
   return {
     pattern: model,
-    prefix: wildcard ? lower.slice(0, -1) : lower,
+    prefix,
     wildcard,
   }
 }
@@ -107,7 +159,15 @@ function patternsConflict(a: ModelPattern, b: ModelPattern): boolean {
 
 /** 检测模型模式列表中的冲突，返回冲突的两个模式名；无冲突返回 null */
 export function findModelConflict(models: string[]): [string, string] | null {
-  const patterns = models.map(toModelPattern)
+  return findConflict(models.map(model => toModelPattern(model)))
+}
+
+/** Match the backend's model-pricing key normalization before checking conflicts. */
+export function findPricingModelConflict(models: string[]): [string, string] | null {
+  return findConflict(models.map(model => toModelPattern(model, true)))
+}
+
+function findConflict(patterns: ModelPattern[]): [string, string] | null {
   for (let i = 0; i < patterns.length; i++) {
     for (let j = i + 1; j < patterns.length; j++) {
       if (patternsConflict(patterns[i], patterns[j])) {
@@ -124,7 +184,7 @@ export function findModelConflict(models: string[]): [string, string] | null {
  *
  * mode 决定区间语义：
  * - token：区间是上下文 token 数分段 (min, max]，不能重叠，无上限段必须放最后
- * - per_request / image：区间是按 tier_label 分层（1K/2K/4K 等），后端按 label
+ * - per_request / image / video：区间是按 tier_label 分层（1K/2K/4K 等），后端按 label
  *   匹配，不依赖 min/max，因此跳过重叠 / last-unlimited 校验
  */
 export function validateIntervals(
@@ -142,7 +202,7 @@ export function validateIntervals(
     if (err) return err
   }
 
-  // per_request / image 模式按 tier_label 匹配，不做 token 区间重叠校验
+  // per_request / image / video 模式按 tier_label 匹配，不做 token 区间重叠校验
   if (mode !== 'token') {
 	const seen = new Set<string>()
 	for (const interval of sorted) {
@@ -207,14 +267,19 @@ function validateIntervalPrices(iv: IntervalFormEntry, idx: number, t: Translate
     ['cacheReadPrice', iv.cache_read_price],
     ['perRequestPrice', iv.per_request_price],
   ]
+  if (prices.every(([, val]) => val == null || val === '')) {
+    return intervalValidationMessage(t, 'missingPrice', { index })
+  }
   for (const [key, val] of prices) {
-    if (val != null && val !== '' && Number(val) < 0) {
-      const field = intervalPriceLabel(t, key)
-      return intervalValidationMessage(
-        t,
-        'negativePrice',
-        { index, field },
-      )
+    if (val == null || val === '') continue
+
+    const field = intervalPriceLabel(t, key)
+    const numberValue = Number(val)
+    if (!Number.isFinite(numberValue)) {
+      return intervalValidationMessage(t, 'nonFinitePrice', { index, field })
+    }
+    if (numberValue < 0) {
+      return intervalValidationMessage(t, 'negativePrice', { index, field })
     }
   }
   return null

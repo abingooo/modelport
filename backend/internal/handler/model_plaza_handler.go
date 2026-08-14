@@ -73,12 +73,15 @@ type modelPlazaGroup struct {
 	AppliedPeakMultiplier        float64  `json:"applied_peak_multiplier"`
 	EffectiveRateMultiplier      float64  `json:"effective_rate_multiplier"`
 	EffectiveImageRateMultiplier float64  `json:"effective_image_rate_multiplier"`
+	EffectiveVideoRateMultiplier float64  `json:"effective_video_rate_multiplier"`
 	IsFree                       bool     `json:"is_free"`
 	IsExclusive                  bool     `json:"is_exclusive"`
 	// 生图独立倍率：为 true 时图片计费模型的实付倍率取 ImageRateMultiplier，
 	// 不取分组/用户专属倍率。
 	ImageRateIndependent bool              `json:"image_rate_independent"`
 	ImageRateMultiplier  float64           `json:"image_rate_multiplier"`
+	VideoRateIndependent bool              `json:"video_rate_independent"`
+	VideoRateMultiplier  float64           `json:"video_rate_multiplier"`
 	Models               []modelPlazaModel `json:"models"`
 }
 
@@ -189,6 +192,10 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 	if !g.IsFree && g.ImageRateIndependent {
 		imageMultiplier = validDisplayMultiplier(g.ImageRateMultiplier)
 	}
+	videoMultiplier := baseMultiplier
+	if !g.IsFree && g.VideoRateIndependent {
+		videoMultiplier = validDisplayMultiplier(g.VideoRateMultiplier)
+	}
 
 	models := make([]modelPlazaModel, 0, len(g.Models))
 	for i := range g.Models {
@@ -198,12 +205,16 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 			displayPricing = m.Pricing
 		}
 		effectiveMultiplier := baseMultiplier
-		if m.Pricing != nil {
-			switch m.Pricing.BillingMode {
+		if displayPricing != nil {
+			switch displayPricing.BillingMode {
 			case service.BillingModeToken, "":
 				effectiveMultiplier = tokenMultiplier
 			case service.BillingModeImage:
 				effectiveMultiplier = imageMultiplier
+			case service.BillingModeVideo:
+				effectiveMultiplier = videoMultiplier
+			case service.BillingModePerRequest:
+				effectiveMultiplier = baseMultiplier
 			}
 		}
 		models = append(models, modelPlazaModel{
@@ -229,10 +240,13 @@ func toModelPlazaGroupDTOAt(g *service.PlazaGroup, userRates map[int64]float64, 
 		AppliedPeakMultiplier:        appliedPeakMultiplier,
 		EffectiveRateMultiplier:      baseMultiplier,
 		EffectiveImageRateMultiplier: imageMultiplier,
+		EffectiveVideoRateMultiplier: videoMultiplier,
 		IsFree:                       g.IsFree,
 		IsExclusive:                  g.IsExclusive,
 		ImageRateIndependent:         g.ImageRateIndependent,
 		ImageRateMultiplier:          g.ImageRateMultiplier,
+		VideoRateIndependent:         g.VideoRateIndependent,
+		VideoRateMultiplier:          g.VideoRateMultiplier,
 		Models:                       models,
 	}
 	if rate, ok := userRates[g.ID]; ok {

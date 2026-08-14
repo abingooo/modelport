@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { ModelPlazaGroup, PlazaModel } from '@/api/modelPlaza'
 import {
   buildPlazaProviderSections,
+  plazaBillingMode,
   plazaHasOfficialPricing,
   plazaModelSortPrice,
   plazaProviderLabel
@@ -84,6 +85,33 @@ describe('model plaza presentation', () => {
     expect(plazaHasOfficialPricing(pricedModel)).toBe(true)
     expect(plazaHasOfficialPricing(imageModel)).toBe(true)
     expect(plazaHasOfficialPricing(model('no-price', 'openai', 1))).toBe(false)
+  })
+
+  it('uses the billing mode from the selected pricing source', () => {
+    const mixedMode = model('mixed-mode', 'openai', 1)
+    mixedMode.pricing = {
+      billing_mode: 'token',
+      input_price: 1e-6,
+      output_price: 7e-6,
+      cache_write_price: null,
+      cache_read_price: null,
+      image_input_price: null,
+      image_output_price: null,
+      per_request_price: null,
+      intervals: []
+    }
+    mixedMode.display_pricing = {
+      ...mixedMode.pricing,
+      billing_mode: 'image',
+      input_price: null,
+      output_price: null,
+      per_request_price: 0.04
+    }
+
+    expect(plazaBillingMode(mixedMode)).toBe('image')
+    expect(plazaBillingMode(mixedMode, true)).toBe('token')
+    expect(plazaModelSortPrice(mixedMode)).toBe(0.04)
+    expect(plazaModelSortPrice(mixedMode, true)).toBe(7e-6)
   })
 
   it('sorts by displayed output price descending and keeps missing prices last', () => {

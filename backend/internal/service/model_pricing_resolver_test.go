@@ -114,6 +114,65 @@ func TestGetIntervalPricing_NoMatch_FallsBackToBase(t *testing.T) {
 	require.Equal(t, basePricing, result)
 }
 
+func TestGetIntervalPricing_PartialIntervalInheritsBaseAndPreservesExplicitZero(t *testing.T) {
+	zero := 0.0
+	basePricing := &ModelPricing{
+		InputPricePerToken:                 5e-6,
+		InputPricePerTokenPriority:         6e-6,
+		OutputPricePerToken:                15e-6,
+		OutputPricePerTokenPriority:        16e-6,
+		CacheCreationPricePerToken:         3.75e-6,
+		CacheCreationPricePerTokenPriority: 4e-6,
+		CacheReadPricePerToken:             0.3e-6,
+		CacheReadPricePerTokenPriority:     0.4e-6,
+		CacheCreation5mPrice:               3.8e-6,
+		CacheCreation1hPrice:               7.5e-6,
+		ImageInputPricePerToken:            1e-6,
+		ImageOutputPricePerToken:           2e-6,
+		ImageOutputPriceExplicit:           true,
+		LongContextInputThreshold:          200000,
+		LongContextInputMultiplier:         2,
+		LongContextOutputMultiplier:        1.5,
+	}
+	resolved := &ResolvedPricing{
+		Mode:                   BillingModeToken,
+		BasePricing:            basePricing,
+		SupportsCacheBreakdown: true,
+		Intervals: []PricingInterval{{
+			MinTokens:       0,
+			InputPrice:      &zero,
+			CacheWritePrice: &zero,
+		}},
+	}
+
+	pricing := NewModelPricingResolver(nil, nil).GetIntervalPricing(resolved, 100)
+
+	require.NotSame(t, basePricing, pricing)
+	require.Zero(t, pricing.InputPricePerToken)
+	require.Zero(t, pricing.InputPricePerTokenPriority)
+	require.InDelta(t, 15e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 16e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+	require.Zero(t, pricing.CacheCreationPricePerToken)
+	require.Zero(t, pricing.CacheCreationPricePerTokenPriority)
+	require.Zero(t, pricing.CacheCreation5mPrice)
+	require.Zero(t, pricing.CacheCreation1hPrice)
+	require.True(t, pricing.CacheCreationPriceExplicit)
+	require.InDelta(t, 0.3e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 0.4e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 1e-6, pricing.ImageInputPricePerToken, 1e-12)
+	require.InDelta(t, 2e-6, pricing.ImageOutputPricePerToken, 1e-12)
+	require.True(t, pricing.ImageOutputPriceExplicit)
+	require.Equal(t, 200000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+	require.True(t, pricing.SupportsCacheBreakdown)
+
+	// Constructing interval pricing must not mutate the shared base object.
+	require.InDelta(t, 5e-6, basePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 3.75e-6, basePricing.CacheCreationPricePerToken, 1e-12)
+	require.False(t, basePricing.CacheCreationPriceExplicit)
+}
+
 func TestGPT56ExplicitZeroCacheWritePriceIsPreserved(t *testing.T) {
 	bs := &BillingService{}
 	resolver := NewModelPricingResolver(nil, bs)
@@ -142,7 +201,7 @@ func TestGPT56ExplicitZeroCacheWritePriceIsPreserved(t *testing.T) {
 	})
 
 	t.Run("interval price", func(t *testing.T) {
-		pricing := intervalToModelPricing(&PricingInterval{CacheWritePrice: &zero}, false, nil)
+		pricing := intervalToModelPricing(nil, &PricingInterval{CacheWritePrice: &zero}, false, nil)
 		require.True(t, pricing.CacheCreationPriceExplicit)
 
 		cost, err := bs.CalculateCostUnified(CostInput{
@@ -205,6 +264,34 @@ func TestGetRequestTierPrice_NilPerRequestPrice(t *testing.T) {
 	}
 
 	require.InDelta(t, 0.0, r.GetRequestTierPrice(resolved, "1K"), 1e-12)
+}
+
+func TestLookupRequestTierPriceDistinguishesZeroFromMissing(t *testing.T) {
+	r := NewModelPricingResolver(nil, newTestBillingServiceForResolver())
+	labelPricing := &ResolvedPricing{
+		Mode: BillingModePerRequest,
+		RequestTiers: []PricingInterval{
+			{TierLabel: "free", PerRequestPrice: testPtrFloat64(0)},
+		},
+	}
+
+	price, matched := r.LookupRequestTierPrice(labelPricing, "free")
+	require.True(t, matched)
+	require.Zero(t, price)
+	_, matched = r.LookupRequestTierPrice(labelPricing, "missing")
+	require.False(t, matched)
+
+	contextPricing := &ResolvedPricing{
+		Mode: BillingModePerRequest,
+		RequestTiers: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(128000), PerRequestPrice: testPtrFloat64(0)},
+		},
+	}
+	price, matched = r.LookupRequestTierPriceByContext(contextPricing, 100)
+	require.True(t, matched)
+	require.Zero(t, price)
+	_, matched = r.LookupRequestTierPriceByContext(contextPricing, 200000)
+	require.False(t, matched)
 }
 
 // ===========================================================================
@@ -526,6 +613,36 @@ func TestGetIntervalPricing_WithChannelIntervals(t *testing.T) {
 	require.InDelta(t, 10e-6, pricing2.OutputPricePerToken, 1e-12)
 }
 
+func TestGetIntervalPricing_PartialChannelIntervalInheritsResolvedBase(t *testing.T) {
+	zero := 0.0
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
+		Models:      []string{"claude-sonnet-4"},
+		BillingMode: BillingModeToken,
+		Intervals: []PricingInterval{{
+			MinTokens:  0,
+			InputPrice: &zero,
+		}},
+	}})
+
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
+	pricing := r.GetIntervalPricing(resolved, 50000)
+
+	require.NotNil(t, pricing)
+	require.Zero(t, pricing.InputPricePerToken)
+	require.Zero(t, pricing.InputPricePerTokenPriority)
+	require.InDelta(t, 15e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 3.75e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	require.InDelta(t, 0.3e-6, pricing.CacheReadPricePerToken, 1e-12)
+
+	base := r.billingService.fallbackPrices["claude-sonnet-4"]
+	require.InDelta(t, 3e-6, base.InputPricePerToken, 1e-12)
+	require.InDelta(t, 15e-6, base.OutputPricePerToken, 1e-12)
+}
+
 func TestGetIntervalPricing_ChannelIntervalsNoMatch(t *testing.T) {
 	// Channel intervals don't match token count → falls back to BasePricing.
 	r := newResolverWithChannel(t, []ChannelModelPricing{{
@@ -832,4 +949,206 @@ func TestApplyTokenOverrides_IntervalDoesNotPolluteFallbackPrices(t *testing.T) 
 	require.InDelta(t, 3e-6, fp.InputPricePerToken, 1e-12, "fallback InputPricePerToken polluted")
 	require.InDelta(t, 15e-6, fp.OutputPricePerToken, 1e-12, "fallback OutputPricePerToken polluted")
 	require.False(t, fp.ImageOutputPriceExplicit, "fallback ImageOutputPriceExplicit polluted")
+}
+
+func TestResolve_GroupPricingOverridesChannel(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: "anthropic", Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6),
+	}})
+	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
+		Models: []string{"claude-sonnet-*"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6), OutputPrice: testPtrFloat64(2e-6),
+	}}}
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.Equal(t, PricingSourceGroup, resolved.Source)
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 2e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+}
+
+func TestResolve_PartialGroupTokenPricingInheritsChannelFields(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: "anthropic", Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6),
+		CacheWritePrice: testPtrFloat64(4e-6), CacheReadPrice: testPtrFloat64(0.5e-6),
+		ImageInputPrice: testPtrFloat64(11e-6), ImageOutputPrice: testPtrFloat64(22e-6),
+	}})
+	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
+		Models: []string{"claude-sonnet-*"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6),
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.Equal(t, PricingSourceGroup, resolved.Source)
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 20e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 4e-6, resolved.BasePricing.CacheCreationPricePerToken, 1e-12)
+	require.InDelta(t, 0.5e-6, resolved.BasePricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 11e-6, resolved.BasePricing.ImageInputPricePerToken, 1e-12)
+	require.InDelta(t, 22e-6, resolved.BasePricing.ImageOutputPricePerToken, 1e-12)
+}
+
+func TestResolve_GroupTokenPricingDoesNotInheritMediaChannelFields(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeImage,
+		PerRequestPrice: testPtrFloat64(0.08), OutputPrice: testPtrFloat64(99e-6),
+	}})
+	group := &Group{ID: 100, Platform: PlatformAnthropic, ModelPricing: []ChannelModelPricing{{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6),
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.Equal(t, PricingSourceGroup, resolved.Source)
+	require.Equal(t, BillingModeToken, resolved.Mode)
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 15e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+}
+
+func TestResolve_GroupTokenPricingPreservesChannelImageZeroSemantics(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6),
+	}})
+	r.billingService.fallbackPrices["claude-sonnet-4"].ImageInputPricePerToken = 0.75e-6
+	r.billingService.fallbackPrices["claude-sonnet-4"].ImageOutputPricePerToken = 18e-6
+	group := &Group{ID: 100, Platform: PlatformAnthropic, ModelPricing: []ChannelModelPricing{{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6),
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 15e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+	require.Zero(t, resolved.BasePricing.ImageInputPricePerToken)
+	require.Zero(t, resolved.BasePricing.ImageOutputPricePerToken)
+	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
+}
+
+func TestResolve_PartialGroupTokenPricingWithoutChannelInheritsBuiltInFields(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	bs.fallbackPrices["claude-sonnet-4"].ImageInputPricePerToken = 0.75e-6
+	bs.fallbackPrices["claude-sonnet-4"].ImageOutputPricePerToken = 18e-6
+	r := NewModelPricingResolver(nil, bs)
+	group := &Group{ID: 100, Platform: PlatformAnthropic, ModelPricing: []ChannelModelPricing{{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6),
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
+
+	require.Equal(t, PricingSourceGroup, resolved.Source)
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 15e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.75e-6, resolved.BasePricing.ImageInputPricePerToken, 1e-12)
+	require.InDelta(t, 18e-6, resolved.BasePricing.ImageOutputPricePerToken, 1e-12)
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit)
+}
+
+func TestOverlayGroupTokenPricingDoesNotMutateInputs(t *testing.T) {
+	channel := ChannelModelPricing{
+		Platform: PlatformAnthropic, Models: []string{"claude-*"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6), UserVisible: true,
+		Intervals: []PricingInterval{{MinTokens: 0, InputPrice: testPtrFloat64(30e-6)}},
+	}
+	group := ChannelModelPricing{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6),
+		Intervals:  []PricingInterval{{MinTokens: 0, InputPrice: testPtrFloat64(2e-6)}},
+	}
+	wantChannel := channel.Clone()
+	wantGroup := group.Clone()
+
+	merged := overlayGroupTokenPricing(&channel, &group)
+
+	require.Equal(t, wantChannel, channel)
+	require.Equal(t, wantGroup, group)
+	require.True(t, merged.UserVisible)
+	require.Empty(t, merged.Intervals)
+	require.InDelta(t, 1e-6, *merged.InputPrice, 1e-12)
+	require.InDelta(t, 20e-6, *merged.OutputPrice, 1e-12)
+}
+
+func TestResolve_OrdinaryGroupIgnoresLegacyCrossPlatformPricing(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: PlatformAnthropic, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6),
+	}})
+	group := &Group{ID: 100, Platform: PlatformAnthropic, ModelPricing: []ChannelModelPricing{{
+		Platform: PlatformOpenAI, Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6),
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.Equal(t, PricingSourceChannel, resolved.Source)
+	require.InDelta(t, 10e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 20e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+}
+
+func TestResolve_GroupExactPricingPrecedesWildcard(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: "anthropic", Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6),
+	}})
+	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{
+		{Models: []string{"claude-*"}, BillingMode: BillingModeToken, InputPrice: testPtrFloat64(2e-6)},
+		{Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken, InputPrice: testPtrFloat64(1e-6)},
+	}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 20e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+}
+
+func TestResolve_GroupLongContextUsesPresetNotCustomIntervals(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	bs.fallbackPrices["claude-sonnet-4"].LongContextInputThreshold = 200000
+	bs.fallbackPrices["claude-sonnet-4"].LongContextThresholdInclusive = true
+	bs.fallbackPrices["claude-sonnet-4"].LongContextInputMultiplier = 2
+	bs.fallbackPrices["claude-sonnet-4"].LongContextOutputMultiplier = 2
+	r := NewModelPricingResolver(nil, bs)
+	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
+		Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6), OutputPrice: testPtrFloat64(2e-6),
+		Intervals: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(200000), InputPrice: testPtrFloat64(9e-6)},
+			{MinTokens: 200000, InputPrice: testPtrFloat64(18e-6)},
+		},
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
+	require.False(t, resolved.longContextPricingEnabled)
+	require.Empty(t, resolved.Intervals, "group token intervals are not a user-facing long-context ladder")
+	require.InDelta(t, 1e-6, r.GetIntervalPricing(resolved, 300000).InputPricePerToken, 1e-12)
+	require.Equal(t, 200000, resolved.BasePricing.LongContextInputThreshold)
+
+	group.LongContextPricingEnabled = true
+	resolved = r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
+	require.True(t, resolved.longContextPricingEnabled)
+	require.Empty(t, resolved.Intervals)
+	require.InDelta(t, 1e-6, r.GetIntervalPricing(resolved, 300000).InputPricePerToken, 1e-12)
+	require.Equal(t, 200000, resolved.BasePricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, resolved.BasePricing.LongContextInputMultiplier, 1e-12)
+}
+
+func TestCalculateCostUnified_UsesContinuousMediaUnits(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	r := NewModelPricingResolver(nil, bs)
+	price := 0.08
+	group := &Group{ModelPricing: []ChannelModelPricing{{
+		Models: []string{"grok-voice-think-fast-2.0"}, BillingMode: BillingModePerRequest,
+		PerRequestPrice: &price,
+	}}}
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx: context.Background(), Model: "grok-voice-think-fast-2.0", Group: group,
+		UsageUnits: 1.5, RateMultiplier: 1, Resolver: r,
+	})
+	require.NoError(t, err)
+	require.InDelta(t, 0.12, cost.TotalCost, 1e-12)
 }

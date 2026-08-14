@@ -5,6 +5,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,7 @@ func cloneGroupForDuplicateTest(group *Group) *Group {
 	cloned.AudioRealtimePricePerMin = cloneGroupValuePointer(group.AudioRealtimePricePerMin)
 	cloned.AudioTTSPricePerMillionChars = cloneGroupValuePointer(group.AudioTTSPricePerMillionChars)
 	cloned.AudioSTTPricePerHour = cloneGroupValuePointer(group.AudioSTTPricePerHour)
+	cloned.ModelPricing = cloneGroupModelPricing(group.ModelPricing)
 	cloned.FallbackGroupID = cloneGroupValuePointer(group.FallbackGroupID)
 	cloned.FallbackGroupIDOnInvalidRequest = cloneGroupValuePointer(group.FallbackGroupIDOnInvalidRequest)
 	cloned.ModelRouting = cloneGroupModelRouting(group.ModelRouting)
@@ -125,6 +127,11 @@ func groupDuplicateTestPointer[T any](value T) *T { return &value }
 
 func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing.T) {
 	createdAt := time.Date(2026, time.July, 1, 2, 3, 4, 0, time.UTC)
+	modelInputPrice := 1.25e-6
+	modelOutputPrice := 7.5e-6
+	intervalMaxTokens := 200000
+	intervalInputPrice := 2.5e-6
+	intervalOutputPrice := 15e-6
 	source := &Group{
 		ID:                   41,
 		Name:                 "高级订阅",
@@ -158,11 +165,20 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 		VideoModelPrices: map[string]map[string]float64{
 			VideoPriceFamilyGrokImagineVideo15: {VideoBillingResolution720P: 0.14},
 		},
-		WebSearchPricePerCall:           groupDuplicateTestPointer(0.005),
-		SearchPricePer1k:                groupDuplicateTestPointer(5.0),
-		AudioRealtimePricePerMin:        groupDuplicateTestPointer(0.05),
-		AudioTTSPricePerMillionChars:    groupDuplicateTestPointer(4.0),
-		AudioSTTPricePerHour:            groupDuplicateTestPointer(0.20),
+		WebSearchPricePerCall:        groupDuplicateTestPointer(0.005),
+		SearchPricePer1k:             groupDuplicateTestPointer(5.0),
+		AudioRealtimePricePerMin:     groupDuplicateTestPointer(0.05),
+		AudioTTSPricePerMillionChars: groupDuplicateTestPointer(4.0),
+		AudioSTTPricePerHour:         groupDuplicateTestPointer(0.20),
+		LongContextPricingEnabled:    true,
+		ModelPricing: []ChannelModelPricing{{
+			Platform: PlatformOpenAI, Models: []string{"gpt-5*"}, BillingMode: BillingModeToken,
+			InputPrice: &modelInputPrice, OutputPrice: &modelOutputPrice,
+			Intervals: []PricingInterval{{
+				MinTokens: 0, MaxTokens: &intervalMaxTokens,
+				InputPrice: &intervalInputPrice, OutputPrice: &intervalOutputPrice,
+			}},
+		}},
 		ClaudeCodeOnly:                  true,
 		FallbackGroupID:                 groupDuplicateTestPointer(int64(7)),
 		FallbackGroupIDOnInvalidRequest: groupDuplicateTestPointer(int64(8)),
@@ -221,6 +237,8 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, source.AudioRealtimePricePerMin, duplicate.AudioRealtimePricePerMin)
 	require.Equal(t, source.AudioTTSPricePerMillionChars, duplicate.AudioTTSPricePerMillionChars)
 	require.Equal(t, source.AudioSTTPricePerHour, duplicate.AudioSTTPricePerHour)
+	require.Equal(t, source.LongContextPricingEnabled, duplicate.LongContextPricingEnabled)
+	require.Equal(t, source.ModelPricing, duplicate.ModelPricing)
 	require.Equal(t, source.FallbackGroupID, duplicate.FallbackGroupID)
 	require.Equal(t, source.ModelRouting, duplicate.ModelRouting)
 	require.Equal(t, source.MessagesDispatchModelConfig, duplicate.MessagesDispatchModelConfig)
@@ -243,6 +261,10 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	duplicate.MessagesDispatchModelConfig.ExactModelMappings["claude-special"] = "changed"
 	duplicate.ModelsListConfig.Models[0] = "changed"
 	duplicate.ReasoningEffortMappings[0].To = "changed"
+	duplicate.ModelPricing[0].Models[0] = "changed"
+	*duplicate.ModelPricing[0].InputPrice = 999
+	*duplicate.ModelPricing[0].Intervals[0].MaxTokens = 999
+	*duplicate.ModelPricing[0].Intervals[0].InputPrice = 999
 	*duplicate.DailyLimitUSD = 999
 	*duplicate.SearchPricePer1k = 999
 	require.Equal(t, int64(13), source.ModelRouting["gpt-*"][0])
@@ -251,8 +273,24 @@ func TestDuplicateGroupCopiesConfigurationDeeplyAndResetsRuntimeState(t *testing
 	require.Equal(t, "gpt-special", source.MessagesDispatchModelConfig.ExactModelMappings["claude-special"])
 	require.Equal(t, "gpt-5.4", source.ModelsListConfig.Models[0])
 	require.Equal(t, "xhigh", source.ReasoningEffortMappings[0].To)
+	require.Equal(t, "gpt-5*", source.ModelPricing[0].Models[0])
+	require.Equal(t, 1.25e-6, *source.ModelPricing[0].InputPrice)
+	require.Equal(t, 200000, *source.ModelPricing[0].Intervals[0].MaxTokens)
+	require.Equal(t, 2.5e-6, *source.ModelPricing[0].Intervals[0].InputPrice)
 	require.Equal(t, 11.0, *source.DailyLimitUSD)
 	require.Equal(t, 5.0, *source.SearchPricePer1k)
+}
+
+func TestCloneGroupForDuplicatePreservesLongContextPricingFlag(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("enabled=%t", enabled), func(t *testing.T) {
+			source := &Group{Name: "priced", LongContextPricingEnabled: enabled}
+
+			duplicate := cloneGroupForDuplicate(source, "operation")
+
+			require.Equal(t, enabled, duplicate.LongContextPricingEnabled)
+		})
+	}
 }
 
 func TestDuplicateGroupRecoversSameOperationAndScopesByAdmin(t *testing.T) {

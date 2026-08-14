@@ -251,6 +251,54 @@ func TestCalculateCostUnified_UsesPreResolvedPricing(t *testing.T) {
 	require.Equal(t, string(BillingModePerRequest), cost.BillingMode)
 }
 
+func TestCalculateCostUnified_ExplicitZeroRequestTierDoesNotFallBackToDefault(t *testing.T) {
+	zero := 0.0
+	maxTokens := 1000
+	tests := []struct {
+		name        string
+		mode        BillingMode
+		tiers       []PricingInterval
+		sizeTier    string
+		inputTokens int
+	}{
+		{
+			name: "per request context tier", mode: BillingModePerRequest,
+			tiers:       []PricingInterval{{MinTokens: 0, MaxTokens: &maxTokens, PerRequestPrice: &zero}},
+			inputTokens: 100,
+		},
+		{
+			name: "image size tier", mode: BillingModeImage,
+			tiers:    []PricingInterval{{TierLabel: "1K", PerRequestPrice: &zero}},
+			sizeTier: "1K",
+		},
+		{
+			name: "video size tier", mode: BillingModeVideo,
+			tiers:    []PricingInterval{{TierLabel: "720p", PerRequestPrice: &zero}},
+			sizeTier: "720p",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bs := newTestBillingService()
+			resolver := NewModelPricingResolver(nil, bs)
+			cost, err := bs.CalculateCostUnified(CostInput{
+				Ctx: context.Background(), Model: "free-tier", Resolver: resolver,
+				Resolved: &ResolvedPricing{
+					Mode: tt.mode, RequestTiers: tt.tiers, DefaultPerRequestPrice: 0.25,
+				},
+				Tokens: UsageTokens{InputTokens: tt.inputTokens}, SizeTier: tt.sizeTier,
+				RequestCount: 2, RateMultiplier: 1,
+			})
+
+			require.NoError(t, err)
+			require.Zero(t, cost.TotalCost)
+			require.Zero(t, cost.ActualCost)
+			require.Equal(t, string(tt.mode), cost.BillingMode)
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

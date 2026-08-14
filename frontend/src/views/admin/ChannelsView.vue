@@ -633,7 +633,7 @@ import { extractApiErrorMessage } from '@/utils/apiError'
 import { adminAPI } from '@/api/admin'
 import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
-import { mTokToPerToken, perTokenToMTok, apiIntervalsToForm, formIntervalsToAPI, findModelConflict, validateIntervals } from '@/components/admin/channel/types'
+import { mTokToPerToken, perTokenToMTok, apiIntervalsToForm, formIntervalsToAPI, findModelConflict, findPricingModelConflict, isMissingRequiredUnitPrice, validateIntervals, validatePricingEntryPrices } from '@/components/admin/channel/types'
 import type { AdminGroup, GroupPlatform } from '@/types'
 import type { Column } from '@/components/common/types'
 import { platformTextClass, platformBadgeLightClass } from '@/utils/platformColors'
@@ -715,7 +715,8 @@ const statusEditOptions = computed(() => [
 const billingModelSourceOptions = computed(() => [
   { value: 'channel_mapped', label: t('admin.channels.form.billingModelSourceChannelMapped', 'Bill by channel-mapped model') },
   { value: 'requested', label: t('admin.channels.form.billingModelSourceRequested', 'Bill by requested model') },
-  { value: 'upstream', label: t('admin.channels.form.billingModelSourceUpstream', 'Bill by final upstream model') }
+  { value: 'upstream', label: t('admin.channels.form.billingModelSourceUpstream', 'Bill by final upstream model') },
+  { value: 'response_model', label: t('admin.channels.form.billingModelSourceResponse', 'Bill by upstream response model') }
 ])
 
 // ── State ──
@@ -1084,6 +1085,13 @@ function accountStatsRulesToAPI(): AccountStatsPricingRule[] {
     }
   }
   return rules
+}
+
+function pricingCollections(section: PlatformSection): PricingFormEntry[][] {
+  return [
+    section.model_pricing,
+    ...section.account_stats_pricing_rules.map(rule => rule.pricing),
+  ]
 }
 
 // ── Form ↔ API conversion ──
@@ -1462,31 +1470,33 @@ async function handleSubmit() {
       activeTab.value = section.platform
       return
     }
-    for (const entry of section.model_pricing) {
-      if (entry.models.length === 0) {
-        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
-        appStore.showError(t('admin.channels.emptyModelsInPricing', { platform: platformLabel }))
-        activeTab.value = section.platform
-        return
+    for (const pricing of pricingCollections(section)) {
+      for (const entry of pricing) {
+        if (entry.models.length === 0) {
+          const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+          appStore.showError(t('admin.channels.emptyModelsInPricing', { platform: platformLabel }))
+          activeTab.value = section.platform
+          return
+        }
       }
     }
   }
 
   // Check model pattern conflicts per platform (duplicate / wildcard overlap)
   for (const section of form.platforms.filter(s => s.enabled)) {
-    // Collect all pricing models for this platform
-    const allModels: string[] = []
-    for (const entry of section.model_pricing) {
-      allModels.push(...entry.models)
-    }
-    const pricingConflict = findModelConflict(allModels)
-    if (pricingConflict) {
-      appStore.showError(
-        t('admin.channels.modelConflict',
-          { model1: pricingConflict[0], model2: pricingConflict[1] })
+    // Main pricing and each account-stats rule are independent lookup scopes.
+    for (const pricing of pricingCollections(section)) {
+      const pricingConflict = findPricingModelConflict(
+        pricing.flatMap(entry => entry.models),
       )
-      activeTab.value = section.platform
-      return
+      if (pricingConflict) {
+        appStore.showError(
+          t('admin.channels.modelConflict',
+            { model1: pricingConflict[0], model2: pricingConflict[1] })
+        )
+        activeTab.value = section.platform
+        return
+      }
     }
     // Check model mapping source pattern conflicts
     const mappingKeys = Object.keys(section.model_mapping)
@@ -1503,30 +1513,40 @@ async function handleSubmit() {
     }
   }
 
-  // 校验 per_request/image 模式必须有价格 (只校验启用的平台)
+  // 校验按次/图片/视频模式必须有默认价格或计费层级 (只校验启用的平台)
   for (const section of form.platforms.filter(s => s.enabled)) {
-    for (const entry of section.model_pricing) {
-      if (entry.models.length === 0) continue
-      if ((entry.billing_mode === 'per_request' || entry.billing_mode === 'image') &&
-          (entry.per_request_price == null || entry.per_request_price === '') &&
-          (!entry.intervals || entry.intervals.length === 0)) {
-        appStore.showError(t('admin.channels.form.perRequestPriceRequired'))
-        return
+    for (const pricing of pricingCollections(section)) {
+      for (const entry of pricing) {
+        if (isMissingRequiredUnitPrice(entry)) {
+          appStore.showError(t('admin.channels.form.perRequestPriceRequired'))
+          activeTab.value = section.platform
+          return
+        }
       }
     }
   }
 
-  // 校验区间合法性（范围、重叠等）
+  // 校验顶层价格及区间合法性（非有限值、负数、范围、重叠等）
   for (const section of form.platforms.filter(s => s.enabled)) {
-    for (const entry of section.model_pricing) {
-      if (!entry.intervals || entry.intervals.length === 0) continue
-      const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
-      if (intervalErr) {
-        const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
-        const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
-        appStore.showError(`${platformLabel} - ${modelLabel}: ${intervalErr}`)
-        activeTab.value = section.platform
-        return
+    for (const pricing of pricingCollections(section)) {
+      for (const entry of pricing) {
+        const priceErr = validatePricingEntryPrices(entry, t)
+        if (priceErr) {
+          const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+          const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
+          appStore.showError(`${platformLabel} - ${modelLabel}: ${priceErr}`)
+          activeTab.value = section.platform
+          return
+        }
+        if (!entry.intervals || entry.intervals.length === 0) continue
+        const intervalErr = validateIntervals(entry.intervals, entry.billing_mode, t)
+        if (intervalErr) {
+          const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
+          const modelLabel = entry.models.join(', ') || t('admin.channels.form.unnamed')
+          appStore.showError(`${platformLabel} - ${modelLabel}: ${intervalErr}`)
+          activeTab.value = section.platform
+          return
+        }
       }
     }
   }

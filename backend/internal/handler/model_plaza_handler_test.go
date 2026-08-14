@@ -90,7 +90,8 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 		"rate_multiplier", "user_rate_multiplier", "is_free", "is_exclusive", "models",
 		"peak_rate_enabled", "peak_start", "peak_end", "peak_rate_multiplier",
 		"applied_peak_multiplier", "effective_rate_multiplier", "effective_image_rate_multiplier",
-		"image_rate_independent", "image_rate_multiplier",
+		"effective_video_rate_multiplier", "image_rate_independent", "image_rate_multiplier",
+		"video_rate_independent", "video_rate_multiplier",
 	} {
 		_, exists := decoded[key]
 		require.Truef(t, exists, "plaza group DTO must expose %q", key)
@@ -125,17 +126,33 @@ func TestToModelPlazaGroupDTO_UserRateAndFieldWhitelist(t *testing.T) {
 	require.False(t, hasRate, "无专属倍率时 user_rate_multiplier 应 omitempty")
 }
 
-func TestToModelPlazaGroupDTOAt_AppliesUserPeakAndImageMultipliers(t *testing.T) {
+func TestToModelPlazaGroupDTOAt_UsesDisplayBillingModeMultiplier(t *testing.T) {
 	group := service.PlazaGroup{
 		ID: 7, SubscriptionType: service.SubscriptionTypeSubscription, RateMultiplier: 1,
 		PeakRateEnabled: true, PeakStart: "08:00", PeakEnd: "18:00", PeakRateMultiplier: 2,
 		ImageRateIndependent: true, ImageRateMultiplier: 0.25,
+		VideoRateIndependent: true, VideoRateMultiplier: 0.4,
 		Models: []service.PlazaModel{
 			{Name: "token-model", Pricing: &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(4e-6)}},
 			{
-				Name:           "image-model",
-				Pricing:        &service.ChannelModelPricing{BillingMode: service.BillingModeImage, PerRequestPrice: testPtr(0.04)},
+				Name:           "group-image-model",
+				Pricing:        &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(4e-6)},
 				DisplayPricing: &service.ChannelModelPricing{BillingMode: service.BillingModeImage, PerRequestPrice: testPtr(0.02)},
+			},
+			{
+				Name:           "group-video-model",
+				Pricing:        &service.ChannelModelPricing{BillingMode: service.BillingModeImage, PerRequestPrice: testPtr(0.4)},
+				DisplayPricing: &service.ChannelModelPricing{BillingMode: service.BillingModeVideo, PerRequestPrice: testPtr(0.1)},
+			},
+			{
+				Name:           "group-request-model",
+				Pricing:        &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(4e-6)},
+				DisplayPricing: &service.ChannelModelPricing{BillingMode: service.BillingModePerRequest, PerRequestPrice: testPtr(0.08)},
+			},
+			{
+				Name:           "group-token-model",
+				Pricing:        &service.ChannelModelPricing{BillingMode: service.BillingModeImage, PerRequestPrice: testPtr(0.04)},
+				DisplayPricing: &service.ChannelModelPricing{BillingMode: service.BillingModeToken, InputPrice: testPtr(5e-6)},
 			},
 		},
 	}
@@ -145,11 +162,17 @@ func TestToModelPlazaGroupDTOAt_AppliesUserPeakAndImageMultipliers(t *testing.T)
 	require.InDelta(t, 0.5, dto.EffectiveRateMultiplier, 1e-12)
 	require.InDelta(t, 2, dto.AppliedPeakMultiplier, 1e-12)
 	require.InDelta(t, 0.25, dto.EffectiveImageRateMultiplier, 1e-12)
+	require.InDelta(t, 0.4, dto.EffectiveVideoRateMultiplier, 1e-12)
 	require.InDelta(t, 1, dto.Models[0].EffectiveMultiplier, 1e-12)
 	require.InDelta(t, 4e-6, *dto.Models[0].DisplayPricing.InputPrice, 1e-12)
 	require.InDelta(t, 0.25, dto.Models[1].EffectiveMultiplier, 1e-12)
-	require.InDelta(t, 0.04, *dto.Models[1].Pricing.PerRequestPrice, 1e-12)
 	require.InDelta(t, 0.005, *dto.Models[1].DisplayPricing.PerRequestPrice, 1e-12)
+	require.InDelta(t, 0.4, dto.Models[2].EffectiveMultiplier, 1e-12)
+	require.InDelta(t, 0.04, *dto.Models[2].DisplayPricing.PerRequestPrice, 1e-12)
+	require.InDelta(t, 0.5, dto.Models[3].EffectiveMultiplier, 1e-12)
+	require.InDelta(t, 0.04, *dto.Models[3].DisplayPricing.PerRequestPrice, 1e-12)
+	require.InDelta(t, 1, dto.Models[4].EffectiveMultiplier, 1e-12)
+	require.InDelta(t, 5e-6, *dto.Models[4].DisplayPricing.InputPrice, 1e-12)
 }
 
 func TestToModelPlazaOfficialPricing_NilPassthrough(t *testing.T) {

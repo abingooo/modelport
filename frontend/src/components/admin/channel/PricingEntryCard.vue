@@ -89,6 +89,17 @@
               class="mt-1"
             />
           </div>
+          <div v-if="platformOptions.length > 0" class="w-40">
+            <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
+              {{ t('admin.channels.form.platform') }}
+            </label>
+            <Select
+              :model-value="entry.platform || props.platform"
+              :options="platformOptions"
+              class="mt-1"
+              @update:model-value="emit('update', { ...entry, platform: String($event) })"
+            />
+          </div>
           <div class="w-40">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
               {{ t('admin.channels.form.billingMode') }}
@@ -161,8 +172,8 @@
             </div>
           </div>
 
-          <!-- Token intervals -->
-          <div class="mt-3">
+          <!-- Token intervals (channel-only; group long-context uses official presets) -->
+          <div v-if="!hideTokenIntervals" class="mt-3">
             <div class="flex items-center justify-between">
               <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
                 {{ t('admin.channels.form.intervals') }}
@@ -221,11 +232,11 @@
           </div>
         </div>
 
-        <!-- Image mode -->
-        <div v-else-if="entry.billing_mode === 'image'">
+        <!-- Image/video mode -->
+        <div v-else-if="entry.billing_mode === 'image' || entry.billing_mode === 'video'">
           <!-- Default image price (per-request, same as per_request mode) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
-            {{ t('admin.channels.form.defaultImagePrice') }}
+            {{ entry.billing_mode === 'video' ? t('admin.channels.form.defaultVideoPrice') : t('admin.channels.form.defaultImagePrice') }}
             <span class="ml-1 font-normal text-gray-400">$</span>
           </label>
           <div class="mt-1 w-48">
@@ -233,14 +244,14 @@
               type="number" step="any" min="0" class="input text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
           </div>
 
-          <!-- Image tiers -->
+          <!-- Image/video tiers -->
           <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {{ t('admin.channels.form.imageTiers') }}
+              {{ entry.billing_mode === 'video' ? t('admin.channels.form.videoTiers') : t('admin.channels.form.imageTiers') }}
             </label>
             <div class="inline-flex overflow-hidden rounded border border-gray-200 dark:border-dark-500">
               <button
-                v-for="preset in imageTierPresets"
+                v-for="preset in tierPresets"
                 :key="preset"
                 type="button"
                 class="border-r border-gray-200 px-2.5 py-1 text-xs text-gray-600 last:border-r-0 hover:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-300 dark:border-dark-500 dark:text-gray-300 dark:hover:bg-dark-600 dark:disabled:text-dark-500"
@@ -292,9 +303,15 @@ const { t } = useI18n()
 const props = withDefaults(defineProps<{
   entry: PricingFormEntry
   platform?: string
+  platformOptions?: Array<{ value: string; label: string }>
   showPlazaVisibility?: boolean
+  hideTokenIntervals?: boolean
+  autoFillDefaultPricing?: boolean
 }>(), {
-  showPlazaVisibility: true
+  platformOptions: () => [],
+  showPlazaVisibility: true,
+  hideTokenIntervals: false,
+  autoFillDefaultPricing: true,
 })
 
 const emit = defineEmits<{
@@ -308,7 +325,8 @@ const collapsed = ref(props.entry.models.length > 0)
 const billingModeOptions = computed(() => [
   { value: 'token', label: t('admin.channels.billingMode.token') },
   { value: 'per_request', label: t('admin.channels.billingMode.perRequest') },
-  { value: 'image', label: t('admin.channels.billingMode.image') }
+  { value: 'image', label: t('admin.channels.billingMode.image') },
+  { value: 'video', label: t('admin.channels.billingMode.video') }
 ])
 
 const billingModeLabel = computed(() => {
@@ -317,6 +335,8 @@ const billingModeLabel = computed(() => {
 })
 
 const imageTierPresets = ['1K', '2K', '4K']
+const videoTierPresets = ['480p', '720p', '1080p']
+const tierPresets = computed(() => props.entry.billing_mode === 'video' ? videoTierPresets : imageTierPresets)
 
 const priceSummary = computed(() => {
   if (props.entry.billing_mode === 'token') {
@@ -376,6 +396,8 @@ function removeInterval(idx: number) {
 async function onModelsUpdate(newModels: string[]) {
   const oldModels = props.entry.models
   emit('update', { ...props.entry, models: newModels })
+
+  if (!props.autoFillDefaultPricing) return
 
   // 只在新增模型且当前无价格时自动填充
   const addedModels = newModels.filter(m => !oldModels.includes(m))

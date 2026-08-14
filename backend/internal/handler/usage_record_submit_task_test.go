@@ -6,9 +6,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func compositePricingContext() context.Context {
+	ctx := service.WithResolvedTargetPlatform(context.Background(), service.PlatformOpenAI)
+	return context.WithValue(ctx, ctxkey.ForcePlatform, service.PlatformAntigravity)
+}
+
+func requireCompositePricingContext(t *testing.T, ctx context.Context) {
+	t.Helper()
+	resolved, ok := service.ResolvedTargetPlatformFromContext(ctx)
+	require.True(t, ok)
+	require.Equal(t, service.PlatformOpenAI, resolved)
+	require.Equal(t, service.PlatformAntigravity, ctx.Value(ctxkey.ForcePlatform))
+	require.Equal(t, service.PlatformAntigravity, service.QuotaPlatform(ctx, &service.APIKey{
+		Group: &service.Group{Platform: service.PlatformComposite},
+	}))
+}
 
 func newUsageRecordTestPool(t *testing.T) *service.UsageRecordWorkerPool {
 	t.Helper()
@@ -35,6 +52,23 @@ func TestGatewayHandlerSubmitUsageRecordTask_WithPool(t *testing.T) {
 
 	select {
 	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("task not executed")
+	}
+}
+
+func TestGatewayHandlerSubmitUsageRecordTask_WithPoolPreservesCompositePricingContext(t *testing.T) {
+	pool := newUsageRecordTestPool(t)
+	h := &GatewayHandler{usageRecordWorkerPool: pool}
+
+	gotContext := make(chan context.Context, 1)
+	h.submitUsageRecordTask(compositePricingContext(), func(ctx context.Context) {
+		gotContext <- ctx
+	})
+
+	select {
+	case ctx := <-gotContext:
+		requireCompositePricingContext(t, ctx)
 	case <-time.After(time.Second):
 		t.Fatal("task not executed")
 	}
@@ -105,6 +139,17 @@ func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPoolSyncFallback(t *te
 	})
 
 	require.True(t, called.Load())
+}
+
+func TestOpenAIGatewayHandlerSubmitUsageRecordTask_WithoutPoolPreservesCompositePricingContext(t *testing.T) {
+	h := &OpenAIGatewayHandler{}
+	var gotContext context.Context
+
+	h.submitUsageRecordTask(compositePricingContext(), func(ctx context.Context) {
+		gotContext = ctx
+	})
+
+	requireCompositePricingContext(t, gotContext)
 }
 
 func TestOpenAIGatewayHandlerSubmitUsageRecordTask_NilTask(t *testing.T) {

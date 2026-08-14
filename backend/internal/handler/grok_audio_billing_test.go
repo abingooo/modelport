@@ -25,21 +25,32 @@ func TestIsExpectedGrokRealtimeClose(t *testing.T) {
 	}
 }
 
-func TestNewGrokRealtimeUsageResult_BillsElapsedSession(t *testing.T) {
-	requireNil := newGrokRealtimeUsageResult("alias", "upstream", 0)
-	if requireNil != nil {
-		t.Fatal("zero-duration realtime session must not create usage")
+func TestGrokRealtimeBillingResultRequiresObservedAudio(t *testing.T) {
+	if grokRealtimeBillingResult("alias", "upstream", time.Second, false) != nil {
+		t.Fatal("a session without observed audio must not be billed")
 	}
+	if grokRealtimeBillingResult("alias", "upstream", 0, true) != nil {
+		t.Fatal("zero-duration sessions must not be billed")
+	}
+}
 
-	result := newGrokRealtimeUsageResult("alias", "upstream", 90*time.Second)
-	if result == nil || result.AudioUsage == nil {
-		t.Fatal("elapsed realtime session must create usage even when the proxy later fails")
+func TestGrokRealtimeBillingResultUsesForcedUniqueID(t *testing.T) {
+	first := grokRealtimeBillingResult("alias", "upstream", 90*time.Second, true)
+	second := grokRealtimeBillingResult("alias", "upstream", 90*time.Second, true)
+	if first == nil || second == nil {
+		t.Fatal("observed audio sessions should be billable")
 	}
-	if result.Model != "alias" || result.UpstreamModel != "upstream" {
-		t.Fatalf("unexpected models: %q / %q", result.Model, result.UpstreamModel)
+	if first.RequestID == "" {
+		t.Fatalf("unexpected billing request ID %q", first.RequestID)
 	}
-	if result.AudioUsage.DurationOrUnits != 1.5 {
-		t.Fatalf("unexpected billed minutes: %v", result.AudioUsage.DurationOrUnits)
+	if first.RequestID == second.RequestID {
+		t.Fatal("independent realtime connections must not share a billing request ID")
+	}
+	if first.Model != "alias" || first.UpstreamModel != "upstream" {
+		t.Fatalf("unexpected models: %q / %q", first.Model, first.UpstreamModel)
+	}
+	if first.AudioUsage == nil || first.AudioUsage.Mode != "realtime" || first.AudioUsage.DurationOrUnits != 1.5 {
+		t.Fatalf("unexpected audio usage: %#v", first.AudioUsage)
 	}
 }
 

@@ -650,7 +650,8 @@ export default {
     billingModes: {
       token: 'Usage based',
       per_request: 'Per request',
-      image: 'Per image'
+      image: 'Per image',
+      video: 'Video per second'
     },
     provider: {
       modelCount: '{count} models'
@@ -691,6 +692,7 @@ export default {
       unitPerMillion: '￥ / 1M tokens',
       perUnitRequest: '/ request',
       perUnitImage: '/ image',
+      perUnitSecond: '/ second',
       perRequest: 'Per request',
       perImage: 'Per image'
     },

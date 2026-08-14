@@ -65,12 +65,18 @@ export default {
       duplicateModels: 'Model "{0}" appears in multiple pricing entries',
       modelConflict: "Model patterns '{model1}' and '{model2}' conflict: overlapping match range. Model names are matched case-insensitively, so an existing entry already covers all case variants — no need to add the variant separately.",
       mappingConflict: "Mapping source patterns '{model1}' and '{model2}' conflict: overlapping match range. Source patterns are matched case-insensitively, so an existing entry already covers all case variants.",
+      priceValidation: {
+        finite: '{field} must be a finite number',
+        negative: '{field} cannot be negative'
+      },
       intervalValidation: {
         negativeMin: 'Interval #{index}: minimum token count ({value}) cannot be negative',
         maxPositive: 'Interval #{index}: maximum token count ({value}) must be greater than 0',
         maxGreaterThanMin: 'Interval #{index}: maximum token count ({max}) must be greater than minimum token count ({min})',
         negativePrice: 'Interval #{index}: {field} cannot be negative',
-		duplicateTier: 'Duplicate specification "{label}". Each specification must have a unique name.',
+        nonFinitePrice: 'Interval #{index}: {field} must be a finite number',
+        missingPrice: 'Interval #{index}: set at least one price',
+        duplicateTier: 'Duplicate specification "{label}". Each specification must have a unique name.',
         unboundedLast: 'Interval #{index}: an unbounded interval (empty maximum token count) must be last',
         overlap: 'Intervals #{previousIndex} and #{currentIndex} overlap: previous upper bound ({previousMax}) is greater than current lower bound ({currentMin})',
         price: {
@@ -94,7 +100,8 @@ export default {
       billingMode: {
 		token: 'Usage Based',
 		perRequest: 'Per Request',
-		image: 'Image by Specification'
+		image: 'Image by Specification',
+        video: 'Video (Per Second)'
       },
       form: {
         name: 'Name',
@@ -106,6 +113,7 @@ export default {
         noGroupsAvailable: 'No groups available',
         inOtherChannel: 'In "{name}"',
         modelPricing: 'Model Pricing',
+        platform: 'Platform',
         showInModelPlaza: 'Show in Model Plaza',
         showInModelPlazaHint: 'Turning this off only hides the pricing entry from users; routing and billing are unchanged.',
         hiddenFromModelPlaza: 'Hidden from plaza',
@@ -131,12 +139,13 @@ export default {
         addInterval: 'Add Interval',
 		requestTiers: 'Request Specifications',
 		imageTiers: 'Image Specification Prices',
+		videoTiers: 'Video Resolution Prices (Per Second)',
 		addTier: 'Add Specification',
 		customTier: 'Custom',
 		noTiersYet: 'No specifications yet. Add one to configure its name and price.',
         noPricingRules: 'No pricing rules yet. Click "Add" to create one.',
         perRequestPrice: 'Price per Request',
-        perRequestPriceRequired: 'Per-request price or billing tiers required for per-request/image billing mode',
+        perRequestPriceRequired: 'A default price or at least one billing tier is required for per-request, image, or video billing modes',
 		tierLabel: 'Specification / Tier',
 		tierPlaceholder: 'e.g. Standard, HD, 10 seconds',
 		resolution: 'Resolution',
@@ -152,6 +161,7 @@ export default {
         billingModelSourceChannelMapped: 'Bill by channel-mapped model',
         billingModelSourceRequested: 'Bill by requested model',
         billingModelSourceUpstream: 'Bill by final upstream model',
+        billingModelSourceResponse: 'Bill by upstream response model',
         billingModelSourceHint: 'Controls which model name is used for pricing lookup',
         selectedCount: '{count} selected',
         searchGroups: 'Search groups...',
@@ -160,6 +170,7 @@ export default {
         restrictModelsHint: 'When enabled, only models in the pricing list are allowed. Others will be rejected.',
         defaultPerRequestPrice: 'Default per-request price (fallback when no tier matches)',
         defaultImagePrice: 'Default image price (fallback when no tier matches)',
+        defaultVideoPrice: 'Default video price per second (fallback when no tier matches)',
         platformConfig: 'Platform Configuration',
         webSearchEmulation: 'Web Search Emulation',
         webSearchEmulationHint: '⚠️ When enabled, all accounts in this channel\'s Anthropic groups will intercept web_search requests. Use with caution.',

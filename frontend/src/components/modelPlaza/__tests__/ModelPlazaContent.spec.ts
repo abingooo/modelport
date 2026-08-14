@@ -142,4 +142,54 @@ describe('ModelPlazaContent', () => {
     expect(wrapper.find('.plaza-model-grid-public').exists()).toBe(false)
     expect(wrapper.find('.plaza-model-grid-public-sparse').exists()).toBe(false)
   })
+
+  it('filters with the billing mode from the selected pricing source', async () => {
+    const mixedModeModel = model('mixed-mode', 'openai')
+    const tokenPricing = mixedModeModel.pricing!
+    mixedModeModel.display_pricing = { ...tokenPricing }
+    mixedModeModel.pricing = {
+      ...tokenPricing,
+      billing_mode: 'image',
+      input_price: null,
+      output_price: null,
+      per_request_price: 0.04
+    }
+    const mixedModeGroup = group(82, 'Mixed Mode', 'openai')
+    mixedModeGroup.models = [mixedModeModel]
+    const mixedModeResponse: ModelPlazaResponse = {
+      ...response,
+      groups: [mixedModeGroup]
+    }
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const wrapper = mount(ModelPlazaContent, {
+      props: { response: mixedModeResponse, loading: false },
+      global: {
+        plugins: [pinia],
+        stubs: {
+          Icon: { template: '<i />' },
+          PlatformIcon: { template: '<i />' },
+          PlazaModelCard: { template: '<article />' }
+        }
+      }
+    })
+    const filterBar = wrapper.findComponent(PlazaFilterBar)
+
+    expect(filterBar.props('billingModes')).toEqual(['token'])
+    filterBar.vm.$emit('update:billingMode', 'token')
+    await nextTick()
+    expect(filterBar.props('resultCount')).toBe(1)
+
+    filterBar.vm.$emit('update:groupId', '__official__')
+    await nextTick()
+    await nextTick()
+
+    expect(filterBar.props('billingModes')).toEqual(['image'])
+    expect(filterBar.props('billingMode')).toBe('all')
+    expect(filterBar.props('resultCount')).toBe(1)
+
+    filterBar.vm.$emit('update:billingMode', 'image')
+    await nextTick()
+    expect(filterBar.props('resultCount')).toBe(1)
+  })
 })

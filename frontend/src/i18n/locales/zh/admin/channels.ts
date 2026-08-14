@@ -65,12 +65,18 @@ export default {
       duplicateModels: '模型「{0}」在多个定价条目中重复',
       modelConflict: "模型模式 '{model1}' 和 '{model2}' 冲突：匹配范围重叠。模型名称按大小写不敏感匹配，已有条目已覆盖其所有大小写变体，无需重复添加。",
       mappingConflict: "模型映射源 '{model1}' 和 '{model2}' 冲突：匹配范围重叠。源模式按大小写不敏感匹配，已有条目已覆盖其所有大小写变体。",
+      priceValidation: {
+        finite: '{field}必须是有限数值',
+        negative: '{field}不能为负数'
+      },
       intervalValidation: {
         negativeMin: '区间 #{index}：最小 token 数（{value}）不能为负数',
         maxPositive: '区间 #{index}：最大 token 数（{value}）必须大于 0',
         maxGreaterThanMin: '区间 #{index}：最大 token 数（{max}）必须大于最小 token 数（{min}）',
         negativePrice: '区间 #{index}：{field}不能为负数',
-		duplicateTier: '规格“{label}”重复，请为每个规格设置唯一名称',
+        nonFinitePrice: '区间 #{index}：{field}必须是有限数值',
+        missingPrice: '区间 #{index}：请至少设置一项价格',
+        duplicateTier: '规格“{label}”重复，请为每个规格设置唯一名称',
         unboundedLast: '区间 #{index}：无上限区间（最大 token 数为空）必须放在最后',
         overlap: '区间 #{previousIndex} 和 #{currentIndex} 重叠：前一个上界（{previousMax}）大于当前下界（{currentMin}）',
         price: {
@@ -94,7 +100,8 @@ export default {
       billingMode: {
 		token: '按量计费',
 		perRequest: '按次计费',
-		image: '生图按规格计费'
+		image: '生图按规格计费',
+        video: '视频（按秒）'
       },
       form: {
         name: '名称',
@@ -106,6 +113,7 @@ export default {
         noGroupsAvailable: '暂无可用分组',
         inOtherChannel: '已属于「{name}」',
         modelPricing: '模型定价',
+        platform: '平台',
         showInModelPlaza: '展示到模型广场',
         showInModelPlazaHint: '关闭后不影响实际路由和计费，仅从用户侧模型广场隐藏这条定价。',
         hiddenFromModelPlaza: '广场隐藏',
@@ -131,12 +139,13 @@ export default {
         addInterval: '添加区间',
 		requestTiers: '按次计费层级',
 		imageTiers: '图片规格价格',
+		videoTiers: '视频分辨率价格（按秒）',
 		addTier: '添加规格',
 		customTier: '自定义规格',
 		noTiersYet: '暂无规格，点击添加后配置名称与单次价格',
         noPricingRules: '暂无定价规则，点击"添加"创建',
         perRequestPrice: '单次价格',
-        perRequestPriceRequired: '按次/图片计费模式必须设置默认价格或至少一个计费层级',
+        perRequestPriceRequired: '按次、图片或视频计费模式必须设置默认价格或至少一个计费层级',
 		tierLabel: '规格/档位',
 		tierPlaceholder: '例如：标准、高清、10 秒',
 		resolution: '分辨率',
@@ -152,6 +161,7 @@ export default {
         billingModelSourceChannelMapped: '以渠道映射后的模型计费',
         billingModelSourceRequested: '以请求模型计费',
         billingModelSourceUpstream: '以最终模型计费',
+        billingModelSourceResponse: '按上游响应模型计费',
         billingModelSourceHint: '控制使用哪个模型名称进行定价查找',
         selectedCount: '已选 {count} 个',
         searchGroups: '搜索分组...',
@@ -160,6 +170,7 @@ export default {
         restrictModelsHint: '开启后，仅允许模型定价列表中的模型。不在列表中的模型请求将被拒绝。',
         defaultPerRequestPrice: '默认单次价格（未命中层级时使用）',
         defaultImagePrice: '默认图片价格（未命中层级时使用）',
+        defaultVideoPrice: '默认视频每秒价格（未命中层级时使用）',
         platformConfig: '平台配置',
         webSearchEmulation: 'Web Search 模拟',
         webSearchEmulationHint: '⚠️ 开启后该渠道下所有 Anthropic 分组的账号将自动拦截 web_search 请求，请谨慎操作',

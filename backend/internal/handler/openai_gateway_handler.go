@@ -156,6 +156,12 @@ func usageRecordContext(parent context.Context, base context.Context) context.Co
 	if requestID, _ := parent.Value(ctxkey.RequestID).(string); strings.TrimSpace(requestID) != "" {
 		base = context.WithValue(base, ctxkey.RequestID, strings.TrimSpace(requestID))
 	}
+	if platform, ok := service.ResolvedTargetPlatformFromContext(parent); ok {
+		base = service.WithResolvedTargetPlatform(base, platform)
+	}
+	if forcePlatform, _ := parent.Value(ctxkey.ForcePlatform).(string); strings.TrimSpace(forcePlatform) != "" {
+		base = context.WithValue(base, ctxkey.ForcePlatform, strings.TrimSpace(forcePlatform))
+	}
 	return base
 }
 
@@ -648,16 +654,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						retryLimit := account.GetPoolModeRetryCount()
 						if sameAccountRetryCount[account.ID] < retryLimit {
 							sameAccountRetryCount[account.ID]++
+							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai.pool_mode_same_account_retry",
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),
 								zap.Int("retry_limit", retryLimit),
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+								zap.Duration("retry_delay", retryDelay),
 							)
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(retryDelay):
 							}
 							continue
 						}
@@ -1206,16 +1214,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						retryLimit := account.GetPoolModeRetryCount()
 						if sameAccountRetryCount[account.ID] < retryLimit {
 							sameAccountRetryCount[account.ID]++
+							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai_messages.pool_mode_same_account_retry",
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),
 								zap.Int("retry_limit", retryLimit),
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+								zap.Duration("retry_delay", retryDelay),
 							)
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(retryDelay):
 							}
 							continue
 						}
@@ -2186,7 +2196,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				}
 				return nil
 			},
-			BeforeRequest: func(_ int, payload []byte, originalModel string) error {
+			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
+				c.Set(securityAuditWSTurnContextKey, turn)
+				if turn == 1 {
+					return nil
+				}
 				if !gjson.ValidBytes(payload) {
 					return service.NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", errors.New("invalid json"))
 				}
@@ -2864,7 +2878,11 @@ func (h *OpenAIGatewayHandler) ensureForwardErrorResponse(c *gin.Context, stream
 		imageKeepalivePaddingOnly = adjustedSize < 0
 		imageKeepaliveResponseWritten = adjustedSize >= 0
 	}
-	if service.IsResponseCommitted(c) || (!compactKeepaliveCommitted && imageKeepaliveResponseWritten) {
+	compactKeepaliveHasMeaningfulOutput := compactKeepaliveCommitted && service.OpenAICompactKeepaliveAdjustedWrittenSize(c) > 0
+	// Compact keepalive may have committed 200 headers without writing a
+	// semantic SSE event. In that case the Responses stream still needs its
+	// protocol-correct terminal response.failed event.
+	if (service.IsResponseCommitted(c) && (!compactKeepaliveCommitted || compactKeepaliveHasMeaningfulOutput)) || (!compactKeepaliveCommitted && imageKeepaliveResponseWritten) {
 		return false
 	}
 	if c.Writer.Written() && !imageKeepalivePaddingOnly {
