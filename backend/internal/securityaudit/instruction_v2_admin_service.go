@@ -296,6 +296,32 @@ func (s *InstructionV2Service) DeleteAdminClientProfile(ctx context.Context, id,
 	return nil
 }
 
+func (s *InstructionV2Service) UpdateAdminClientProfilePromptAudit(
+	ctx context.Context,
+	id int64,
+	enabled bool,
+	actorID int64,
+) (InstructionV2ClientProfile, error) {
+	if id <= 0 {
+		return InstructionV2ClientProfile{}, instructionV2NotFoundError("客户端规则")
+	}
+	version, err := s.repository.SetClientProfilePromptAudit(ctx, id, enabled, actorID)
+	if err != nil {
+		return InstructionV2ClientProfile{}, mapInstructionV2RepositoryError(err, "客户端规则")
+	}
+	s.refreshAfterMutation(ctx, version)
+	profiles, err := s.repository.ListClientProfiles(ctx)
+	if err != nil {
+		return InstructionV2ClientProfile{}, err
+	}
+	for _, profile := range profiles {
+		if profile.ID == id {
+			return profile, nil
+		}
+	}
+	return InstructionV2ClientProfile{}, instructionV2NotFoundError("客户端规则")
+}
+
 func (s *InstructionV2Service) ListAdminScopes(ctx context.Context) ([]InstructionV2Scope, error) {
 	return s.repository.ListScopes(ctx)
 }
@@ -1068,6 +1094,16 @@ func mapInstructionV2RepositoryError(err error, resource string) error {
 	}
 	if errors.Is(err, errInstructionV2InvalidScopeProfile) {
 		return infraerrors.BadRequest("instruction_audit_v2_invalid_client_scope", "客户端范围无效")
+	}
+	if errors.Is(err, errInstructionV2PromptProfileDisabled) {
+		return infraerrors.BadRequest(
+			"instruction_audit_v2_prompt_audit_profile_disabled", "请先启用客户端规则，再开启提示词审计补丁",
+		)
+	}
+	if errors.Is(err, errInstructionV2PromptInternalProfile) {
+		return infraerrors.BadRequest(
+			"instruction_audit_v2_prompt_audit_internal_forbidden", "ModelPort 内部客户端不能启用提示词审计补丁",
+		)
 	}
 	if errors.Is(err, errInstructionV2AINodeSlotInUse) {
 		return infraerrors.Conflict("instruction_audit_v2_ai_slot_in_use", "该 AI 槽位已有节点，请编辑现有节点")

@@ -24,6 +24,12 @@ func (e *Enqueuer) Enqueue(ctx context.Context, req Request) error {
 	if e == nil || e.config == nil || e.repo == nil || e.payload == nil {
 		return errors.New("prompt audit enqueuer unavailable")
 	}
+	if !validPromptAuditRouteStamp(req) {
+		LogInfo(EventEnqueueSkipped, mergeLogFields(requestLogFields(req), map[string]any{
+			"status": "skipped", "error_code": "route_not_eligible",
+		}))
+		return nil
+	}
 	cfg, ok := e.config.Active()
 	baseFields := requestLogFields(req)
 	if !ok || cfg.EffectiveMode() != ModeAsync {
@@ -31,10 +37,6 @@ func (e *Enqueuer) Enqueue(ctx context.Context, req Request) error {
 		return nil
 	}
 	baseFields["config_version"] = cfg.ConfigVersion
-	if !cfg.IncludesGroup(req.GroupID) {
-		LogInfo(EventEnqueueSkipped, mergeLogFields(baseFields, map[string]any{"status": "skipped", "error_code": "group_out_of_scope"}))
-		return nil
-	}
 	if len(cfg.EnabledEndpoints()) == 0 {
 		e.recordDropped()
 		LogWarn(EventEnqueueDropped, mergeLogFields(baseFields, map[string]any{"status": "dropped", "error_code": "no_enabled_endpoint"}))

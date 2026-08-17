@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
@@ -43,6 +44,10 @@ type PromptEngine interface {
 	Evaluate(ctx context.Context, req Request) (*PromptDecision, error)
 }
 
+type PromptAuditEligibilityProvider interface {
+	ResolvePromptAuditRoute(Request) PromptAuditRoute
+}
+
 type Coordinator struct {
 	legacy      LegacyEngine
 	prompt      PromptEngine
@@ -66,23 +71,70 @@ func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 			return *decision
 		}
 	}
+	promptRequest, promptEligible, instructionConfigUnavailable := c.promptAuditRequest(req)
 	mode := ModeOff
 	if c.prompt != nil {
 		mode = c.prompt.EffectiveMode()
+	}
+	if instructionConfigUnavailable && mode == ModeBlocking {
+		legacy, _ := c.checkLegacy(ctx, req)
+		return prioritize(legacy, unavailablePromptDecision(ErrorCodeUnavailable))
+	}
+	if !promptEligible {
+		legacy, _ := c.checkLegacy(ctx, req)
+		return prioritize(legacy, nil)
 	}
 	switch mode {
 	case ModeAsync:
 		// Enqueue is deliberately best-effort. The implementation owns a bounded
 		// context and copies request memory before it can outlive the Handler.
-		_ = c.prompt.Enqueue(ctx, req.Clone())
+		_ = c.prompt.Enqueue(ctx, promptRequest.Clone())
 		legacy, _ := c.checkLegacy(ctx, req)
 		return prioritize(legacy, nil)
 	case ModeBlocking:
-		return c.checkBlocking(ctx, req)
+		return c.checkBlocking(ctx, req, promptRequest)
 	default:
 		legacy, _ := c.checkLegacy(ctx, req)
 		return prioritize(legacy, nil)
 	}
+}
+
+func (c *Coordinator) promptAuditRequest(req Request) (Request, bool, bool) {
+	if c == nil || c.prompt == nil || isResponsesProtocolFamily(req.Protocol, req.Endpoint) {
+		return req, false, false
+	}
+	provider, ok := c.instruction.(PromptAuditEligibilityProvider)
+	if !ok {
+		return req, false, false
+	}
+	route := provider.ResolvePromptAuditRoute(req)
+	if route.InstructionConfigUnavailable {
+		return req, false, true
+	}
+	if !route.Eligible {
+		return req, false, false
+	}
+	req.StampPromptAuditRoute(route)
+	return req, req.PromptAuditRouteStamped, false
+}
+
+func isResponsesProtocolFamily(protocol, endpoint string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(protocol))
+	normalized = strings.NewReplacer("-", "_", ".", "_", "/", "_").Replace(normalized)
+	if normalized == "responses" || normalized == "openai_responses" ||
+		strings.HasPrefix(normalized, "responses_") || strings.HasPrefix(normalized, "openai_responses_") {
+		return true
+	}
+	path := strings.ToLower(strings.TrimSpace(endpoint))
+	if index := strings.IndexAny(path, "?#"); index >= 0 {
+		path = path[:index]
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "responses" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Coordinator) CheckInstruction(ctx context.Context, req Request) *Decision {
@@ -112,7 +164,7 @@ func (c *Coordinator) CheckInstruction(ctx context.Context, req Request) *Decisi
 	}
 }
 
-func (c *Coordinator) checkBlocking(ctx context.Context, req Request) Decision {
+func (c *Coordinator) checkBlocking(ctx context.Context, req Request, promptRequest Request) Decision {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var legacy *LegacyDecision
@@ -127,7 +179,7 @@ func (c *Coordinator) checkBlocking(ctx context.Context, req Request) Decision {
 			prompt = unavailablePromptDecision(ErrorCodeUnavailable)
 			return
 		}
-		result, err := c.prompt.Evaluate(ctx, req.Clone())
+		result, err := c.prompt.Evaluate(ctx, promptRequest.Clone())
 		if err != nil {
 			var guardErr *GuardError
 			if errors.As(err, &guardErr) && guardErr.Code == ErrorCodeInvalidResponse {

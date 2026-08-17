@@ -41,9 +41,13 @@ func openPromptAuditIntegrationDB(t *testing.T) *sql.DB {
 			value TEXT NOT NULL DEFAULT '',
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 		);
+		CREATE TABLE IF NOT EXISTS instruction_audit_v2_client_profiles (
+			id BIGSERIAL PRIMARY KEY,
+			profile_key VARCHAR(64) NOT NULL UNIQUE
+		);
 	`)
 	require.NoError(t, err)
-	for _, name := range []string{"181_prompt_audit.sql", "182_prompt_audit_full_prompt.sql"} {
+	for _, name := range []string{"181_prompt_audit.sql", "182_prompt_audit_full_prompt.sql", "224_prompt_audit_instruction_patch.sql"} {
 		migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
 		require.NoError(t, err)
 		// The migration runner can retry an interrupted deployment; the migration
@@ -85,7 +89,7 @@ func integrationResult(decision EventDecision) *NormalizedResult {
 	result := &NormalizedResult{
 		Decision: decision, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe",
 		Categories: []string{}, MatchedScanners: []string{}, ScannerScores: map[string]float64{},
-		ScannerEvidence: map[string]string{}, ScannerBackend: "qwen3guard-openai",
+		ScannerEvidence: map[string]string{}, ScannerBackend: StructuredReviewerBackend,
 		ScannerVersion: "test", GuardEndpointID: "guard-1", PolicyID: "priority",
 		PolicyVersion: 1, ChunkTotal: 1, LatencyMS: 2,
 	}

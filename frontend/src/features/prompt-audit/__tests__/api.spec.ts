@@ -22,11 +22,31 @@ describe('Prompt Audit API', () => {
   it('sends a temporary probe token only in the request and never invents response credentials', async () => {
     client.post.mockResolvedValue({ data: { ok: true, token_applied: true } })
     const result = await promptAuditAPI.probeEndpoint({
-      id: 'guard-1', name: 'Guard', protocol: 'openai_compatible', base_url: 'http://127.0.0.1:8000', model: 'guard',
-      token: 'api-canary-secret', clear_token: false, timeout_ms: 1000, input_limit: 1000, enabled: true, has_token: false, token_status: 'missing',
+      id: 'guard-1', name: 'Guard', protocol: 'openai_compatible', provider: 'custom', base_url: 'http://127.0.0.1:8000', model: 'guard',
+      token: 'api-canary-secret', clear_token: false, timeout_ms: 1000, input_limit: 1000,
+      response_mode: 'text_json', max_output_tokens: 512, effective_response_mode: '', requires_reconfigure: false,
+      enabled: true, has_token: false, token_status: 'missing',
     })
-    expect(client.post).toHaveBeenCalledWith('/admin/prompt-audit/endpoints/probe', expect.objectContaining({ endpoint: expect.objectContaining({ token: 'api-canary-secret' }) }))
+    expect(client.post).toHaveBeenCalledWith('/admin/prompt-audit/endpoints/probe', expect.objectContaining({ endpoint: expect.objectContaining({
+      token: 'api-canary-secret',
+      clear_token: false,
+      response_mode: 'text_json',
+      max_output_tokens: 512,
+    }) }))
     expect(JSON.stringify(result)).not.toContain('api-canary-secret')
+  })
+
+  it('preserves explicit credential clearing in manual probes', async () => {
+    client.post.mockResolvedValue({ data: { ok: false, token_applied: false } })
+    await promptAuditAPI.probeEndpoint({
+      id: 'guard-1', name: 'Guard', protocol: 'openai_compatible', provider: 'custom', base_url: 'https://guard.example.com/v1', model: 'guard',
+      token: '', clear_token: true, timeout_ms: 1000, input_limit: 1000,
+      response_mode: 'text_json', max_output_tokens: 512, effective_response_mode: '', requires_reconfigure: false,
+      enabled: true, has_token: true, token_status: 'configured',
+    })
+    expect(client.post).toHaveBeenCalledWith('/admin/prompt-audit/endpoints/probe', expect.objectContaining({
+      endpoint: expect.objectContaining({ token: undefined, clear_token: true }),
+    }))
   })
 
   it('passes a server preview token through the confirmed filter-delete contract', async () => {

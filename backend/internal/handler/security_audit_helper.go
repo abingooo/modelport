@@ -117,6 +117,9 @@ func runSecurityAuditWithInstructionPayload(c *gin.Context, reqLog *zap.Logger, 
 	if c == nil || c.Request == nil {
 		return nil
 	}
+	if decision := rejectReservedSecurityAuditPurpose(c); decision != nil {
+		return decision
+	}
 	cacheCompletion := cachesSecurityAuditCompletion(stage)
 	if cacheCompletion {
 		if completed, exists := c.Get(securityAuditCompletedContextKey); exists && completed == true {
@@ -178,22 +181,14 @@ func runSecurityAuditWithInstructionPayload(c *gin.Context, reqLog *zap.Logger, 
 }
 
 func runInstructionAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securityaudit.Coordinator, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, excluded bool, stage string) *securityaudit.Decision {
-	if c == nil || c.Request == nil || coordinator == nil {
+	if c == nil || c.Request == nil {
 		return nil
 	}
-	if securityaudit.IsReservedInstructionAuditPurpose(c.GetHeader("X-ModelPort-Internal-Purpose")) {
-		return &securityaudit.Decision{
-			Kind: securityaudit.DecisionBlock, HTTPStatus: http.StatusForbidden,
-			ErrorCode:     securityaudit.InstructionErrorCodeRejected,
-			ClientMessage: securityaudit.InstructionClientMessage,
-			Instruction: &securityaudit.InstructionDecision{
-				Applicable: true, Allow: false, Reason: "reserved_internal_marker",
-				InitialReason: "reserved_internal_marker", FinalReason: "reserved_internal_marker",
-				FinalOutcome: securityaudit.InstructionOutcomeBlocked,
-				PolicyAction: securityaudit.InstructionPolicyActionBlock,
-			},
-			AllowNextStage: false,
-		}
+	if decision := rejectReservedSecurityAuditPurpose(c); decision != nil {
+		return decision
+	}
+	if coordinator == nil {
+		return nil
 	}
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
 	request.InstructionBody = body
@@ -227,6 +222,24 @@ func runInstructionAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securi
 		}
 	}
 	return decision
+}
+
+func rejectReservedSecurityAuditPurpose(c *gin.Context) *securityaudit.Decision {
+	if c == nil || !securityaudit.IsReservedInstructionAuditPurpose(c.GetHeader("X-ModelPort-Internal-Purpose")) {
+		return nil
+	}
+	return &securityaudit.Decision{
+		Kind: securityaudit.DecisionBlock, HTTPStatus: http.StatusForbidden,
+		ErrorCode:     securityaudit.InstructionErrorCodeRejected,
+		ClientMessage: securityaudit.InstructionClientMessage,
+		Instruction: &securityaudit.InstructionDecision{
+			Applicable: true, Allow: false, Reason: "reserved_internal_marker",
+			InitialReason: "reserved_internal_marker", FinalReason: "reserved_internal_marker",
+			FinalOutcome: securityaudit.InstructionOutcomeBlocked,
+			PolicyAction: securityaudit.InstructionPolicyActionBlock,
+		},
+		AllowNextStage: false,
+	}
 }
 
 func logSecurityAuditStart(reqLog *zap.Logger, request securityaudit.Request, bodyBytes int, cached bool) {

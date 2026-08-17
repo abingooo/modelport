@@ -32,14 +32,14 @@ func (s *scriptedScanner) Scan(ctx context.Context, endpoint ActiveEndpoint, _ s
 		select {
 		case <-s.block:
 		case <-ctx.Done():
-			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: true, Cause: ctx.Err()}
+			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true, Timeout: true, Cause: ctx.Err()}
 		}
 	}
 	if endpoint.ID == "bad" {
-		return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
+		return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true}
 	}
 	if endpoint.ID == "invalid" {
-		return nil, &GuardError{Code: ErrorCodeInvalidResponse}
+		return nil, &GuardError{Code: ErrorCodeInvalidResponse, Failoverable: true}
 	}
 	return &NormalizedResult{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe", ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{}, GuardEndpointID: endpoint.ID}, nil
 }
@@ -48,7 +48,17 @@ func guardConfig(endpoints ...ActiveEndpoint) ActiveConfig {
 	return ActiveConfig{RiskControlEnabled: true, Enabled: true, BlockingEnabled: true, ConfigVersion: 2, Scanners: AllScannerIDs, Endpoints: endpoints}
 }
 
-func TestGuardEvaluatorOrderedFailoverAndInvalidTerminal(t *testing.T) {
+func TestBlockingEvaluationTimeoutAllowsFailoverAndCapsTotalWork(t *testing.T) {
+	require.Equal(t, 570*time.Millisecond, blockingEvaluationTimeout([]ActiveEndpoint{
+		{TimeoutMS: 70}, {TimeoutMS: 500},
+	}))
+	require.Equal(t, maxBlockingEvaluationTimeout, blockingEvaluationTimeout([]ActiveEndpoint{
+		{TimeoutMS: MaxTimeoutMS}, {TimeoutMS: MaxTimeoutMS}, {TimeoutMS: MaxTimeoutMS},
+	}))
+	require.Equal(t, DefaultTimeoutMS*time.Millisecond, blockingEvaluationTimeout(nil))
+}
+
+func TestGuardEvaluatorOrderedFailoverIncludingInvalidOutput(t *testing.T) {
 	scanner := &scriptedScanner{}
 	metrics := NewAtomicMetrics()
 	evaluator := newGuardEvaluator(scanner, nil, metrics, 4, 2)
@@ -60,17 +70,16 @@ func TestGuardEvaluatorOrderedFailoverAndInvalidTerminal(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, DecisionAllow, decision.Kind)
 	require.Equal(t, int64(1), metrics.Snapshot().Failovers)
-	_, err = evaluator.Evaluate(context.Background(), guardConfig(
+	decision, err = evaluator.Evaluate(context.Background(), guardConfig(
 		ActiveEndpoint{ID: "invalid", Enabled: true, TimeoutMS: 1000, InputLimit: 100},
 		ActiveEndpoint{ID: "good", Enabled: true, TimeoutMS: 1000, InputLimit: 100},
 	), snapshot)
-	var guardErr *GuardError
-	require.ErrorAs(t, err, &guardErr)
-	require.Equal(t, ErrorCodeInvalidResponse, guardErr.Code)
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, decision.Kind)
 	snapshotMetrics := metrics.Snapshot()
 	require.Equal(t, int64(2), snapshotMetrics.Total)
-	require.Equal(t, int64(1), snapshotMetrics.Allowed)
-	require.Equal(t, int64(1), snapshotMetrics.Invalid)
+	require.Equal(t, int64(2), snapshotMetrics.Allowed)
+	require.Equal(t, int64(2), snapshotMetrics.Failovers)
 }
 
 func TestGuardEvaluatorGlobalBulkheadIsNonBlocking(t *testing.T) {
@@ -134,7 +143,7 @@ func TestGuardEvaluatorLastChunkFailureNeverAllows(t *testing.T) {
 	scanner := PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
 		call++
 		if call == 2 {
-			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Cause: errors.New("down")}
+			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true, Cause: errors.New("down")}
 		}
 		return &NormalizedResult{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, ScannerScores: map[string]float64{}, ScannerEvidence: map[string]string{}}, nil
 	})
@@ -184,7 +193,7 @@ func TestGuardEvaluatorBlockStopsRemainingChunksButReportsPlannedTotal(t *testin
 	require.Equal(t, int64(1), metrics.Snapshot().Blocked)
 }
 
-func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T) {
+func TestGuardEvaluatorFlagFailoverAndContextCancel(t *testing.T) {
 	t.Run("flag allows next stage", func(t *testing.T) {
 		metrics := NewAtomicMetrics()
 		evaluator := newGuardEvaluator(PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
@@ -197,40 +206,30 @@ func TestGuardEvaluatorFlagSharedDeadlineFailClosedAndContextCancel(t *testing.T
 		require.Equal(t, int64(1), metrics.Snapshot().Flagged)
 	})
 
-	t.Run("all failovers share first endpoint deadline", func(t *testing.T) {
+	t.Run("timed out endpoint fails over with independent deadline", func(t *testing.T) {
 		calls := 0
 		scanner := PromptScannerFunc(func(ctx context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
 			calls++
 			if endpoint.ID == "first" {
-				select {
-				case <-time.After(35 * time.Millisecond):
-					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
-				case <-ctx.Done():
-					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: true, Cause: ctx.Err()}
-				}
+				<-ctx.Done()
+				return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true, Timeout: true, Cause: ctx.Err()}
 			}
-			<-ctx.Done()
-			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: true, Cause: ctx.Err()}
+			return &NormalizedResult{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe", GuardEndpointID: endpoint.ID}, nil
 		})
 		metrics := NewAtomicMetrics()
 		evaluator := newGuardEvaluator(scanner, nil, metrics, 2, 2)
 		started := time.Now()
-		_, err := evaluator.Evaluate(context.Background(), guardConfig(
+		decision, err := evaluator.Evaluate(context.Background(), guardConfig(
 			ActiveEndpoint{ID: "first", Enabled: true, TimeoutMS: 70, InputLimit: 100},
 			ActiveEndpoint{ID: "second", Enabled: true, TimeoutMS: 500, InputLimit: 100},
 		), PromptSnapshot{ScanText: "deadline", PromptLength: 8})
 		elapsed := time.Since(started)
-		require.Error(t, err)
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, decision.Kind)
 		require.Equal(t, 2, calls)
-		// The bound only has to prove the failover shared the first endpoint's
-		// 70ms deadline instead of taking the second endpoint's own 500ms one.
-		// An unshared deadline lands at ~535ms, so 350ms still fails loudly
-		// while leaving room for scheduler delay on a busy CI machine. A
-		// tighter bound made this test flaky, not stricter.
 		require.Less(t, elapsed, 350*time.Millisecond)
 		require.GreaterOrEqual(t, elapsed, 50*time.Millisecond)
 		require.Equal(t, int64(1), metrics.Snapshot().Failovers)
-		require.Equal(t, int64(1), metrics.Snapshot().Timeouts)
 	})
 
 	t.Run("canceled parent never allows", func(t *testing.T) {

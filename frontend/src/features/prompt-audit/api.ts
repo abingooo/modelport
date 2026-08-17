@@ -2,7 +2,6 @@ import { apiClient } from '@/api/client'
 import type {
   PromptAuditConfig,
   PromptAuditEvent,
-  PromptAuditGroup,
   PromptAuditRuntime,
   PromptAuditUpdateRequest,
   PromptDeletePreview,
@@ -12,18 +11,18 @@ import type {
   PromptProbeResult,
   PromptAuditEndpointDraft,
 } from './types'
-import { eventFilterPayload, eventQueryParams } from './viewModel'
+import { configToDraft, eventFilterPayload, eventQueryParams } from './viewModel'
 
 const basePath = '/admin/prompt-audit'
 
 export async function getConfig(): Promise<PromptAuditConfig> {
   const { data } = await apiClient.get<PromptAuditConfig>(`${basePath}/config`)
-  return data
+  return configToDraft(data)
 }
 
 export async function updateConfig(payload: PromptAuditUpdateRequest): Promise<PromptAuditConfig> {
   const { data } = await apiClient.put<PromptAuditConfig>(`${basePath}/config`, payload)
-  return data
+  return configToDraft(data)
 }
 
 export async function probeEndpoint(endpoint: PromptAuditEndpointDraft): Promise<PromptProbeResult> {
@@ -35,8 +34,11 @@ export async function probeEndpoint(endpoint: PromptAuditEndpointDraft): Promise
       base_url: endpoint.base_url,
       model: endpoint.model,
       token: endpoint.token || undefined,
+      clear_token: endpoint.clear_token,
       timeout_ms: endpoint.timeout_ms,
       input_limit: endpoint.input_limit,
+      response_mode: endpoint.response_mode,
+      max_output_tokens: endpoint.max_output_tokens,
       enabled: endpoint.enabled,
     },
   })
@@ -96,13 +98,6 @@ export async function deleteEventsByFilter(
   return data
 }
 
-export async function listGroups(): Promise<PromptAuditGroup[]> {
-  const { data } = await apiClient.get<PromptAuditGroup[]>('/admin/groups/all', {
-    params: { include_inactive: true },
-  })
-  return data
-}
-
 export const promptAuditAPI = {
   getConfig,
   updateConfig,
@@ -114,7 +109,6 @@ export const promptAuditAPI = {
   batchDeleteEvents,
   previewDelete,
   deleteEventsByFilter,
-  listGroups,
 }
 
 export default promptAuditAPI

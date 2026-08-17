@@ -526,6 +526,36 @@ func (h *InstructionV2AdminHandler) DeleteClientProfile(c *gin.Context) {
 	response.Success(c, gin.H{"deleted": true})
 }
 
+func (h *InstructionV2AdminHandler) UpdateClientProfilePromptAudit(c *gin.Context) {
+	id, ok := instructionIDParam(c, "client_profile")
+	if !ok {
+		return
+	}
+	var request UpdateInstructionV2ClientProfilePromptAuditRequest
+	if err := c.ShouldBindJSON(&request); err != nil || request.Enabled == nil {
+		h.audit(c, "failed", "instruction_audit_v2_invalid_prompt_audit_switch", map[string]any{"client_profile_id": id})
+		response.ErrorFrom(c, infraerrors.BadRequest(
+			"instruction_audit_v2_invalid_prompt_audit_switch", "提示词审计补丁开关请求无效",
+		))
+		return
+	}
+	item, err := h.service.UpdateAdminClientProfilePromptAudit(
+		c.Request.Context(), id, *request.Enabled, adminID(c),
+	)
+	if err != nil {
+		h.audit(c, "failed", infraerrors.Reason(err), map[string]any{
+			"client_profile_id": id, "prompt_audit_enabled": *request.Enabled,
+		})
+		response.ErrorFrom(c, err)
+		return
+	}
+	h.audit(c, "success", "", map[string]any{
+		"client_profile_id": item.ID, "profile_key": item.ProfileKey,
+		"prompt_audit_enabled": item.PromptAuditEnabled,
+	})
+	response.Success(c, item)
+}
+
 func (h *InstructionV2AdminHandler) ListUserAllowlist(c *gin.Context) {
 	items, err := h.service.ListAdminUserAllowlist(c.Request.Context())
 	respondInstructionV2(c, items, err)

@@ -224,6 +224,12 @@ var auditBodyOmittedRoutes = map[string]struct{}{
 	"POST /api/v1/admin/instruction-audit/review-jobs/:id/raw-access": {},
 }
 
+func init() {
+	const promptAuditProfileRoute = "PUT /api/v1/admin/instruction-audit/client-profiles/:id/prompt-audit"
+	auditActionOverrides[promptAuditProfileRoute] = "admin.instruction_audit.client_profile.prompt_audit.update"
+	auditBodyOmittedRoutes[promptAuditProfileRoute] = struct{}{}
+}
+
 // NewAuditLogMiddleware 创建审计中间件。
 // 记录范围：变更类请求（POST/PUT/PATCH/DELETE）+ 白名单内的敏感 GET 读取。
 // 挂载位置：admin / user / admin-payment 组挂在各自认证中间件之后（只审计已认证请求，

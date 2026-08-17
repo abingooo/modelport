@@ -335,10 +335,11 @@ func (m *ConfigManager) buildNextStorage(current storageConfig, req UpdateConfig
 		currentByID[endpoint.ID] = endpoint
 	}
 	next := storageConfig{
-		Enabled: req.Enabled, BlockingEnabled: req.BlockingEnabled, BlockingLatestTurnOnly: req.BlockingLatestTurnOnly, StorePassEvents: req.StorePassEvents,
+		ModelContractVersion: PromptAuditModelContractVersion,
+		Enabled:              req.Enabled, BlockingEnabled: req.BlockingEnabled, BlockingLatestTurnOnly: req.BlockingLatestTurnOnly, StorePassEvents: req.StorePassEvents,
 		Strategy: strings.TrimSpace(req.Strategy), WorkerCount: req.WorkerCount,
 		QueueCapacity: req.QueueCapacity, Scanners: append([]string(nil), req.Scanners...),
-		AllGroups: req.AllGroups, GroupIDs: append([]int64(nil), req.GroupIDs...),
+		AllGroups: true, GroupIDs: []int64{},
 		ConfigVersion: current.ConfigVersion, UpdatedBy: actorID,
 		Endpoints: make([]StorageEndpoint, 0, len(req.Endpoints)),
 	}
@@ -353,6 +354,26 @@ func (m *ConfigManager) buildNextStorage(current storageConfig, req UpdateConfig
 			TimeoutMS: endpoint.TimeoutMS, InputLimit: endpoint.InputLimit, Enabled: endpoint.Enabled,
 		}
 		old, hadOld := currentByID[stored.ID]
+		stored.ResponseMode = ResponseModeAuto
+		stored.MaxOutputTokens = DefaultMaxOutputTokens
+		if hadOld {
+			stored.ResponseMode = normalizedResponseMode(old.ResponseMode)
+			stored.MaxOutputTokens = old.MaxOutputTokens
+			if stored.MaxOutputTokens == 0 {
+				stored.MaxOutputTokens = DefaultMaxOutputTokens
+			}
+			stored.EffectiveResponseMode = old.EffectiveResponseMode
+			stored.RequiresReconfigure = old.RequiresReconfigure
+		}
+		if endpoint.ResponseMode != nil {
+			stored.ResponseMode = normalizedResponseMode(*endpoint.ResponseMode)
+		}
+		if endpoint.MaxOutputTokens != nil {
+			stored.MaxOutputTokens = *endpoint.MaxOutputTokens
+		}
+		if endpoint.EffectiveResponseMode != "" {
+			stored.EffectiveResponseMode = normalizedResponseMode(endpoint.EffectiveResponseMode)
+		}
 		switch {
 		case endpoint.ClearToken:
 			stored.TokenCiphertext = ""
@@ -367,7 +388,32 @@ func (m *ConfigManager) buildNextStorage(current storageConfig, req UpdateConfig
 			}
 			stored.TokenCiphertext = ciphertext
 		case hadOld:
-			stored.TokenCiphertext = old.TokenCiphertext
+			oldBaseURL, normalizeErr := NormalizeBaseURL(old.BaseURL)
+			if normalizeErr == nil && oldBaseURL == baseURL {
+				stored.TokenCiphertext = old.TokenCiphertext
+			} else if strings.TrimSpace(old.TokenCiphertext) != "" {
+				return storageConfig{}, infraerrors.BadRequest("prompt_audit_token_required_for_base_url_change", "审计节点地址变化时必须重新提供或明确清除 Token")
+			}
+		}
+		oldBaseURL, _ := NormalizeBaseURL(old.BaseURL)
+		connectionChanged := !hadOld || oldBaseURL != stored.BaseURL || strings.TrimSpace(old.Model) != stored.Model ||
+			normalizedResponseMode(old.ResponseMode) != stored.ResponseMode
+		tokenChanged := strings.TrimSpace(endpoint.Token) != "" || (endpoint.ClearToken && hadOld && old.TokenCiphertext != "")
+		newlyEnabled := stored.Enabled && (!hadOld || !old.Enabled)
+		globalEnabling := req.Enabled && !current.Enabled && stored.Enabled
+		needsProbe := connectionChanged || tokenChanged || newlyEnabled || globalEnabling
+		switch {
+		case endpoint.ProbeVerified:
+			stored.RequiresReconfigure = false
+			if stored.EffectiveResponseMode == "" {
+				stored.EffectiveResponseMode = stored.ResponseMode
+			}
+		case needsProbe:
+			stored.RequiresReconfigure = true
+			stored.EffectiveResponseMode = ""
+		case endpoint.RequiresReconfigure:
+			stored.RequiresReconfigure = true
+			stored.EffectiveResponseMode = ""
 		}
 		next.Endpoints = append(next.Endpoints, stored)
 	}

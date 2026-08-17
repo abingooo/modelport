@@ -1,26 +1,36 @@
 export type PromptAuditMode = 'off' | 'async_audit' | 'blocking'
 export type PromptDecision = 'pass' | 'flag' | 'critical'
 export type PromptRiskLevel = 'low' | 'medium' | 'high' | 'critical'
+export type PromptAuditProvider = 'custom' | 'qwen' | 'deepseek' | 'doubao'
+export type PromptAuditResponseMode = 'auto' | 'json_schema' | 'json_object' | 'text_json'
 
 export interface PromptAuditEndpoint {
   id: string
   name: string
   protocol: 'openai_compatible'
+  provider?: PromptAuditProvider
   base_url: string
   model: string
   timeout_ms: number
   input_limit: number
+  response_mode: PromptAuditResponseMode
+  max_output_tokens: number
+  effective_response_mode?: PromptAuditResponseMode | ''
+  requires_reconfigure?: boolean
   enabled: boolean
   has_token: boolean
   token_status: 'configured' | 'missing' | 'invalid' | string
 }
 
-export interface PromptAuditEndpointDraft extends PromptAuditEndpoint {
+export interface PromptAuditEndpointDraft extends Omit<PromptAuditEndpoint, 'provider'> {
+  provider: PromptAuditProvider
   token: string
   clear_token: boolean
 }
 
 export interface PromptAuditConfig {
+  model_contract_version?: number
+  scope_source?: 'instruction_audit_v2' | string
   enabled: boolean
   blocking_enabled: boolean
   blocking_latest_turn_only: boolean
@@ -65,6 +75,8 @@ export interface PromptAuditUpdateRequest {
     clear_token: boolean
     timeout_ms: number
     input_limit: number
+    response_mode: PromptAuditResponseMode
+    max_output_tokens: number
     enabled: boolean
   }>
 }
@@ -79,6 +91,7 @@ export interface PromptProbeResult {
   retryable: boolean
   checked_at: string
   token_applied: boolean
+  effective_response_mode?: PromptAuditResponseMode
 }
 
 export interface PromptQueueStats {
@@ -231,16 +244,17 @@ export interface PromptDeletePreview {
   expires_at: string
 }
 
-export interface PromptAuditGroup {
-  id: number
+export interface PromptAuditInheritedGroup {
+  group_id: number
   name: string
-  status: 'active' | 'inactive'
+  status: string
   platform: string
+  scope_count: number
 }
 
 export interface PromptLoadErrors {
   config: string
   runtime: string
-  groups: string
+  scope: string
   events: string
 }

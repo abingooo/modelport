@@ -20,7 +20,10 @@ const (
 	ErrorCodeEncryptionKeyRequired = "prompt_audit_encryption_key_required"
 	ErrorCodeRequiresEnabled       = "prompt_guard_requires_audit_enabled"
 
-	DefaultGuardModel = "sileader/qwen3guard:0.6b"
+	StructuredReviewerBackend = "openai-structured-reviewer-v1"
+
+	PromptAuditSourceInstructionV2 = "instruction_audit_v2"
+	PromptAuditTriggerNonResponses = "non_responses_protocol"
 )
 
 type Mode string
@@ -67,27 +70,34 @@ const (
 )
 
 type Request struct {
-	RequestID                 string
-	UserID                    int64
-	Username                  string
-	UserEmail                 string
-	APIKeyID                  int64
-	APIKeyName                string
-	GroupID                   *int64
-	GroupName                 string
-	Provider                  string
-	Endpoint                  string
-	Protocol                  string
-	Model                     string
-	Body                      []byte
-	InstructionBody           []byte
-	InstructionModelOverride  bool
-	InstructionAuditExcluded  bool
-	InstructionAuditCompleted bool
-	UserAgent                 string
-	InstructionClientType     string
-	TrustedInternalClient     bool
-	Stage                     string
+	RequestID                  string
+	UserID                     int64
+	Username                   string
+	UserEmail                  string
+	APIKeyID                   int64
+	APIKeyName                 string
+	GroupID                    *int64
+	GroupName                  string
+	Provider                   string
+	Endpoint                   string
+	Protocol                   string
+	Model                      string
+	Body                       []byte
+	InstructionBody            []byte
+	InstructionModelOverride   bool
+	InstructionAuditExcluded   bool
+	InstructionAuditCompleted  bool
+	UserAgent                  string
+	InstructionClientType      string
+	TrustedInternalClient      bool
+	Stage                      string
+	PromptAuditRouteStamped    bool
+	PromptAuditSource          string
+	InstructionConfigVersion   int64
+	PromptClientProfileKey     string
+	PromptClientProfileName    string
+	PromptAuditTriggerReason   string
+	PromptModelContractVersion int
 }
 
 func (r Request) Clone() Request {
@@ -101,26 +111,66 @@ func (r Request) Clone() Request {
 }
 
 type PromptSnapshot struct {
-	RequestID          string `json:"request_id"`
-	UserID             int64  `json:"user_id"`
-	UsernameSnapshot   string `json:"username"`
-	UserEmailSnapshot  string `json:"user_email"`
-	APIKeyID           int64  `json:"api_key_id"`
-	APIKeyNameSnapshot string `json:"api_key_name"`
-	GroupID            *int64 `json:"group_id,omitempty"`
-	GroupName          string `json:"group_name"`
-	Provider           string `json:"provider"`
-	Endpoint           string `json:"endpoint"`
-	Protocol           string `json:"protocol"`
-	Model              string `json:"model"`
-	PromptHash         string `json:"prompt_hash"`
-	RedactedPreview    string `json:"redacted_preview"`
-	FullPrompt         string `json:"full_prompt"`
-	PromptLength       int    `json:"prompt_length"`
-	MessageCount       int    `json:"message_count"`
-	Stage              string `json:"stage"`
+	RequestID                string `json:"request_id"`
+	UserID                   int64  `json:"user_id"`
+	UsernameSnapshot         string `json:"username"`
+	UserEmailSnapshot        string `json:"user_email"`
+	APIKeyID                 int64  `json:"api_key_id"`
+	APIKeyNameSnapshot       string `json:"api_key_name"`
+	GroupID                  *int64 `json:"group_id,omitempty"`
+	GroupName                string `json:"group_name"`
+	Provider                 string `json:"provider"`
+	Endpoint                 string `json:"endpoint"`
+	Protocol                 string `json:"protocol"`
+	Model                    string `json:"model"`
+	PromptHash               string `json:"prompt_hash"`
+	RedactedPreview          string `json:"redacted_preview"`
+	FullPrompt               string `json:"full_prompt"`
+	PromptLength             int    `json:"prompt_length"`
+	MessageCount             int    `json:"message_count"`
+	Stage                    string `json:"stage"`
+	AuditSource              string `json:"audit_source"`
+	InstructionConfigVersion int64  `json:"instruction_config_version"`
+	ClientProfileKey         string `json:"client_profile_key"`
+	ClientProfileName        string `json:"client_profile_name"`
+	TriggerReason            string `json:"trigger_reason"`
+	ModelContractVersion     int    `json:"model_contract_version"`
 
 	ScanText string `json:"-"`
+}
+
+type PromptAuditRoute struct {
+	Eligible                     bool
+	InstructionConfigUnavailable bool
+	AuditSource                  string
+	InstructionConfigVersion     int64
+	ClientProfileKey             string
+	ClientProfileName            string
+	TriggerReason                string
+	ModelContractVersion         int
+}
+
+func (r *Request) StampPromptAuditRoute(route PromptAuditRoute) {
+	if r == nil || !route.Eligible {
+		return
+	}
+	r.PromptAuditRouteStamped = true
+	r.PromptAuditSource = route.AuditSource
+	r.InstructionConfigVersion = route.InstructionConfigVersion
+	r.PromptClientProfileKey = route.ClientProfileKey
+	r.PromptClientProfileName = route.ClientProfileName
+	r.PromptAuditTriggerReason = route.TriggerReason
+	r.PromptModelContractVersion = route.ModelContractVersion
+}
+
+func validPromptAuditRouteStamp(request Request) bool {
+	return request.PromptAuditRouteStamped &&
+		request.PromptAuditSource == PromptAuditSourceInstructionV2 &&
+		request.InstructionConfigVersion > 0 &&
+		request.PromptClientProfileKey != "" &&
+		request.PromptAuditTriggerReason != "" &&
+		request.PromptModelContractVersion == PromptAuditModelContractVersion &&
+		!isResponsesProtocolFamily(request.Protocol, request.Endpoint)
 }
 
 func (s PromptSnapshot) Redacted() PromptSnapshot {
@@ -129,22 +179,23 @@ func (s PromptSnapshot) Redacted() PromptSnapshot {
 }
 
 type NormalizedResult struct {
-	Decision          EventDecision      `json:"decision"`
-	RiskLevel         RiskLevel          `json:"risk_level"`
-	Action            Action             `json:"action"`
-	Safety            string             `json:"safety"`
-	Categories        []string           `json:"categories"`
-	MatchedScanners   []string           `json:"matched_scanners"`
-	ScannerScores     map[string]float64 `json:"scanner_scores"`
-	ScannerEvidence   map[string]string  `json:"scanner_evidence"`
-	ScannerBackend    string             `json:"scanner_backend"`
-	ScannerVersion    string             `json:"scanner_version"`
-	GuardEndpointID   string             `json:"guard_endpoint_id"`
-	PolicyID          string             `json:"policy_id"`
-	PolicyVersion     int                `json:"policy_version"`
-	ChunkTotal        int                `json:"chunk_total"`
-	LatencyMS         int                `json:"latency_ms"`
-	UnknownCategories []string           `json:"unknown_categories,omitempty"`
+	Decision              EventDecision      `json:"decision"`
+	RiskLevel             RiskLevel          `json:"risk_level"`
+	Action                Action             `json:"action"`
+	Safety                string             `json:"safety"`
+	Categories            []string           `json:"categories"`
+	MatchedScanners       []string           `json:"matched_scanners"`
+	ScannerScores         map[string]float64 `json:"scanner_scores"`
+	ScannerEvidence       map[string]string  `json:"scanner_evidence"`
+	ScannerBackend        string             `json:"scanner_backend"`
+	ScannerVersion        string             `json:"scanner_version"`
+	EffectiveResponseMode string             `json:"effective_response_mode"`
+	GuardEndpointID       string             `json:"guard_endpoint_id"`
+	PolicyID              string             `json:"policy_id"`
+	PolicyVersion         int                `json:"policy_version"`
+	ChunkTotal            int                `json:"chunk_total"`
+	LatencyMS             int                `json:"latency_ms"`
+	UnknownCategories     []string           `json:"unknown_categories,omitempty"`
 }
 
 type PromptDecision struct {
@@ -193,15 +244,16 @@ type IssueSummary struct {
 }
 
 type ProbeResult struct {
-	OK           bool      `json:"ok"`
-	Status       string    `json:"status"`
-	ErrorCode    string    `json:"error_code,omitempty"`
-	Message      string    `json:"message"`
-	LatencyMS    int       `json:"latency_ms"`
-	HTTPStatus   int       `json:"http_status"`
-	Retryable    bool      `json:"retryable"`
-	CheckedAt    time.Time `json:"checked_at"`
-	TokenApplied bool      `json:"token_applied"`
+	OK                    bool      `json:"ok"`
+	Status                string    `json:"status"`
+	ErrorCode             string    `json:"error_code,omitempty"`
+	Message               string    `json:"message"`
+	LatencyMS             int       `json:"latency_ms"`
+	HTTPStatus            int       `json:"http_status"`
+	Retryable             bool      `json:"retryable"`
+	CheckedAt             time.Time `json:"checked_at"`
+	TokenApplied          bool      `json:"token_applied"`
+	EffectiveResponseMode string    `json:"effective_response_mode,omitempty"`
 }
 
 type GuardMetricsSnapshot struct {

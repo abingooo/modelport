@@ -317,6 +317,8 @@ func eventColumns(alias string) string {
 		%[1]s.stage,%[1]s.decision,%[1]s.risk_level,%[1]s.action,%[1]s.categories,%[1]s.matched_scanners,
 		%[1]s.scanner_scores,%[1]s.scanner_evidence,%[1]s.scanner_backend,%[1]s.scanner_version,
 		%[1]s.guard_endpoint_id,%[1]s.policy_id,%[1]s.policy_version,%[1]s.config_version,
+		%[1]s.audit_source,%[1]s.instruction_config_version,%[1]s.client_profile_key,%[1]s.client_profile_name,
+		%[1]s.trigger_reason,%[1]s.model_contract_version,%[1]s.effective_response_mode,
 		%[1]s.chunk_total,%[1]s.latency_ms,%[1]s.created_at`, alias)
 }
 
@@ -337,7 +339,10 @@ func scanEvent(row rowScanner, withFullPrompt ...bool) (*Event, error) {
 		&event.Snapshot.PromptHash, &event.Snapshot.RedactedPreview, &event.Snapshot.Stage, &event.Decision,
 		&event.RiskLevel, &event.Action, &categories, &matched, &scores, &evidence, &event.ScannerBackend,
 		&event.ScannerVersion, &event.GuardEndpointID, &event.PolicyID, &event.PolicyVersion,
-		&event.ConfigVersion, &event.ChunkTotal, &event.LatencyMS, &event.CreatedAt}
+		&event.ConfigVersion, &event.Snapshot.AuditSource, &event.Snapshot.InstructionConfigVersion,
+		&event.Snapshot.ClientProfileKey, &event.Snapshot.ClientProfileName, &event.Snapshot.TriggerReason,
+		&event.Snapshot.ModelContractVersion, &event.EffectiveResponseMode,
+		&event.ChunkTotal, &event.LatencyMS, &event.CreatedAt}
 	if len(withFullPrompt) > 0 && withFullPrompt[0] {
 		dest = append(dest, &event.Snapshot.FullPrompt)
 	}

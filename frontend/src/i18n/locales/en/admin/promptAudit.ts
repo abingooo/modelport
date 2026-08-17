@@ -1,7 +1,7 @@
 export default {
   promptAudit: {
     title: 'Prompt Audit',
-    description: 'Review user input asynchronously or block it synchronously through OpenAI-compatible Qwen3Guard nodes. Full prompts are stored with events for admin review.',
+    description: 'Supplement Instruction Audit for eligible non-Responses requests with OpenAI-compatible safety models. Full prompts are stored with events for admin review.',
     configVersion: 'Config version v{version}',
     tabs: { config: 'Configuration', events: 'Events' },
     actions: { refresh: 'Refresh runtime', retry: 'Retry', Allow: 'Allow', Warn: 'Warn', Block: 'Block' },
@@ -42,18 +42,20 @@ export default {
     },
     metrics: { total: 'Total', allowed: 'Allowed', flagged: 'Flagged', blocked: 'Blocked', unavailable: 'Unavailable', timeouts: 'Timeouts', failovers: 'Failovers' },
     pool: {
-      title: 'Audit pool', description: 'Enabled OpenAI-compatible nodes are tried in order. Probes run from the server network.',
+      title: 'Audit pool', description: 'Enabled OpenAI-compatible safety-model nodes are tried in order. Probes run from the server network.',
       add: 'Add node', edit: 'Edit node', empty: 'No audit nodes configured.', node: 'Node', model: 'Model', limits: 'Timeout / chunk limit', credential: 'Credential and probe',
       configured: 'API Key configured', missing: 'API Key missing', invalid: 'API Key cannot be decrypted; re-enter it', probe: 'Test connection', probing: 'Probing…',
       probeProgress: 'Config validated ✓ · request sent · awaiting service response…', probeResult: 'Config ✓ · request ✓ · HTTP {http} · {status} · {latency} ms',
-      name: 'Node name', id: 'Stable node ID', baseUrl: 'Base URL', apiKey: 'API Key', keepSecret: 'Leave blank to keep the saved API Key', reenterSecret: 'The saved API Key cannot be decrypted (encryption key changed); enter a new one',
-      secretHint: 'Plaintext exists only in this editor and is cleared immediately after a successful save.', clearSecret: 'Explicitly clear the saved API Key', timeout: 'Total timeout (ms)', inputLimit: 'Unicode characters per chunk',
+      name: 'Node name', id: 'Stable node ID', provider: 'Provider preset', providers: { qwen: 'Qwen', deepseek: 'DeepSeek', doubao: 'Doubao', custom: 'Custom' }, baseUrl: 'Base URL', apiKey: 'API Key', keepSecret: 'Leave blank to keep the saved API Key', reenterSecret: 'The saved API Key cannot be decrypted (encryption key changed); enter a new one',
+      secretHint: 'Plaintext exists only in this editor and is cleared immediately after a successful save.', clearSecret: 'Explicitly clear the saved API Key', modelHint: 'The model ID remains freely editable; provider presets only offer suggestions.', responseMode: 'Response mode', responseModes: { auto: 'Auto-detect', json_schema: 'JSON Schema', json_object: 'JSON object', text_json: 'JSON in text' }, configuredResponseMode: 'Configured mode', effectiveResponseMode: 'Effective mode', pendingProbe: 'Awaiting successful probe', maxOutputTokens: 'Maximum output tokens', timeout: 'Total timeout (ms)', inputLimit: 'Unicode characters per chunk',
+      requiresReconfigure: 'Legacy node requires reconfiguration', requiresReconfigureHint: 'Edit and save this node before enabling it.',
       toggleNode: 'Toggle node {name}', deleteConfirm: 'Remove “{name}” from the draft? It takes effect after saving.',
     },
     policy: {
-      title: 'Audit policy', description: 'Configure group scope, nine input-risk categories, workers, and queue bounds.', scope: 'Scope', allGroups: 'All groups', selectedGroups: 'Selected groups',
+      title: 'Audit policy', description: 'Review inherited Instruction Audit scope, then configure input-risk categories, workers, and queue bounds.', scope: 'Scope', allGroups: 'All groups', selectedGroups: 'Selected groups',
       searchGroups: 'Search groups', noGroups: 'No matching groups', missingGroups: 'Configured IDs for groups that no longer exist', selectedCount: '{count} groups selected',
-      scanners: 'Qwen3Guard input-risk categories', workerCount: 'Worker count', queueCapacity: 'Persistent queue capacity', strategy: 'Node strategy', strategyHint: 'Try nodes in configuration order and fail over when allowed.',
+      inheritedScope: 'Inherited Instruction Audit scope', inheritedScopeHint: 'Prompt Audit uses effective Instruction Audit V2 group scopes. Scope changes are managed in Instruction Audit.', instructionModes: { off: 'Instruction Audit off', observe: 'Instruction Audit observe', enforce: 'Instruction Audit enforce' }, scopeLoading: 'Loading effective Instruction Audit scope…', instructionModeOff: 'Instruction Audit is currently off, so the supplement does not process requests.', noInheritedGroups: 'No effective Instruction Audit group scope is available.', scopeBindings: '{count} effective client scopes', nonResponsesOnly: 'This supplement considers eligible non-Responses requests only. Responses requests remain exclusively handled by Instruction Audit.', manageInstructionScope: 'Manage Instruction Audit scopes',
+      scanners: 'Input-risk categories', workerCount: 'Worker count', queueCapacity: 'Persistent queue capacity', strategy: 'Node strategy', strategyHint: 'Try nodes in configuration order and fail over when allowed.',
     },
     saveBar: { enabled: 'Enable prompt audit', blocking: 'Synchronous blocking', blockingLatestTurnOnly: 'Only latest input and prior output', storePass: 'Store safe events', dirty: 'Unsaved changes', synced: 'Configuration synced' },
     blockingConfirm: {
@@ -91,10 +93,10 @@ export default {
     },
     messages: { saved: 'Prompt Audit configuration saved; plaintext API Key state was cleared.', probeSucceeded: 'The audit node is reachable.', deleted: 'Deleted {count} audit events.' },
     errors: {
-      loadConfig: 'Unable to load Prompt Audit configuration.', loadRuntime: 'Unable to load Prompt Audit runtime.', loadGroups: 'Unable to load groups.', loadEvents: 'Unable to load audit events.', loadDetail: 'Unable to load event details.', saveConfig: 'Unable to save the configuration.', probe: 'Node probe failed.', delete: 'Unable to delete events.', previewDelete: 'Unable to create a deletion preview. Check the time range.', deleteConfirmation: 'The deletion confirmation is invalid or expired. Preview again.',
+      loadConfig: 'Unable to load Prompt Audit configuration.', loadRuntime: 'Unable to load Prompt Audit runtime.', loadGroups: 'Unable to load groups.', loadInstructionScope: 'Unable to load the inherited Instruction Audit scope.', loadEvents: 'Unable to load audit events.', loadDetail: 'Unable to load event details.', saveConfig: 'Unable to save the configuration.', probe: 'Node probe failed.', delete: 'Unable to delete events.', previewDelete: 'Unable to create a deletion preview. Check the time range.', deleteConfirmation: 'The deletion confirmation is invalid or expired. Preview again.',
       prompt_audit_config_conflict: 'Another administrator updated this configuration. Reload the server version before deciding how to merge your draft.',
       prompt_audit_encryption_key_required: 'No fixed encryption key is configured, so audit node API Keys would be lost on restart. Set the TOTP_ENCRYPTION_KEY environment variable and restart the service first.',
-      prompt_guard_requires_audit_enabled: 'Enable Prompt Audit before synchronous blocking.', prompt_audit_invalid_endpoint: 'The audit node configuration is invalid.', prompt_audit_endpoint_required: 'Enable at least one audit node before enabling Prompt Audit.', prompt_audit_groups_required: 'Select at least one group in selected-group mode.', prompt_audit_scanners_required: 'Enable at least one risk category.',
+      prompt_guard_requires_audit_enabled: 'Enable Prompt Audit before synchronous blocking.', prompt_audit_invalid_endpoint: 'The audit node configuration is invalid.', prompt_audit_endpoint_required: 'Enable at least one audit node before enabling Prompt Audit.', prompt_audit_groups_required: 'Select at least one group in selected-group mode.', prompt_audit_scanners_required: 'Enable at least one risk category.', prompt_audit_endpoint_requires_reconfigure: 'Edit and save this legacy node before enabling it.', prompt_audit_endpoint_token_replacement_required: 'The saved credential cannot be decrypted. Re-enter the API Key or explicitly clear it before enabling this node.', prompt_audit_retired_native_model: 'This retired Qwen3Guard model uses the legacy native contract and cannot run through the generic OpenAI-compatible protocol. Choose a compatible safety model.', prompt_audit_invalid_response_mode: 'The node response mode is invalid.', prompt_audit_invalid_max_output_tokens: 'The node output-token limit must be between 64 and 4096.', prompt_audit_endpoint_probe_required: 'Auto response mode must pass a real probe before the node can be enabled.', prompt_audit_endpoint_probe_failed: 'The node did not pass the safety-classification probe.',
     },
   },
 }

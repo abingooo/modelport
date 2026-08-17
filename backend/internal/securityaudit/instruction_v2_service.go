@@ -19,13 +19,15 @@ import (
 )
 
 var (
-	errInstructionV2ConfigConflict      = errors.New("instruction audit v2 configuration conflict")
-	errInstructionV2BuiltInProfile      = errors.New("built-in instruction audit v2 client profile cannot be deleted")
-	errInstructionV2ProfileInUse        = errors.New("instruction audit v2 client profile is in use")
-	errInstructionV2InvalidScopeProfile = errors.New("instruction audit v2 scope references an invalid client profile")
-	errInstructionV2AINodeSlotInUse     = errors.New("instruction audit v2 AI node slot is in use")
-	errInstructionV2RevokedHash         = errors.New("revoked instruction audit v2 hash cannot be reactivated")
-	errInstructionV2ReviewLeaseLost     = errors.New("instruction audit v2 review lease lost")
+	errInstructionV2ConfigConflict        = errors.New("instruction audit v2 configuration conflict")
+	errInstructionV2BuiltInProfile        = errors.New("built-in instruction audit v2 client profile cannot be deleted")
+	errInstructionV2ProfileInUse          = errors.New("instruction audit v2 client profile is in use")
+	errInstructionV2InvalidScopeProfile   = errors.New("instruction audit v2 scope references an invalid client profile")
+	errInstructionV2PromptProfileDisabled = errors.New("instruction audit v2 prompt audit requires an enabled client profile")
+	errInstructionV2PromptInternalProfile = errors.New("instruction audit v2 prompt audit cannot be enabled for internal clients")
+	errInstructionV2AINodeSlotInUse       = errors.New("instruction audit v2 AI node slot is in use")
+	errInstructionV2RevokedHash           = errors.New("revoked instruction audit v2 hash cannot be reactivated")
+	errInstructionV2ReviewLeaseLost       = errors.New("instruction audit v2 review lease lost")
 )
 
 const (
@@ -203,6 +205,39 @@ func (s *InstructionV2Service) ConfigVersion() int64 {
 		return snapshot.Config.ConfigVersion
 	}
 	return 0
+}
+
+func (s *InstructionV2Service) ResolvePromptAuditRoute(request Request) PromptAuditRoute {
+	groupID := instructionGroupID(request.GroupID)
+	if isResponsesProtocolFamily(request.Protocol, request.Endpoint) || request.TrustedInternalClient || groupID <= 0 {
+		return PromptAuditRoute{}
+	}
+	if s == nil {
+		return PromptAuditRoute{InstructionConfigUnavailable: true}
+	}
+	snapshot := s.snapshot.Load()
+	if snapshot == nil {
+		return PromptAuditRoute{InstructionConfigUnavailable: true}
+	}
+	if s.snapshotStale(snapshot, time.Now()) {
+		return PromptAuditRoute{InstructionConfigUnavailable: true}
+	}
+	if snapshot.Config.EffectiveMode == InstructionV2ModeOff || len(snapshot.ScopesByGroup[groupID]) == 0 {
+		return PromptAuditRoute{}
+	}
+	profile := classifyInstructionV2Client(snapshot, request.UserAgent, request.TrustedInternalClient).profile
+	if !profile.Enabled || !profile.PromptAuditEnabled || profile.ImmutableInternal ||
+		profile.ProfileKey == InstructionClientModelPortInternal {
+		return PromptAuditRoute{}
+	}
+	route := PromptAuditRoute{
+		Eligible: true, AuditSource: PromptAuditSourceInstructionV2,
+		InstructionConfigVersion: snapshot.Config.ConfigVersion,
+		ClientProfileKey:         profile.ProfileKey, ClientProfileName: profile.Name,
+		TriggerReason:        PromptAuditTriggerNonResponses,
+		ModelContractVersion: PromptAuditModelContractVersion,
+	}
+	return route
 }
 
 func (s *InstructionV2Service) EvaluateInstruction(ctx context.Context, request Request) *InstructionDecision {

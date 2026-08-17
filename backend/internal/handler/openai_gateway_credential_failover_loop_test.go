@@ -19,7 +19,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
-	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -885,7 +884,7 @@ func TestGrokWebSearchAndTTSAuditBlockBeforeBillingAndScheduling(t *testing.T) {
 		h := &GatewayHandler{
 			gatewayService:           gatewayService,
 			billingCacheService:      billing,
-			securityAuditCoordinator: securityaudit.NewCoordinator(nil, blockingHandlerPromptEngine()),
+			securityAuditCoordinator: newPromptPatchTestCoordinator(blockingHandlerPromptEngine()),
 		}
 		apiKey := &service.APIKey{
 			ID: 902, UserID: 903, GroupID: &groupID, Group: group,
@@ -912,7 +911,7 @@ func TestGrokWebSearchAndTTSAuditBlockBeforeBillingAndScheduling(t *testing.T) {
 		billing := service.NewBillingCacheService(billingSpy, nil, nil, nil, nil, nil, &config.Config{}, nil)
 		defer billing.Stop()
 		h.billingCacheService = billing
-		h.securityAuditCoordinator = securityaudit.NewCoordinator(nil, blockingHandlerPromptEngine())
+		h.securityAuditCoordinator = newPromptPatchTestCoordinator(blockingHandlerPromptEngine())
 		zero := 0.0
 		groupID := int64(901)
 		apiKey := &service.APIKey{

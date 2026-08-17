@@ -22,6 +22,15 @@ func (prefixEncryptor) Decrypt(value string) (string, error) {
 	return value[4:], nil
 }
 
+func promptAuditStampedTestRequest() Request {
+	return Request{
+		Protocol: "openai_chat_completions", Body: []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
+		PromptAuditRouteStamped: true, PromptAuditSource: PromptAuditSourceInstructionV2,
+		InstructionConfigVersion: 1, PromptClientProfileKey: "other",
+		PromptAuditTriggerReason: PromptAuditTriggerNonResponses, PromptModelContractVersion: PromptAuditModelContractVersion,
+	}
+}
+
 // testTotpKeyConfig mirrors a deployment with a fixed TOTP_ENCRYPTION_KEY so
 // unit tests may persist endpoint tokens.
 func testTotpKeyConfig() *config.Config {
@@ -45,12 +54,14 @@ func TestDefaultConfigIsOff(t *testing.T) {
 
 func TestBlockingLatestTurnOnlyConfigRoundTrip(t *testing.T) {
 	manager := &ConfigManager{encryptor: prefixEncryptor{}, encryptionKeyConfigured: true}
+	responseMode := ResponseModeTextJSON
 	request := UpdateConfigRequest{
 		ExpectedConfigVersion: 1, Enabled: true, BlockingEnabled: true, BlockingLatestTurnOnly: true,
 		Strategy: "priority", WorkerCount: 1, QueueCapacity: 10, Scanners: []string{"pii"}, AllGroups: true,
 		Endpoints: []UpdateEndpoint{{
 			ID: "guard-1", Name: "Guard", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080",
-			Model: DefaultGuardModel, TimeoutMS: 1000, InputLimit: 1000, Enabled: true,
+			Model: testReviewerModel, TimeoutMS: 1000, InputLimit: 1000, ResponseMode: &responseMode,
+			EffectiveResponseMode: responseMode, ProbeVerified: true, Enabled: true,
 		}},
 	}
 	next, err := manager.buildNextStorage(DefaultStorageConfig(), request, 9)
@@ -73,7 +84,7 @@ func TestConfigRejectsBlockingWithoutAudit(t *testing.T) {
 
 func TestPublicConfigNeverMarshalsToken(t *testing.T) {
 	storage := DefaultStorageConfig()
-	storage.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: DefaultGuardModel, TokenCiphertext: "GUARD_TOKEN_CANARY_SECRET", TimeoutMS: 1000, InputLimit: 1000, Enabled: true}}
+	storage.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: testReviewerModel, TokenCiphertext: "GUARD_TOKEN_CANARY_SECRET", TimeoutMS: 1000, InputLimit: 1000, Enabled: true}}
 	public := PublicFromStorage(storage, true, nil)
 	raw, err := json.Marshal(public)
 	require.NoError(t, err)
@@ -151,7 +162,7 @@ func TestConfigManagerPublicRequiresSuccessfullyLoadedSnapshot(t *testing.T) {
 // default v1 config that makes every save fail the CAS version check.
 func TestConfigManagerUndecryptableTokenKeepsConfigVisibleAndRecoverable(t *testing.T) {
 	const canary = "persisted-token-canary"
-	persisted := `{"enabled":true,"blocking_enabled":false,"config_version":9,"endpoints":[{"id":"g1","name":"Guard","protocol":"openai_compatible","base_url":"http://127.0.0.1:8080","model":"m","token_ciphertext":"` + canary + `","timeout_ms":1000,"input_limit":1000,"enabled":true}]}`
+	persisted := `{"model_contract_version":2,"enabled":true,"blocking_enabled":false,"config_version":9,"endpoints":[{"id":"g1","name":"Guard","protocol":"openai_compatible","base_url":"http://127.0.0.1:8080","model":"m","token_ciphertext":"` + canary + `","timeout_ms":1000,"input_limit":1000,"response_mode":"text_json","max_output_tokens":256,"effective_response_mode":"text_json","enabled":true}]}`
 	manager := NewConfigManager(nil, staticSettingRepository{values: map[string]string{
 		SettingKeyPromptAuditConfig: persisted,
 		SettingKeyRiskControl:       "true",
@@ -183,7 +194,7 @@ func TestConfigManagerUndecryptableTokenKeepsConfigVisibleAndRecoverable(t *test
 }
 
 func TestConfigManagerUndecryptableTokenStillFailsClosedForBlockingIntent(t *testing.T) {
-	persisted := `{"enabled":true,"blocking_enabled":true,"config_version":9,"endpoints":[{"id":"g1","name":"Guard","protocol":"openai_compatible","base_url":"http://127.0.0.1:8080","model":"m","token_ciphertext":"undecryptable","timeout_ms":1000,"input_limit":1000,"enabled":true}]}`
+	persisted := `{"model_contract_version":2,"enabled":true,"blocking_enabled":true,"config_version":9,"endpoints":[{"id":"g1","name":"Guard","protocol":"openai_compatible","base_url":"http://127.0.0.1:8080","model":"m","token_ciphertext":"undecryptable","timeout_ms":1000,"input_limit":1000,"response_mode":"text_json","max_output_tokens":256,"effective_response_mode":"text_json","enabled":true}]}`
 	manager := NewConfigManager(nil, staticSettingRepository{values: map[string]string{
 		SettingKeyPromptAuditConfig: persisted,
 		SettingKeyRiskControl:       "true",
@@ -192,10 +203,7 @@ func TestConfigManagerUndecryptableTokenStillFailsClosedForBlockingIntent(t *tes
 	require.Equal(t, ModeBlocking, manager.EffectiveMode())
 
 	service := &PromptService{config: manager, evaluator: NewGuardEvaluator(NewOpenAICompatibleScanner(), nil, nil)}
-	decision, err := service.Evaluate(context.Background(), Request{
-		Protocol: "openai_chat_completions",
-		Body:     []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
-	})
+	decision, err := service.Evaluate(context.Background(), promptAuditStampedTestRequest())
 	require.Error(t, err, "blocking intent with no usable endpoint must not let requests pass unaudited")
 	require.Nil(t, decision)
 	var guardErr *GuardError
@@ -206,12 +214,18 @@ func TestConfigManagerUndecryptableTokenStillFailsClosedForBlockingIntent(t *tes
 func TestBuildNextStoragePreserveReplaceAndClearToken(t *testing.T) {
 	manager := &ConfigManager{encryptor: prefixEncryptor{}, encryptionKeyConfigured: true}
 	current := DefaultStorageConfig()
-	current.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: DefaultGuardModel, TokenCiphertext: "enc:old", TimeoutMS: 1000, InputLimit: 1000}}
+	current.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: testReviewerModel, TokenCiphertext: "enc:old", TimeoutMS: 1000, InputLimit: 1000}}
 	base := UpdateConfigRequest{ExpectedConfigVersion: 1, Strategy: "priority", WorkerCount: 1, QueueCapacity: 10, Scanners: []string{"PII"}, AllGroups: true,
-		Endpoints: []UpdateEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", TimeoutMS: 1000, InputLimit: 1000}}}
+		Endpoints: []UpdateEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: testReviewerModel, TimeoutMS: 1000, InputLimit: 1000}}}
 	preserved, err := manager.buildNextStorage(current, base, 9)
 	require.NoError(t, err)
 	require.Equal(t, "enc:old", preserved.Endpoints[0].TokenCiphertext)
+	changedHost := base
+	changedHost.Endpoints = append([]UpdateEndpoint(nil), base.Endpoints...)
+	changedHost.Endpoints[0].BaseURL = "http://127.0.0.1:8081"
+	_, err = manager.buildNextStorage(current, changedHost, 9)
+	require.Error(t, err)
+	require.Equal(t, "prompt_audit_token_required_for_base_url_change", infraerrors.Reason(err))
 	replacedReq := base
 	replacedReq.Endpoints = append([]UpdateEndpoint(nil), base.Endpoints...)
 	replacedReq.Endpoints[0].Token = "new"
@@ -234,9 +248,9 @@ func TestBuildNextStoragePreserveReplaceAndClearToken(t *testing.T) {
 func TestBuildNextStorageRejectsNewTokenWithoutConfiguredEncryptionKey(t *testing.T) {
 	manager := &ConfigManager{encryptor: prefixEncryptor{}, encryptionKeyConfigured: false}
 	current := DefaultStorageConfig()
-	current.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: DefaultGuardModel, TokenCiphertext: "enc:old", TimeoutMS: 1000, InputLimit: 1000}}
+	current.Endpoints = []StorageEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: testReviewerModel, TokenCiphertext: "enc:old", TimeoutMS: 1000, InputLimit: 1000}}
 	base := UpdateConfigRequest{ExpectedConfigVersion: 1, Strategy: "priority", WorkerCount: 1, QueueCapacity: 10, Scanners: []string{"PII"}, AllGroups: true,
-		Endpoints: []UpdateEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", TimeoutMS: 1000, InputLimit: 1000}}}
+		Endpoints: []UpdateEndpoint{{ID: "one", Name: "One", Protocol: "openai_compatible", BaseURL: "http://127.0.0.1:8080", Model: testReviewerModel, TimeoutMS: 1000, InputLimit: 1000}}}
 
 	newTokenReq := base
 	newTokenReq.Endpoints = append([]UpdateEndpoint(nil), base.Endpoints...)
@@ -301,7 +315,7 @@ func TestConfigManagerStaleWeakerSnapshotFailsClosedWhenBlockingExpected(t *test
 	require.Equal(t, ModeBlocking, manager.EffectiveMode())
 
 	service := &PromptService{config: manager, evaluator: NewGuardEvaluator(nil, nil, nil)}
-	decision, err := service.Evaluate(context.Background(), Request{Protocol: "openai_chat_completions", Body: []byte(`{"messages":[{"role":"user","content":"hi"}]}`)})
+	decision, err := service.Evaluate(context.Background(), promptAuditStampedTestRequest())
 	require.Error(t, err)
 	require.Nil(t, decision)
 	var guardErr *GuardError
@@ -338,10 +352,7 @@ func TestConfigManagerStartupLoadFailureDoesNotBlockWhenBlockingNotIntended(t *t
 	require.Equal(t, ModeOff, manager.EffectiveMode())
 
 	service := &PromptService{config: manager, evaluator: NewGuardEvaluator(nil, nil, nil)}
-	decision, evalErr := service.Evaluate(context.Background(), Request{
-		Protocol: "openai_chat_completions",
-		Body:     []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
-	})
+	decision, evalErr := service.Evaluate(context.Background(), promptAuditStampedTestRequest())
 	require.NoError(t, evalErr)
 	require.NotNil(t, decision)
 	require.Equal(t, DecisionAllow, decision.Kind)
@@ -357,10 +368,7 @@ func TestConfigManagerStartupLoadFailureFailsClosedWhenBlockingIntended(t *testi
 	require.Equal(t, ModeBlocking, manager.EffectiveMode())
 
 	service := &PromptService{config: manager, evaluator: NewGuardEvaluator(nil, nil, nil)}
-	decision, err := service.Evaluate(context.Background(), Request{
-		Protocol: "openai_chat_completions",
-		Body:     []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
-	})
+	decision, err := service.Evaluate(context.Background(), promptAuditStampedTestRequest())
 	require.Error(t, err)
 	require.Nil(t, decision)
 	var guardErr *GuardError
@@ -391,10 +399,7 @@ func TestConfigManagerUntrustedClearsOnSuccessfulDisable(t *testing.T) {
 	require.Equal(t, ModeOff, manager.EffectiveMode())
 
 	service := &PromptService{config: manager, evaluator: NewGuardEvaluator(nil, nil, nil)}
-	decision, evalErr := service.Evaluate(context.Background(), Request{
-		Protocol: "openai_chat_completions",
-		Body:     []byte(`{"messages":[{"role":"user","content":"hi"}]}`),
-	})
+	decision, evalErr := service.Evaluate(context.Background(), promptAuditStampedTestRequest())
 	require.NoError(t, evalErr)
 	require.Equal(t, DecisionAllow, decision.Kind)
 }
@@ -434,8 +439,6 @@ func TestUpdateConfigStrictBoundsAndKnownValues(t *testing.T) {
 		{name: "capacity low", mutate: func(req *UpdateConfigRequest) { req.QueueCapacity = 0 }, reason: "prompt_audit_invalid_queue_capacity"},
 		{name: "capacity high", mutate: func(req *UpdateConfigRequest) { req.QueueCapacity = MaxQueueCapacity + 1 }, reason: "prompt_audit_invalid_queue_capacity"},
 		{name: "unknown scanner", mutate: func(req *UpdateConfigRequest) { req.Scanners = []string{"made_up"} }, reason: "prompt_audit_invalid_scanner"},
-		{name: "group required", mutate: func(req *UpdateConfigRequest) { req.AllGroups = false; req.GroupIDs = nil }, reason: "prompt_audit_groups_required"},
-		{name: "group positive", mutate: func(req *UpdateConfigRequest) { req.AllGroups = false; req.GroupIDs = []int64{0} }, reason: "prompt_audit_invalid_group"},
 		{name: "timeout low", mutate: func(req *UpdateConfigRequest) { req.Endpoints[0].TimeoutMS = MinTimeoutMS - 1 }, reason: "prompt_audit_invalid_timeout"},
 		{name: "timeout high", mutate: func(req *UpdateConfigRequest) { req.Endpoints[0].TimeoutMS = MaxTimeoutMS + 1 }, reason: "prompt_audit_invalid_timeout"},
 		{name: "input low", mutate: func(req *UpdateConfigRequest) { req.Endpoints[0].InputLimit = MinInputLimit - 1 }, reason: "prompt_audit_invalid_input_limit"},

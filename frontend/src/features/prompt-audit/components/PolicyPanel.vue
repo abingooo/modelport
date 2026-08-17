@@ -7,39 +7,52 @@
 
     <div class="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,0.45fr)]">
       <div class="rounded-xl border border-gray-200 p-4 dark:border-dark-700/60 dark:bg-dark-900/20 sm:p-5">
-        <fieldset>
-          <legend class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.promptAudit.policy.scope') }}</legend>
-          <div class="mt-3 flex flex-wrap gap-5 text-sm text-gray-700 dark:text-dark-200">
-            <label class="flex items-center gap-2">
-              <input type="radio" name="prompt-audit-scope" :checked="draft.all_groups" @change="patch({ all_groups: true, group_ids: [] })" />
-              {{ t('admin.promptAudit.policy.allGroups') }}
-            </label>
-            <label class="flex items-center gap-2">
-              <input type="radio" name="prompt-audit-scope" :checked="!draft.all_groups" @change="patch({ all_groups: false })" />
-              {{ t('admin.promptAudit.policy.selectedGroups') }}
-            </label>
+        <div data-test="inherited-scope">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.promptAudit.policy.inheritedScope') }}</h3>
+              <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-dark-400">{{ t('admin.promptAudit.policy.inheritedScopeHint') }}</p>
+            </div>
+            <span class="rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600 dark:bg-dark-800 dark:text-dark-300">
+              {{ t(`admin.promptAudit.policy.instructionModes.${instructionMode}`) }}
+            </span>
           </div>
-        </fieldset>
 
-        <div v-if="!draft.all_groups" class="mt-4">
-          <label class="block text-sm text-gray-700 dark:text-dark-200">
-            <span>{{ t('admin.promptAudit.policy.searchGroups') }}</span>
-            <input v-model="groupSearch" type="search" class="input mt-1.5 w-full" :aria-label="t('admin.promptAudit.policy.searchGroups')" />
-          </label>
-          <div class="mt-3 max-h-52 overflow-y-auto rounded-lg border border-gray-200 p-2 dark:border-dark-700">
-            <label v-for="group in filteredGroups" :key="group.id" class="flex cursor-pointer items-center justify-between gap-3 rounded-md px-2 py-2 text-sm hover:bg-gray-50 dark:hover:bg-dark-800">
-              <span class="flex items-center gap-2 text-gray-800 dark:text-dark-100">
-                <input type="checkbox" :checked="draft.group_ids.includes(group.id)" @change="toggleGroup(group.id)" />
-                {{ group.name }}
-              </span>
-              <span class="text-xs text-gray-500 dark:text-dark-400">{{ group.platform }} · {{ group.status }}</span>
-            </label>
-            <p v-if="filteredGroups.length === 0" class="px-2 py-4 text-center text-sm text-gray-500">{{ t('admin.promptAudit.policy.noGroups') }}</p>
+          <div class="mt-4">
+            <p v-if="scopeLoading" data-test="scope-loading" class="rounded-md bg-gray-50 px-3 py-3 text-sm text-gray-500 dark:bg-dark-900/50 dark:text-dark-300">
+              {{ t('admin.promptAudit.policy.scopeLoading') }}
+            </p>
+            <p v-else-if="scopeError" data-test="scope-error" role="alert" class="rounded-md bg-red-50 px-3 py-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-300">
+              {{ scopeError }}
+            </p>
+            <template v-else>
+              <p v-if="instructionMode === 'off'" data-test="scope-mode-off" class="rounded-md bg-amber-50 px-3 py-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                {{ t('admin.promptAudit.policy.instructionModeOff') }}
+              </p>
+              <p v-if="inheritedGroups.length === 0" data-test="scope-empty" class="mt-3 rounded-md border border-dashed border-gray-300 px-3 py-5 text-center text-sm text-gray-500 dark:border-dark-600 dark:text-dark-300">
+                {{ t('admin.promptAudit.policy.noInheritedGroups') }}
+              </p>
+              <ul v-else data-test="scope-groups" class="mt-3 divide-y divide-gray-100 rounded-md border border-gray-200 dark:divide-dark-800 dark:border-dark-700">
+                <li v-for="group in inheritedGroups" :key="group.group_id" class="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-sm">
+                  <span class="min-w-0 font-medium text-gray-800 dark:text-dark-100">{{ group.name }}</span>
+                  <span class="text-xs text-gray-500 dark:text-dark-400">
+                    #{{ group.group_id }} · {{ group.platform }} · {{ group.status }} · {{ t('admin.promptAudit.policy.scopeBindings', { count: group.scope_count }) }}
+                  </span>
+                </li>
+              </ul>
+            </template>
           </div>
-          <div v-if="missingGroupIds.length" class="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-            {{ t('admin.promptAudit.policy.missingGroups') }}: {{ missingGroupIds.join(', ') }}
+
+          <div class="mt-3 rounded-md bg-blue-50 px-3 py-3 text-xs leading-5 text-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+            {{ t('admin.promptAudit.policy.nonResponsesOnly') }}
           </div>
-          <p class="mt-2 text-xs text-gray-500 dark:text-dark-400">{{ t('admin.promptAudit.policy.selectedCount', { count: draft.group_ids.length }) }}</p>
+          <router-link
+            :to="{ path: '/admin/instruction-audit', query: { tab: 'scopes' } }"
+            data-test="manage-instruction-scope"
+            class="mt-3 inline-flex text-sm font-medium text-primary-600 hover:underline dark:text-primary-400"
+          >
+            {{ t('admin.promptAudit.policy.manageInstructionScope') }}
+          </router-link>
         </div>
 
         <fieldset class="mt-5 border-t border-gray-100 pt-5 dark:border-dark-800">
@@ -72,32 +85,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import type { PromptAuditDraft, PromptAuditGroup } from '../types'
+import type { InstructionAuditMode } from '@/features/instruction-audit/v2Types'
+import type { PromptAuditDraft, PromptAuditInheritedGroup } from '../types'
 import { cloneData, SCANNER_CATALOG } from '../viewModel'
 
-const props = defineProps<{ draft: PromptAuditDraft; groups: PromptAuditGroup[] }>()
+const props = defineProps<{
+  draft: PromptAuditDraft
+  inheritedGroups: PromptAuditInheritedGroup[]
+  instructionMode: InstructionAuditMode
+  scopeLoading: boolean
+  scopeError: string
+}>()
 const emit = defineEmits<{ (event: 'update:draft', value: PromptAuditDraft): void }>()
 const { t } = useI18n()
-const groupSearch = ref('')
-
-const filteredGroups = computed(() => {
-  const query = groupSearch.value.trim().toLowerCase()
-  if (!query) return props.groups
-  return props.groups.filter((group) => `${group.name} ${group.id} ${group.platform}`.toLowerCase().includes(query))
-})
-const knownGroupIds = computed(() => new Set(props.groups.map((group) => group.id)))
-const missingGroupIds = computed(() => props.draft.group_ids.filter((id) => !knownGroupIds.value.has(id)))
 
 function patch(value: Partial<PromptAuditDraft>) {
   emit('update:draft', { ...cloneData(props.draft), ...value })
-}
-function toggleGroup(id: number) {
-  const selected = new Set(props.draft.group_ids)
-  if (selected.has(id)) selected.delete(id)
-  else selected.add(id)
-  patch({ group_ids: [...selected].sort((a, b) => a - b) })
 }
 function toggleScanner(id: string) {
   const selected = new Set(props.draft.scanners)

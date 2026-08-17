@@ -93,6 +93,7 @@
           :clients="clients"
           :allowlist="allowlist"
           @changed="reloadReferences"
+          @client-updated="handleClientUpdated"
         />
         <InstructionV2AISettingsPanel
           v-else
@@ -236,6 +237,10 @@ async function reloadReferences() {
   } catch (caught) {
     appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   }
+}
+
+function handleClientUpdated(updated: InstructionClientProfile) {
+  clients.value = clients.value.map((client) => client.id === updated.id ? updated : client)
 }
 
 async function loadStatistics(filters: InstructionEventFilters = {}) {

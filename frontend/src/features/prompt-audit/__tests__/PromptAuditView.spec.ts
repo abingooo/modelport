@@ -7,11 +7,15 @@ import PromptAuditView from '../PromptAuditView.vue'
 
 const mocks = vi.hoisted(() => ({
   getConfig: vi.fn(), updateConfig: vi.fn(), probeEndpoint: vi.fn(), getRuntime: vi.fn(), listEvents: vi.fn(),
-  getEvent: vi.fn(), deleteEvent: vi.fn(), batchDeleteEvents: vi.fn(), previewDelete: vi.fn(), deleteEventsByFilter: vi.fn(), listGroups: vi.fn(),
+  getEvent: vi.fn(), deleteEvent: vi.fn(), batchDeleteEvents: vi.fn(), previewDelete: vi.fn(), deleteEventsByFilter: vi.fn(),
+  getInstructionConfig: vi.fn(), listInstructionScopes: vi.fn(),
   showSuccess: vi.fn(), showError: vi.fn(),
 }))
 
 vi.mock('../api', () => ({ default: mocks }))
+vi.mock('@/features/instruction-audit/v2Api', () => ({
+  default: { getConfig: mocks.getInstructionConfig, listScopes: mocks.listInstructionScopes },
+}))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess: mocks.showSuccess, showError: mocks.showError }) }))
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -21,7 +25,7 @@ vi.mock('vue-i18n', async () => {
 const baseConfig = (): PromptAuditConfig => ({
   enabled: true, blocking_enabled: false, blocking_latest_turn_only: false, store_pass_events: false, effective_mode: 'async_audit', strategy: 'priority',
   worker_count: 4, queue_capacity: 100, scanners: SCANNER_CATALOG.map((item) => item.id), all_groups: true, group_ids: [],
-  endpoints: [{ id: 'guard-1', name: 'Guard One', protocol: 'openai_compatible', base_url: 'http://127.0.0.1:8000', model: 'guard-model', timeout_ms: 3000, input_limit: 4000, enabled: true, has_token: true, token_status: 'configured' }],
+  endpoints: [{ id: 'guard-1', name: 'Guard One', protocol: 'openai_compatible', provider: 'custom', base_url: 'http://127.0.0.1:8000', model: 'guard-model', timeout_ms: 3000, input_limit: 4000, response_mode: 'auto', max_output_tokens: 256, effective_response_mode: 'json_object', requires_reconfigure: false, enabled: true, has_token: true, token_status: 'configured' }],
   config_version: 7, updated_at: '2026-07-16T00:00:00Z', updated_by: 1, change_summary: '{}',
 })
 const runtime = (): PromptAuditRuntime => ({
@@ -38,7 +42,7 @@ const EndpointStub = defineComponent({
   props: ['endpoints', 'probeResults', 'probingIds'], emits: ['update:endpoints', 'probe'],
   template: '<div data-test="endpoint"><button data-test="inject-secret" @click="$emit(\'update:endpoints\', endpoints.map((e) => ({ ...e, token: \'PROMPT_AUDIT_CANARY_SECRET_DO_NOT_PERSIST\' })))">secret</button><button data-test="probe" @click="$emit(\'probe\', endpoints[0])">probe</button></div>',
 })
-const PolicyStub = defineComponent({ props: ['draft', 'groups'], emits: ['update:draft'], template: '<div data-test="policy" />' })
+const PolicyStub = defineComponent({ props: ['draft', 'inheritedGroups', 'instructionMode', 'scopeLoading', 'scopeError'], emits: ['update:draft'], template: '<div data-test="policy" />' })
 const EventsStub = defineComponent({
   props: ['events', 'filters', 'selectedIds', 'loading', 'error', 'total', 'page', 'pageSize'],
   emits: ['filters-change', 'search', 'selection', 'page', 'page-size', 'view', 'delete', 'batch-delete', 'preview-delete'],
@@ -63,7 +67,8 @@ describe('PromptAuditView', () => {
     Object.values(mocks).forEach((mock) => mock.mockReset())
     mocks.getConfig.mockResolvedValue(baseConfig())
     mocks.getRuntime.mockResolvedValue(runtime())
-    mocks.listGroups.mockResolvedValue([])
+    mocks.getInstructionConfig.mockResolvedValue({ effective_mode: 'observe' })
+    mocks.listInstructionScopes.mockResolvedValue([])
     mocks.listEvents.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     mocks.updateConfig.mockImplementation(async () => ({ ...baseConfig(), config_version: 8 }))
     mocks.probeEndpoint.mockResolvedValue({ ok: true, status: 'healthy', message: 'ok', latency_ms: 2, http_status: 200, retryable: false, checked_at: '2026-07-16T00:00:00Z', token_applied: true })
@@ -73,17 +78,38 @@ describe('PromptAuditView', () => {
     mocks.batchDeleteEvents.mockResolvedValue({ deleted_events: 2, deleted_jobs: 2 })
   })
 
-  it('starts config, runtime, groups, and events loads independently', async () => {
+  it('starts Prompt Audit and inherited Instruction Audit loads independently', async () => {
     mocks.getRuntime.mockRejectedValue(new Error('runtime offline'))
     const wrapper = mountView()
     expect(mocks.getConfig).toHaveBeenCalledOnce()
     expect(mocks.getRuntime).toHaveBeenCalledOnce()
-    expect(mocks.listGroups).toHaveBeenCalledOnce()
+    expect(mocks.getInstructionConfig).toHaveBeenCalledOnce()
+    expect(mocks.listInstructionScopes).toHaveBeenCalledOnce()
     expect(mocks.listEvents).toHaveBeenCalledOnce()
     await flushPromises()
     expect(wrapper.get('[data-test="runtime"]').text()).toContain('runtime offline')
     expect(wrapper.find('[data-test="endpoint"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="events"]').exists()).toBe(true)
+  })
+
+  it('passes deduplicated effective Instruction Audit groups and mode to the read-only policy', async () => {
+    mocks.listInstructionScopes.mockResolvedValue([
+      { id: 1, group_id: 9, group_name: 'Primary', group_platform: 'openai', group_status: 'active', effective: true },
+      { id: 2, group_id: 9, group_name: 'Primary', group_platform: 'openai', group_status: 'active', effective: true },
+      { id: 3, group_id: 12, group_name: 'Disabled', group_platform: 'openai', group_status: 'active', effective: false },
+    ])
+    const wrapper = mountView()
+    await flushPromises()
+
+    const policy = wrapper.getComponent(PolicyStub)
+    expect(policy.props('instructionMode')).toBe('observe')
+    expect(policy.props('inheritedGroups')).toEqual([{
+      group_id: 9,
+      name: 'Primary',
+      platform: 'openai',
+      status: 'active',
+      scope_count: 2,
+    }])
   })
 
   it('separates configuration and audit events into page tabs', async () => {
