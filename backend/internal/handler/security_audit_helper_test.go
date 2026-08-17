@@ -29,14 +29,14 @@ func TestCachesSecurityAuditCompletionSkipsWebSocketStages(t *testing.T) {
 func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := &turnCountingEngine{mode: securityaudit.ModeAsync}
-	coordinator := securityaudit.NewCoordinator(nil, engine)
+	coordinator := newPromptPatchTestCoordinator(engine)
 
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	subject := middleware2.AuthSubject{UserID: 7, Concurrency: 1}
-	first := runSecurityAudit(c, nil, coordinator, nil, nil, subject, "openai_responses", "gpt-test",
+	first := runSecurityAudit(c, nil, coordinator, nil, nil, subject, "openai_chat_websocket", "gpt-test",
 		[]byte(`{"type":"response.create","response":{"input":"benign"}}`), "first_turn")
 	require.NotNil(t, first)
 	require.True(t, first.AllowNextStage)
@@ -48,7 +48,7 @@ func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {
 	// must still audit every response.create payload.
 	c.Set(securityAuditCompletedContextKey, true)
 
-	second := runSecurityAudit(c, nil, coordinator, nil, nil, subject, "openai_responses", "gpt-test",
+	second := runSecurityAudit(c, nil, coordinator, nil, nil, subject, "openai_chat_websocket", "gpt-test",
 		[]byte(`{"type":"response.create","response":{"input":"malicious follow-up"}}`), "subsequent_turn")
 	require.NotNil(t, second)
 	require.Equal(t, int64(2), engine.enqueues.Load(), "subsequent WebSocket turns must be audited again")
@@ -186,14 +186,14 @@ func TestRunInstructionAuditKeepsAllowedCompletionAtInfo(t *testing.T) {
 func TestRunSecurityAuditDeduplicatesRepeatedPayloadWithinWebSocketTurn(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := &turnCountingEngine{mode: securityaudit.ModeBlocking}
-	coordinator := securityaudit.NewCoordinator(nil, engine)
+	coordinator := newPromptPatchTestCoordinator(engine)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	payload := []byte(`{"type":"response.create","response":{"input":"same turn"}}`)
 	c.Set(securityAuditWSTurnContextKey, 2)
-	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
-	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
+	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 	require.NotNil(t, first)
 	require.NotNil(t, second)
 	require.True(t, first.AllowNextStage)
@@ -206,28 +206,28 @@ func TestRunSecurityAuditDeduplicatesRepeatedPayloadWithinWebSocketTurn(t *testi
 	require.IsType(t, securityAuditWSDedupeEntry{}, entry)
 
 	c.Set(securityAuditWSTurnContextKey, 3)
-	runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 	require.Equal(t, int64(2), engine.evaluates.Load())
 }
 
 func TestRunSecurityAuditWebSocketDedupePreservesCompletedInstructionMetadata(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	instruction := &capturingInstructionEngine{}
+	instruction := &promptEligibleInstructionEngine{}
 	prompt := &turnCountingEngine{mode: securityaudit.ModeBlocking}
 	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, prompt, instruction)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set(securityAuditWSTurnContextKey, 2)
 	payload := []byte(`{"type":"response.create","response":{"instructions":"already audited"}}`)
 
 	first := runSecurityAuditWithInstructionPayload(
 		c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7},
-		"openai_responses", "gpt-test", payload, payload, false, "subsequent_turn", true,
+		"openai_chat_websocket", "gpt-test", payload, payload, false, "subsequent_turn", true,
 	)
 	second := runSecurityAuditWithInstructionPayload(
 		c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7},
-		"openai_responses", "gpt-test", payload, payload, false, "subsequent_turn", true,
+		"openai_chat_websocket", "gpt-test", payload, payload, false, "subsequent_turn", true,
 	)
 
 	require.True(t, first.AllowNextStage)
@@ -240,7 +240,7 @@ func TestRunSecurityAuditWebSocketDedupePreservesCompletedInstructionMetadata(t 
 	c.Set(securityAuditWSTurnContextKey, 3)
 	runSecurityAuditWithInstructionPayload(
 		c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7},
-		"openai_responses", "gpt-test", payload, payload, false, "subsequent_turn", true,
+		"openai_chat_websocket", "gpt-test", payload, payload, false, "subsequent_turn", true,
 	)
 	require.Equal(t, int64(2), prompt.evaluates.Load(), "the next turn must be audited again")
 }
@@ -254,16 +254,16 @@ func TestRunSecurityAuditDoesNotCacheFailedWebSocketDecision(t *testing.T) {
 			{Kind: securityaudit.DecisionAllow, AllowNextStage: true},
 		},
 	}
-	coordinator := securityaudit.NewCoordinator(nil, engine)
+	coordinator := newPromptPatchTestCoordinator(engine)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set(securityAuditWSTurnContextKey, 2)
 	payload := []byte(`{"type":"response.create","response":{"input":"retry me"}}`)
 
-	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 	_, cachedAfterFailure := c.Get(securityAuditWSDedupeContextKey)
-	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 
 	require.False(t, first.AllowNextStage)
 	require.False(t, cachedAfterFailure)
@@ -280,16 +280,16 @@ func TestRunSecurityAuditDoesNotCacheFlaggedWebSocketDecision(t *testing.T) {
 			{Kind: securityaudit.DecisionAllow, AllowNextStage: true},
 		},
 	}
-	coordinator := securityaudit.NewCoordinator(nil, engine)
+	coordinator := newPromptPatchTestCoordinator(engine)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set(securityAuditWSTurnContextKey, 2)
 	payload := []byte(`{"type":"response.create","response":{"input":"retry flagged"}}`)
 
-	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	first := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 	_, cachedAfterFlag := c.Get(securityAuditWSDedupeContextKey)
-	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	second := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 
 	require.Equal(t, securityaudit.DecisionFlag, first.Kind)
 	require.True(t, first.AllowNextStage)
@@ -301,17 +301,17 @@ func TestRunSecurityAuditDoesNotCacheFlaggedWebSocketDecision(t *testing.T) {
 func TestRunSecurityAuditLogsWebSocketChecksAndCacheHits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := &turnCountingEngine{mode: securityaudit.ModeBlocking}
-	coordinator := securityaudit.NewCoordinator(nil, engine)
+	coordinator := newPromptPatchTestCoordinator(engine)
 	core, logs := observer.New(zap.InfoLevel)
 	reqLog := zap.New(core)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set(securityAuditWSTurnContextKey, 2)
 	payload := []byte(`{"type":"response.create","response":{"input":"same turn"}}`)
 
-	runSecurityAudit(c, reqLog, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
-	runSecurityAudit(c, reqLog, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_responses", "gpt-test", payload, "subsequent_turn")
+	runSecurityAudit(c, reqLog, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
+	runSecurityAudit(c, reqLog, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7}, "openai_chat_websocket", "gpt-test", payload, "subsequent_turn")
 
 	startLogs := logs.FilterMessage("security_audit.gateway_check_start").All()
 	require.Len(t, startLogs, 1)
@@ -340,6 +340,10 @@ type capturingInstructionEngine struct {
 	calls    atomic.Int64
 }
 
+type promptEligibleInstructionEngine struct {
+	capturingInstructionEngine
+}
+
 func (e *capturingInstructionEngine) EvaluateInstruction(_ context.Context, request securityaudit.Request) *securityaudit.InstructionDecision {
 	e.calls.Add(1)
 	e.request = request
@@ -349,23 +353,65 @@ func (e *capturingInstructionEngine) EvaluateInstruction(_ context.Context, requ
 	return &securityaudit.InstructionDecision{Allow: true}
 }
 
+func (e *promptEligibleInstructionEngine) ResolvePromptAuditRoute(securityaudit.Request) securityaudit.PromptAuditRoute {
+	return securityaudit.PromptAuditRoute{
+		Eligible: true, AuditSource: securityaudit.PromptAuditSourceInstructionV2,
+		InstructionConfigVersion: 1, ClientProfileKey: securityaudit.InstructionClientOther,
+		ClientProfileName: "Other", TriggerReason: securityaudit.PromptAuditTriggerNonResponses,
+		ModelContractVersion: securityaudit.PromptAuditModelContractVersion,
+	}
+}
+
+func newPromptPatchTestCoordinator(prompt securityaudit.PromptEngine) *securityaudit.Coordinator {
+	return securityaudit.NewCoordinatorWithInstruction(nil, prompt, &promptEligibleInstructionEngine{})
+}
+
 func TestRunInstructionAuditRejectsReservedInternalPurposeAtPublicIngress(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	instruction := &capturingInstructionEngine{}
-	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+	for _, withCoordinator := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without coordinator", true: "with coordinator"}[withCoordinator], func(t *testing.T) {
+			instruction := &capturingInstructionEngine{}
+			var coordinator *securityaudit.Coordinator
+			if withCoordinator {
+				coordinator = securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Request.Header.Set("X-ModelPort-Internal-Purpose", "instruction-audit-review")
+
+			decision := runInstructionAudit(c, nil, coordinator, nil, middleware2.AuthSubject{UserID: 7},
+				"openai_responses", "gpt-test", []byte(`{"instructions":"exact"}`), false, "http")
+
+			require.NotNil(t, decision)
+			require.False(t, decision.AllowNextStage)
+			require.NotNil(t, decision.Instruction)
+			require.Equal(t, securityaudit.InstructionErrorCodeRejected, decision.ErrorCode)
+			require.Zero(t, instruction.calls.Load(), "a reserved internal marker must not recurse into instruction auditing")
+		})
+	}
+}
+
+func TestRunSecurityAuditRejectsPromptReviewPurposeBeforeChatAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	instruction := &promptEligibleInstructionEngine{}
+	prompt := &turnCountingEngine{mode: securityaudit.ModeAsync}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, prompt, instruction)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	c.Request.Header.Set("X-ModelPort-Internal-Purpose", "instruction-audit-review")
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Request.Header.Set("X-ModelPort-Internal-Purpose", "prompt-audit-review")
 
-	decision := runInstructionAudit(c, nil, coordinator, nil, middleware2.AuthSubject{UserID: 7},
-		"openai_responses", "gpt-test", []byte(`{"instructions":"exact"}`), false, "http")
+	decision := runSecurityAudit(c, nil, coordinator, nil, nil, middleware2.AuthSubject{UserID: 7},
+		"openai_chat", "guard-model", []byte(`{"messages":[{"role":"user","content":"review"}]}`), "http")
 
 	require.NotNil(t, decision)
+	require.Equal(t, securityaudit.DecisionBlock, decision.Kind)
 	require.False(t, decision.AllowNextStage)
-	require.NotNil(t, decision.Instruction)
-	require.Equal(t, securityaudit.InstructionErrorCodeRejected, decision.ErrorCode)
-	require.Zero(t, instruction.calls.Load(), "a reserved internal marker must not recurse into instruction auditing")
+	require.Equal(t, "reserved_internal_marker", decision.Instruction.Reason)
+	require.Zero(t, instruction.calls.Load(), "reserved review traffic must not enter instruction auditing")
+	require.Zero(t, prompt.enqueues.Load(), "reserved review traffic must not recurse into prompt auditing")
+	require.Zero(t, prompt.evaluates.Load(), "reserved review traffic must not recurse into prompt auditing")
 }
 
 func (e *turnCountingEngine) EffectiveMode() securityaudit.Mode { return e.mode }

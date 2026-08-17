@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestParseQwen3GuardStrictAndPolicy(t *testing.T) {
+const testReviewerModel = "test-reviewer-model"
+
+func TestParseStructuredReviewerStrictAndPolicy(t *testing.T) {
 	tests := []struct {
 		name, output string
 		enabled      []string
@@ -16,21 +18,22 @@ func TestParseQwen3GuardStrictAndPolicy(t *testing.T) {
 		action       Action
 		wantErr      bool
 	}{
-		{"safe", "Safety: Safe\nCategories: None", AllScannerIDs, EventPass, ActionAllow, false},
-		{"controversial", "Safety: Controversial\nCategories: Violent", AllScannerIDs, EventFlag, ActionWarn, false},
-		{"controversial pii escalates", "Safety: Controversial\nCategories: PII", AllScannerIDs, EventCritical, ActionBlock, false},
-		{"unsafe", "Safety: Unsafe\nCategories: Jailbreak", AllScannerIDs, EventCritical, ActionBlock, false},
-		{"unknown unsafe", "Safety: Unsafe\nCategories: Future Risk", AllScannerIDs, EventCritical, ActionBlock, false},
-		{"disabled unsafe warns", "Safety: Unsafe\nCategories: Violent", []string{"PII"}, EventFlag, ActionWarn, false},
-		{"extra explanation", "Safety: Safe\nCategories: None\nThis is safe", AllScannerIDs, EventPass, ActionAllow, false},
-		{"duplicate", "Safety: Safe\nSafety: Safe", AllScannerIDs, "", "", true},
-		{"duplicate categories", "Safety: Safe\nCategories: None\nCategories: PII", AllScannerIDs, "", "", true},
-		{"missing categories", "Safety: Safe\n", AllScannerIDs, "", "", true},
-		{"unknown safety", "Safety: Maybe\nCategories: PII", AllScannerIDs, "", "", true},
+		{"safe", `{"safety":"safe","categories":[]}`, AllScannerIDs, EventPass, ActionAllow, false},
+		{"controversial", `{"safety":"controversial","categories":["violent"]}`, AllScannerIDs, EventFlag, ActionWarn, false},
+		{"controversial pii escalates", `{"safety":"controversial","categories":["pii"]}`, AllScannerIDs, EventCritical, ActionBlock, false},
+		{"unsafe", `{"safety":"unsafe","categories":["jailbreak"]}`, AllScannerIDs, EventCritical, ActionBlock, false},
+		{"disabled unsafe warns", `{"safety":"unsafe","categories":["violent"]}`, []string{"pii"}, EventFlag, ActionWarn, false},
+		{"extra explanation", `{"safety":"safe","categories":[]} trailing`, AllScannerIDs, "", "", true},
+		{"duplicate", `{"safety":"safe","safety":"safe","categories":[]}`, AllScannerIDs, "", "", true},
+		{"extra key", `{"safety":"safe","categories":[],"reason":"ok"}`, AllScannerIDs, "", "", true},
+		{"missing categories", `{"safety":"safe"}`, AllScannerIDs, "", "", true},
+		{"unknown safety", `{"safety":"maybe","categories":[]}`, AllScannerIDs, "", "", true},
+		{"unknown category", `{"safety":"unsafe","categories":["future_risk"]}`, AllScannerIDs, "", "", true},
+		{"safe with category", `{"safety":"safe","categories":["pii"]}`, AllScannerIDs, "", "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := ParseQwen3Guard(tt.output, tt.enabled)
+			result, err := ParseStructuredReviewer(tt.output, tt.enabled)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -42,25 +45,14 @@ func TestParseQwen3GuardStrictAndPolicy(t *testing.T) {
 	}
 }
 
-func TestParseQwen3GuardIgnoresAuxiliaryResponseFields(t *testing.T) {
-	result, err := ParseQwen3Guard("Safety: Unsafe\nCategories: Jailbreak\nRefusal: No", AllScannerIDs)
+func TestStructuredReviewerOfficialCategories(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{"safety": "unsafe", "categories": AllScannerIDs})
 	require.NoError(t, err)
-	require.Equal(t, "Unsafe", result.Safety)
-	require.Equal(t, []string{"jailbreak"}, result.Categories)
-
-	serialized, err := json.Marshal(result)
-	require.NoError(t, err)
-	require.NotContains(t, string(serialized), "Refusal")
-	require.NotContains(t, string(serialized), "No")
-}
-
-func TestQwen3GuardOfficialCategoriesAliasesAndUnknownAreStable(t *testing.T) {
-	official := "Violent, Non-violent Illegal Acts, Sexual Content or Sexual Acts, PII, Suicide & Self-Harm, Unethical Acts, Politically Sensitive Topics, Copyright Violation, Jailbreak"
-	result, err := ParseQwen3Guard("Safety: Unsafe\nCategories: "+official, AllScannerIDs)
+	result, err := ParseStructuredReviewer(string(payload), AllScannerIDs)
 	require.NoError(t, err)
 	require.Equal(t, AllScannerIDs, result.MatchedScanners)
 	require.Empty(t, result.UnknownCategories)
-	require.Equal(t, "priority", result.PolicyID)
+	require.Equal(t, "prompt_audit_structured", result.PolicyID)
 	require.Equal(t, 1, result.PolicyVersion)
 
 	aliases := map[string]string{
@@ -74,22 +66,29 @@ func TestQwen3GuardOfficialCategoriesAliasesAndUnknownAreStable(t *testing.T) {
 		require.Equal(t, canonical, NormalizeCategory(alias), alias)
 	}
 
-	const canary = "PROMPT_CANARY_RAW_UNKNOWN_CATEGORY"
-	unknown, err := ParseQwen3Guard("Safety: Unsafe\nCategories: "+canary, AllScannerIDs)
+}
+
+func TestExtractReviewerContentRequiresNormalFinishAndFinalContent(t *testing.T) {
+	content, err := extractReviewerContent([]byte(`{"choices":[{"finish_reason":"stop","message":{"content":"{\"safety\":\"safe\",\"categories\":[]}","reasoning_content":"ignore"}}]}`))
 	require.NoError(t, err)
-	require.Len(t, unknown.UnknownCategories, 1)
-	require.NotContains(t, unknown.UnknownCategories[0], "canary")
-	require.NotContains(t, unknown.UnknownCategories[0], "raw")
-	require.Contains(t, unknown.UnknownCategories[0], "unknown:")
+	require.JSONEq(t, `{"safety":"safe","categories":[]}`, content)
+	for _, body := range []string{
+		`{"choices":[{"finish_reason":"length","message":{"content":"{}"}}]}`,
+		`{"choices":[{"finish_reason":"content_filter","message":{"content":"{}"}}]}`,
+		`{"choices":[{"finish_reason":"stop","message":{"content":"","reasoning_content":"{\"safety\":\"safe\",\"categories\":[]}"}}]}`,
+	} {
+		_, err := extractReviewerContent([]byte(body))
+		require.Error(t, err)
+	}
 }
 
 func TestExtractOpenAIContentSupportsStringAndTextBlocks(t *testing.T) {
-	content, err := extractOpenAIContent([]byte(`{"choices":[{"message":{"content":"Safety: Safe\nCategories: None"}}]}`))
+	content, err := extractOpenAIContent([]byte(`{"choices":[{"message":{"content":"first line\nsecond line"}}]}`))
 	require.NoError(t, err)
-	require.Equal(t, "Safety: Safe\nCategories: None", content)
-	content, err = extractOpenAIContent([]byte(`{"choices":[{"message":{"content":[{"type":"text","text":"Safety: Safe"},{"type":"text","text":"Categories: None"}]}}]}`))
+	require.Equal(t, "first line\nsecond line", content)
+	content, err = extractOpenAIContent([]byte(`{"choices":[{"message":{"content":[{"type":"text","text":"first"},{"type":"text","text":"second"}]}}]}`))
 	require.NoError(t, err)
-	require.Equal(t, "Safety: Safe\nCategories: None", content)
+	require.Equal(t, "first\nsecond", content)
 	for _, body := range []string{`{}`, `{"choices":[]}`, `{"choices":[{"message":{"content":null}}]}`} {
 		_, err := extractOpenAIContent([]byte(body))
 		require.Error(t, err)
@@ -107,6 +106,17 @@ func TestAggregateRequiresEveryResult(t *testing.T) {
 	require.Equal(t, EventCritical, result.Decision)
 	require.Equal(t, ActionBlock, result.Action)
 	require.Equal(t, []string{"pii", "jailbreak"}, result.Categories)
+}
+
+func TestAggregatePreservesSafetyWhenEveryChunkPasses(t *testing.T) {
+	result, err := AggregateResults([]*NormalizedResult{
+		{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe", GuardEndpointID: "safe-node"},
+		{Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe", GuardEndpointID: "safe-node"},
+	}, 0)
+	require.NoError(t, err)
+	require.Equal(t, EventPass, result.Decision)
+	require.Equal(t, ActionAllow, result.Action)
+	require.Equal(t, "Safe", result.Safety)
 }
 
 func TestAggregateDeduplicatesFactsAndUsesMostSevereEndpointMetadata(t *testing.T) {
@@ -130,7 +140,7 @@ func TestIssueSummariesAreDeterministicRedactedDerivedDTOs(t *testing.T) {
 		Decision: EventCritical, RiskLevel: RiskCritical, Action: ActionBlock,
 		Categories: []string{"jailbreak", "pii"}, MatchedScanners: []string{"pii"},
 		ScannerScores: map[string]float64{"pii": 1}, ScannerEvidence: map[string]string{"pii": canary},
-		UnknownCategories: []string{unknownCategoryID("future risk")},
+		UnknownCategories: []string{"unknown:0123456789abcdef"},
 	}
 	summaries := BuildIssueSummaries(result)
 	require.Len(t, summaries, 3, "known categories are not hidden merely because policy disabled one")

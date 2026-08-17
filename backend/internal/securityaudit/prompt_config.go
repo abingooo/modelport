@@ -2,8 +2,6 @@ package securityaudit
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -14,17 +12,28 @@ import (
 )
 
 const (
-	DefaultWorkerCount   = 4
-	MaxWorkerCount       = 32
-	DefaultQueueCapacity = 32768
-	MaxQueueCapacity     = 100000
-	DefaultTimeoutMS     = 3000
-	MinTimeoutMS         = 100
-	MaxTimeoutMS         = 30000
-	DefaultInputLimit    = 4000
-	MinInputLimit        = 128
-	MaxInputLimit        = 100000
-	DefaultPayloadTTL    = 30 * time.Minute
+	DefaultWorkerCount              = 4
+	MaxWorkerCount                  = 32
+	DefaultQueueCapacity            = 32768
+	MaxQueueCapacity                = 100000
+	DefaultTimeoutMS                = 3000
+	MinTimeoutMS                    = 100
+	MaxTimeoutMS                    = 30000
+	DefaultInputLimit               = 4000
+	MinInputLimit                   = 128
+	MaxInputLimit                   = 100000
+	PromptAuditModelContractVersion = 2
+	DefaultMaxOutputTokens          = 256
+	MinMaxOutputTokens              = 64
+	MaxMaxOutputTokens              = 4096
+	DefaultPayloadTTL               = 30 * time.Minute
+)
+
+const (
+	ResponseModeAuto       = "auto"
+	ResponseModeJSONSchema = "json_schema"
+	ResponseModeJSONObject = "json_object"
+	ResponseModeTextJSON   = "text_json"
 )
 
 type SecretEncryptor interface {
@@ -52,18 +61,23 @@ type ConfigStore interface {
 }
 
 type StorageEndpoint struct {
-	ID              string `json:"id"`
-	Name            string `json:"name"`
-	Protocol        string `json:"protocol"`
-	BaseURL         string `json:"base_url"`
-	Model           string `json:"model"`
-	TokenCiphertext string `json:"token_ciphertext,omitempty"`
-	TimeoutMS       int    `json:"timeout_ms"`
-	InputLimit      int    `json:"input_limit"`
-	Enabled         bool   `json:"enabled"`
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Protocol              string `json:"protocol"`
+	BaseURL               string `json:"base_url"`
+	Model                 string `json:"model"`
+	TokenCiphertext       string `json:"token_ciphertext,omitempty"`
+	TimeoutMS             int    `json:"timeout_ms"`
+	InputLimit            int    `json:"input_limit"`
+	ResponseMode          string `json:"response_mode"`
+	MaxOutputTokens       int    `json:"max_output_tokens"`
+	EffectiveResponseMode string `json:"effective_response_mode,omitempty"`
+	RequiresReconfigure   bool   `json:"requires_reconfigure,omitempty"`
+	Enabled               bool   `json:"enabled"`
 }
 
 type storageConfig struct {
+	ModelContractVersion   int               `json:"model_contract_version"`
 	Enabled                bool              `json:"enabled"`
 	BlockingEnabled        bool              `json:"blocking_enabled"`
 	BlockingLatestTurnOnly bool              `json:"blocking_latest_turn_only"`
@@ -82,15 +96,19 @@ type storageConfig struct {
 }
 
 type ActiveEndpoint struct {
-	ID         string
-	Name       string
-	Protocol   string
-	BaseURL    string
-	Model      string
-	Token      string
-	TimeoutMS  int
-	InputLimit int
-	Enabled    bool
+	ID                    string
+	Name                  string
+	Protocol              string
+	BaseURL               string
+	Model                 string
+	Token                 string
+	TimeoutMS             int
+	InputLimit            int
+	ResponseMode          string
+	MaxOutputTokens       int
+	EffectiveResponseMode string
+	RequiresReconfigure   bool
+	Enabled               bool
 	// TokenInvalid marks an endpoint whose persisted token ciphertext cannot be
 	// decrypted with the current encryption key (key changed or auto-generated
 	// on restart). The endpoint is kept visible for admins but excluded from
@@ -99,6 +117,7 @@ type ActiveEndpoint struct {
 }
 
 type ActiveConfig struct {
+	ModelContractVersion   int
 	RiskControlEnabled     bool
 	Enabled                bool
 	BlockingEnabled        bool
@@ -118,19 +137,24 @@ type ActiveConfig struct {
 }
 
 type PublicEndpoint struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	BaseURL     string `json:"base_url"`
-	Model       string `json:"model"`
-	TimeoutMS   int    `json:"timeout_ms"`
-	InputLimit  int    `json:"input_limit"`
-	Enabled     bool   `json:"enabled"`
-	HasToken    bool   `json:"has_token"`
-	TokenStatus string `json:"token_status"`
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	Protocol              string `json:"protocol"`
+	BaseURL               string `json:"base_url"`
+	Model                 string `json:"model"`
+	TimeoutMS             int    `json:"timeout_ms"`
+	InputLimit            int    `json:"input_limit"`
+	ResponseMode          string `json:"response_mode"`
+	MaxOutputTokens       int    `json:"max_output_tokens"`
+	EffectiveResponseMode string `json:"effective_response_mode"`
+	RequiresReconfigure   bool   `json:"requires_reconfigure"`
+	Enabled               bool   `json:"enabled"`
+	HasToken              bool   `json:"has_token"`
+	TokenStatus           string `json:"token_status"`
 }
 
 type PublicConfig struct {
+	ModelContractVersion   int              `json:"model_contract_version"`
 	Enabled                bool             `json:"enabled"`
 	BlockingEnabled        bool             `json:"blocking_enabled"`
 	BlockingLatestTurnOnly bool             `json:"blocking_latest_turn_only"`
@@ -150,16 +174,21 @@ type PublicConfig struct {
 }
 
 type UpdateEndpoint struct {
-	ID         string `json:"id" binding:"required"`
-	Name       string `json:"name" binding:"required"`
-	Protocol   string `json:"protocol"`
-	BaseURL    string `json:"base_url" binding:"required"`
-	Model      string `json:"model"`
-	Token      string `json:"token,omitempty"`
-	ClearToken bool   `json:"clear_token"`
-	TimeoutMS  int    `json:"timeout_ms"`
-	InputLimit int    `json:"input_limit"`
-	Enabled    bool   `json:"enabled"`
+	ID                    string  `json:"id" binding:"required"`
+	Name                  string  `json:"name" binding:"required"`
+	Protocol              string  `json:"protocol"`
+	BaseURL               string  `json:"base_url" binding:"required"`
+	Model                 string  `json:"model"`
+	Token                 string  `json:"token,omitempty"`
+	ClearToken            bool    `json:"clear_token"`
+	TimeoutMS             int     `json:"timeout_ms"`
+	InputLimit            int     `json:"input_limit"`
+	ResponseMode          *string `json:"response_mode,omitempty"`
+	MaxOutputTokens       *int    `json:"max_output_tokens,omitempty"`
+	EffectiveResponseMode string  `json:"-"`
+	RequiresReconfigure   bool    `json:"-"`
+	ProbeVerified         bool    `json:"-"`
+	Enabled               bool    `json:"enabled"`
 }
 
 type UpdateConfigRequest struct {
@@ -179,6 +208,7 @@ type UpdateConfigRequest struct {
 
 func DefaultStorageConfig() storageConfig {
 	return storageConfig{
+		ModelContractVersion:   PromptAuditModelContractVersion,
 		Enabled:                false,
 		BlockingEnabled:        false,
 		BlockingLatestTurnOnly: false,
@@ -199,14 +229,50 @@ func ParseStorageConfig(raw string) (storageConfig, error) {
 	if strings.TrimSpace(raw) == "" {
 		return cfg, nil
 	}
+	var marker struct {
+		ModelContractVersion *int `json:"model_contract_version"`
+	}
+	if err := json.Unmarshal([]byte(raw), &marker); err != nil {
+		return storageConfig{}, fmt.Errorf("decode prompt audit config: %w", err)
+	}
 	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
 		return storageConfig{}, fmt.Errorf("decode prompt audit config: %w", err)
 	}
+	if marker.ModelContractVersion == nil || *marker.ModelContractVersion != PromptAuditModelContractVersion {
+		retireLegacyStorageConfig(&cfg)
+	}
 	normalizeStorageConfig(&cfg)
+	if cfg.Enabled && !hasUsableGenericEndpoint(cfg.Endpoints) {
+		cfg.Enabled = false
+		cfg.BlockingEnabled = false
+	}
 	if err := validateStorageConfig(cfg); err != nil {
 		return storageConfig{}, err
 	}
 	return cfg, nil
+}
+
+func retireLegacyStorageConfig(cfg *storageConfig) {
+	if cfg == nil {
+		return
+	}
+	cfg.ModelContractVersion = PromptAuditModelContractVersion
+	cfg.Enabled = false
+	cfg.BlockingEnabled = false
+	for i := range cfg.Endpoints {
+		cfg.Endpoints[i].Enabled = false
+		cfg.Endpoints[i].RequiresReconfigure = true
+		cfg.Endpoints[i].EffectiveResponseMode = ""
+	}
+}
+
+func hasUsableGenericEndpoint(endpoints []StorageEndpoint) bool {
+	for _, endpoint := range endpoints {
+		if endpoint.Enabled && !endpoint.RequiresReconfigure && strings.TrimSpace(endpoint.Model) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeStorageConfig(cfg *storageConfig) {
@@ -216,6 +282,7 @@ func normalizeStorageConfig(cfg *storageConfig) {
 	if cfg.ConfigVersion < 1 {
 		cfg.ConfigVersion = 1
 	}
+	cfg.ModelContractVersion = PromptAuditModelContractVersion
 	if strings.TrimSpace(cfg.Strategy) == "" {
 		cfg.Strategy = "priority"
 	}
@@ -229,7 +296,10 @@ func normalizeStorageConfig(cfg *storageConfig) {
 		cfg.Scanners = append([]string(nil), AllScannerIDs...)
 	}
 	cfg.Scanners = canonicalScannerIDs(cfg.Scanners)
-	cfg.GroupIDs = canonicalInt64s(cfg.GroupIDs)
+	// Prompt Audit inherits Instruction Audit V2 scope. These legacy fields are
+	// accepted for old clients but no longer carry runtime meaning.
+	cfg.AllGroups = true
+	cfg.GroupIDs = []int64{}
 	// Preserve an invalid blocking-without-audit combination so validation can
 	// reject it instead of silently changing administrator intent.
 	for i := range cfg.Endpoints {
@@ -242,8 +312,17 @@ func normalizeStorageConfig(cfg *storageConfig) {
 		}
 		ep.BaseURL = strings.TrimSpace(ep.BaseURL)
 		ep.Model = strings.TrimSpace(ep.Model)
-		if ep.Model == "" {
-			ep.Model = DefaultGuardModel
+		ep.ResponseMode = normalizedResponseMode(ep.ResponseMode)
+		if ep.MaxOutputTokens == 0 {
+			ep.MaxOutputTokens = DefaultMaxOutputTokens
+		}
+		if ep.ResponseMode != ResponseModeAuto {
+			ep.EffectiveResponseMode = ep.ResponseMode
+		} else {
+			ep.EffectiveResponseMode = strings.ToLower(strings.TrimSpace(ep.EffectiveResponseMode))
+		}
+		if ep.RequiresReconfigure {
+			ep.EffectiveResponseMode = ""
 		}
 		if ep.TimeoutMS == 0 {
 			ep.TimeoutMS = DefaultTimeoutMS
@@ -267,16 +346,13 @@ func validateStorageConfig(cfg storageConfig) error {
 	if cfg.QueueCapacity < 1 || cfg.QueueCapacity > MaxQueueCapacity {
 		return infraerrors.BadRequest("prompt_audit_invalid_queue_capacity", "队列容量超出允许范围")
 	}
-	if !cfg.AllGroups && len(cfg.GroupIDs) == 0 {
-		return infraerrors.BadRequest("prompt_audit_groups_required", "指定分组模式至少需要选择一个分组")
-	}
 	if len(cfg.Scanners) == 0 {
 		return infraerrors.BadRequest("prompt_audit_scanners_required", "至少需要启用一个风险分类")
 	}
 	seen := make(map[string]struct{}, len(cfg.Endpoints))
 	enabled := 0
 	for _, ep := range cfg.Endpoints {
-		if ep.ID == "" || ep.Name == "" {
+		if ep.ID == "" || ep.Name == "" || len(ep.ID) > 128 || len(ep.Name) > 160 {
 			return infraerrors.BadRequest("prompt_audit_invalid_endpoint", "审计节点 ID 和名称不能为空")
 		}
 		if _, ok := seen[ep.ID]; ok {
@@ -286,8 +362,32 @@ func validateStorageConfig(cfg storageConfig) error {
 		if ep.Protocol != "openai_compatible" {
 			return infraerrors.BadRequest("prompt_audit_invalid_endpoint_protocol", "审计节点仅支持 OpenAI 兼容协议")
 		}
+		if ep.RequiresReconfigure {
+			if ep.Enabled && cfg.Enabled {
+				return infraerrors.BadRequest("prompt_audit_endpoint_requires_reconfigure", "旧版审计节点必须重新配置后才能启用")
+			}
+			continue
+		}
 		if _, err := NormalizeBaseURL(ep.BaseURL); err != nil {
 			return err
+		}
+		if ep.Model == "" || len(ep.Model) > 255 {
+			return infraerrors.BadRequest("prompt_audit_invalid_model", "审计节点模型不能为空且不能超过 255 个字符")
+		}
+		if isRetiredNativeGuardModel(ep.Model) {
+			return infraerrors.BadRequest("prompt_audit_retired_native_model", "旧版专用审核模型不能用于通用审核协议")
+		}
+		if !validResponseMode(ep.ResponseMode) {
+			return infraerrors.BadRequest("prompt_audit_invalid_response_mode", "审计节点响应模式无效")
+		}
+		if ep.MaxOutputTokens < MinMaxOutputTokens || ep.MaxOutputTokens > MaxMaxOutputTokens {
+			return infraerrors.BadRequest("prompt_audit_invalid_max_output_tokens", "审计节点输出 Token 上限超出允许范围")
+		}
+		if ep.EffectiveResponseMode != "" && !isConcreteResponseMode(ep.EffectiveResponseMode) {
+			return infraerrors.BadRequest("prompt_audit_invalid_effective_response_mode", "审计节点实际响应模式无效")
+		}
+		if ep.Enabled && ep.ResponseMode == ResponseModeAuto && !isConcreteResponseMode(ep.EffectiveResponseMode) {
+			return infraerrors.BadRequest("prompt_audit_endpoint_probe_required", "自动响应模式必须通过实测后才能启用")
 		}
 		if ep.TimeoutMS < MinTimeoutMS || ep.TimeoutMS > MaxTimeoutMS {
 			return infraerrors.BadRequest("prompt_audit_invalid_timeout", "审计节点超时超出允许范围")
@@ -323,17 +423,21 @@ func validateUpdateConfigRequest(req UpdateConfigRequest) error {
 			return infraerrors.BadRequest("prompt_audit_invalid_scanner", "提示词审计风险分类无效")
 		}
 	}
-	if !req.AllGroups {
-		if len(req.GroupIDs) == 0 {
-			return infraerrors.BadRequest("prompt_audit_groups_required", "指定分组模式至少需要选择一个分组")
-		}
-		for _, groupID := range req.GroupIDs {
-			if groupID <= 0 {
-				return infraerrors.BadRequest("prompt_audit_invalid_group", "提示词审计分组 ID 无效")
-			}
-		}
-	}
 	for _, endpoint := range req.Endpoints {
+		if len(strings.TrimSpace(endpoint.ID)) > 128 || len(strings.TrimSpace(endpoint.Name)) > 160 {
+			return infraerrors.BadRequest("prompt_audit_invalid_endpoint", "审计节点 ID 或名称超出允许长度")
+		}
+		if model := strings.TrimSpace(endpoint.Model); model == "" || len(model) > 255 {
+			return infraerrors.BadRequest("prompt_audit_invalid_model", "审计节点模型不能为空且不能超过 255 个字符")
+		} else if isRetiredNativeGuardModel(model) {
+			return infraerrors.BadRequest("prompt_audit_retired_native_model", "旧版专用审核模型不能用于通用审核协议")
+		}
+		if endpoint.ResponseMode != nil && !validResponseMode(*endpoint.ResponseMode) {
+			return infraerrors.BadRequest("prompt_audit_invalid_response_mode", "审计节点响应模式无效")
+		}
+		if endpoint.MaxOutputTokens != nil && (*endpoint.MaxOutputTokens < MinMaxOutputTokens || *endpoint.MaxOutputTokens > MaxMaxOutputTokens) {
+			return infraerrors.BadRequest("prompt_audit_invalid_max_output_tokens", "审计节点输出 Token 上限超出允许范围")
+		}
 		if endpoint.TimeoutMS < MinTimeoutMS || endpoint.TimeoutMS > MaxTimeoutMS {
 			return infraerrors.BadRequest("prompt_audit_invalid_timeout", "审计节点超时超出允许范围")
 		}
@@ -342,6 +446,20 @@ func validateUpdateConfigRequest(req UpdateConfigRequest) error {
 		}
 	}
 	return nil
+}
+
+func validResponseMode(mode string) bool {
+	switch normalizedResponseMode(mode) {
+	case ResponseModeAuto, ResponseModeJSONSchema, ResponseModeJSONObject, ResponseModeTextJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRetiredNativeGuardModel(model string) bool {
+	normalized := strings.NewReplacer("-", "", "_", "", "/", "").Replace(strings.ToLower(strings.TrimSpace(model)))
+	return strings.Contains(normalized, "qwen3guard")
 }
 
 func (cfg ActiveConfig) EffectiveMode() Mode {
@@ -355,20 +473,13 @@ func (cfg ActiveConfig) EffectiveMode() Mode {
 }
 
 func (cfg ActiveConfig) IncludesGroup(groupID *int64) bool {
-	if cfg.AllGroups {
-		return true
-	}
-	if groupID == nil {
-		return false
-	}
-	i := sort.Search(len(cfg.GroupIDs), func(i int) bool { return cfg.GroupIDs[i] >= *groupID })
-	return i < len(cfg.GroupIDs) && cfg.GroupIDs[i] == *groupID
+	return true
 }
 
 func (cfg ActiveConfig) EnabledEndpoints() []ActiveEndpoint {
 	result := make([]ActiveEndpoint, 0, len(cfg.Endpoints))
 	for _, ep := range cfg.Endpoints {
-		if ep.Enabled {
+		if ep.Enabled && !ep.RequiresReconfigure && !ep.TokenInvalid {
 			result = append(result, ep)
 		}
 	}
@@ -393,7 +504,7 @@ func PublicFromStorage(cfg storageConfig, riskControlEnabled bool, invalidTokenE
 		invalid[id] = struct{}{}
 	}
 	scanners := append([]string{}, cfg.Scanners...)
-	groupIDs := append([]int64{}, cfg.GroupIDs...)
+	groupIDs := []int64{}
 	endpoints := make([]PublicEndpoint, 0, len(cfg.Endpoints))
 	for _, ep := range cfg.Endpoints {
 		hasToken := strings.TrimSpace(ep.TokenCiphertext) != ""
@@ -407,14 +518,17 @@ func PublicFromStorage(cfg storageConfig, riskControlEnabled bool, invalidTokenE
 		endpoints = append(endpoints, PublicEndpoint{
 			ID: ep.ID, Name: ep.Name, Protocol: ep.Protocol, BaseURL: ep.BaseURL,
 			Model: ep.Model, TimeoutMS: ep.TimeoutMS, InputLimit: ep.InputLimit,
+			ResponseMode: ep.ResponseMode, MaxOutputTokens: ep.MaxOutputTokens,
+			EffectiveResponseMode: ep.EffectiveResponseMode, RequiresReconfigure: ep.RequiresReconfigure,
 			Enabled: ep.Enabled, HasToken: hasToken, TokenStatus: status,
 		})
 	}
 	active := ActiveConfig{RiskControlEnabled: riskControlEnabled, Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled}
 	return PublicConfig{
-		Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled, BlockingLatestTurnOnly: cfg.BlockingLatestTurnOnly, StorePassEvents: cfg.StorePassEvents,
+		ModelContractVersion: cfg.ModelContractVersion,
+		Enabled:              cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled, BlockingLatestTurnOnly: cfg.BlockingLatestTurnOnly, StorePassEvents: cfg.StorePassEvents,
 		EffectiveMode: active.EffectiveMode(), Strategy: cfg.Strategy, WorkerCount: cfg.WorkerCount,
-		QueueCapacity: cfg.QueueCapacity, Scanners: scanners, AllGroups: cfg.AllGroups,
+		QueueCapacity: cfg.QueueCapacity, Scanners: scanners, AllGroups: true,
 		GroupIDs: groupIDs, Endpoints: endpoints, ConfigVersion: cfg.ConfigVersion,
 		UpdatedAt: cfg.UpdatedAt, UpdatedBy: cfg.UpdatedBy, ChangeSummary: cfg.ChangeSummary,
 	}
@@ -422,11 +536,12 @@ func PublicFromStorage(cfg storageConfig, riskControlEnabled bool, invalidTokenE
 
 func ActiveFromStorage(cfg storageConfig, riskControlEnabled bool, encryptor SecretEncryptor) (ActiveConfig, error) {
 	active := ActiveConfig{
-		RiskControlEnabled: riskControlEnabled, Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled,
+		ModelContractVersion: cfg.ModelContractVersion,
+		RiskControlEnabled:   riskControlEnabled, Enabled: cfg.Enabled, BlockingEnabled: cfg.BlockingEnabled,
 		BlockingLatestTurnOnly: cfg.BlockingLatestTurnOnly,
 		StorePassEvents:        cfg.StorePassEvents, Strategy: cfg.Strategy, WorkerCount: cfg.WorkerCount,
-		QueueCapacity: cfg.QueueCapacity, Scanners: append([]string(nil), cfg.Scanners...), AllGroups: cfg.AllGroups,
-		GroupIDs: append([]int64(nil), cfg.GroupIDs...), ConfigVersion: cfg.ConfigVersion,
+		QueueCapacity: cfg.QueueCapacity, Scanners: append([]string(nil), cfg.Scanners...), AllGroups: true,
+		GroupIDs: []int64{}, ConfigVersion: cfg.ConfigVersion,
 		UpdatedAt: cfg.UpdatedAt, UpdatedBy: cfg.UpdatedBy, ChangeSummary: cfg.ChangeSummary,
 		Endpoints: make([]ActiveEndpoint, 0, len(cfg.Endpoints)),
 	}
@@ -452,7 +567,9 @@ func ActiveFromStorage(cfg storageConfig, riskControlEnabled bool, encryptor Sec
 		active.Endpoints = append(active.Endpoints, ActiveEndpoint{
 			ID: ep.ID, Name: ep.Name, Protocol: ep.Protocol, BaseURL: ep.BaseURL, Model: ep.Model,
 			Token: token, TimeoutMS: ep.TimeoutMS, InputLimit: ep.InputLimit,
-			Enabled: ep.Enabled && !tokenInvalid, TokenInvalid: tokenInvalid,
+			ResponseMode: ep.ResponseMode, MaxOutputTokens: ep.MaxOutputTokens,
+			EffectiveResponseMode: ep.EffectiveResponseMode, RequiresReconfigure: ep.RequiresReconfigure,
+			Enabled: ep.Enabled && !ep.RequiresReconfigure && !tokenInvalid, TokenInvalid: tokenInvalid,
 		})
 	}
 	return active, nil
@@ -460,19 +577,13 @@ func ActiveFromStorage(cfg storageConfig, riskControlEnabled bool, encryptor Sec
 
 func changeSummary(cfg storageConfig) string {
 	summary := struct {
-		Enabled                bool   `json:"enabled"`
-		BlockingEnabled        bool   `json:"blocking_enabled"`
-		BlockingLatestTurnOnly bool   `json:"blocking_latest_turn_only"`
-		StorePassEvents        bool   `json:"store_pass_events"`
-		EndpointCount          int    `json:"endpoint_count"`
-		ScannerCount           int    `json:"scanner_count"`
-		AllGroups              bool   `json:"all_groups"`
-		GroupCount             int    `json:"group_count"`
-		GroupHash              string `json:"group_hash"`
-	}{cfg.Enabled, cfg.BlockingEnabled, cfg.BlockingLatestTurnOnly, cfg.StorePassEvents, len(cfg.Endpoints), len(cfg.Scanners), cfg.AllGroups, len(cfg.GroupIDs), ""}
-	rawGroups, _ := json.Marshal(cfg.GroupIDs)
-	digest := sha256.Sum256(rawGroups)
-	summary.GroupHash = hex.EncodeToString(digest[:])
+		Enabled                bool `json:"enabled"`
+		BlockingEnabled        bool `json:"blocking_enabled"`
+		BlockingLatestTurnOnly bool `json:"blocking_latest_turn_only"`
+		StorePassEvents        bool `json:"store_pass_events"`
+		EndpointCount          int  `json:"endpoint_count"`
+		ScannerCount           int  `json:"scanner_count"`
+	}{cfg.Enabled, cfg.BlockingEnabled, cfg.BlockingLatestTurnOnly, cfg.StorePassEvents, len(cfg.Endpoints), len(cfg.Scanners)}
 	raw, _ := json.Marshal(summary)
 	return string(raw)
 }

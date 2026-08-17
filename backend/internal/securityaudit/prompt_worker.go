@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+var (
+	errPromptAuditWorkerPaused  = errors.New("prompt audit worker paused")
+	errPromptAuditConfigChanged = errors.New("prompt audit config changed")
+)
+
+const (
+	promptAuditWorkerPausedCode  = "prompt_audit_worker_paused"
+	promptAuditConfigChangedCode = "prompt_audit_config_changed"
+)
+
 type WorkerRuntime struct {
 	active           atomic.Int64
 	processed        atomic.Int64
@@ -93,25 +103,57 @@ func (r *Runner) worker(ctx context.Context, workerID int) {
 			return
 		case <-ticker.C:
 			r.runtime.heartbeatNS.Store(r.clock.Now().UnixNano())
-			cfg, ok := r.config.Active()
-			if !ok || !cfg.RiskControlEnabled || !cfg.Enabled || workerID >= cfg.WorkerCount {
-				continue
-			}
-			for {
-				job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now())
-				if err != nil {
-					r.setLastError("claim_job_failed", err.Error())
-					break
-				}
-				if !claimed {
-					break
-				}
-				r.runtime.active.Add(1)
-				r.processSafely(ctx, workerID, cfg, job)
-				r.runtime.active.Add(-1)
-			}
+			r.runWorkerCycle(ctx, workerID)
 		}
 	}
+}
+
+func (r *Runner) runWorkerCycle(ctx context.Context, workerID int) {
+	for {
+		cfg, enabled := r.activeWorkerConfig(workerID)
+		if !enabled {
+			return
+		}
+		job, claimed, err := r.repo.ClaimNextJob(ctx, r.clock.Now())
+		if err != nil {
+			r.setLastError("claim_job_failed", err.Error())
+			return
+		}
+		if !claimed {
+			return
+		}
+		r.runtime.active.Add(1)
+		r.processSafely(ctx, workerID, cfg, job)
+		r.runtime.active.Add(-1)
+	}
+}
+
+func (r *Runner) activeWorkerConfig(workerID int) (ActiveConfig, bool) {
+	if r == nil || r.config == nil {
+		return ActiveConfig{}, false
+	}
+	cfg, ok := r.config.Active()
+	if !ok || !cfg.RiskControlEnabled || !cfg.Enabled || workerID < 0 || workerID >= cfg.WorkerCount || len(cfg.EnabledEndpoints()) == 0 {
+		return ActiveConfig{}, false
+	}
+	return cfg, true
+}
+
+func (r *Runner) attemptConfigGate(workerID int, configVersion int64) error {
+	if r == nil || r.config == nil {
+		return errPromptAuditWorkerPaused
+	}
+	cfg, ok := r.config.Active()
+	if !ok || !cfg.RiskControlEnabled || !cfg.Enabled {
+		return errPromptAuditWorkerPaused
+	}
+	if cfg.ConfigVersion != configVersion {
+		return errPromptAuditConfigChanged
+	}
+	if workerID < 0 || workerID >= cfg.WorkerCount || len(cfg.EnabledEndpoints()) == 0 {
+		return errPromptAuditWorkerPaused
+	}
+	return nil
 }
 
 func (r *Runner) processSafely(ctx context.Context, workerID int, cfg ActiveConfig, job *Job) {
@@ -125,7 +167,9 @@ func (r *Runner) processSafely(ctx context.Context, workerID int, cfg ActiveConf
 			LogError(EventProcessFailed, mergeLogFields(jobLogFields(job), map[string]any{"worker_id": workerID, "status": "failed", "error_code": "worker_panic"}))
 		}
 	}()
-	if err := r.processJob(ctx, workerID, cfg, job); err != nil {
+	if err := r.processJob(ctx, workerID, cfg, job); errors.Is(err, errPromptAuditWorkerPaused) {
+		return
+	} else if err != nil {
 		r.runtime.failed.Add(1)
 	} else {
 		r.runtime.processed.Add(1)
@@ -134,8 +178,16 @@ func (r *Runner) processSafely(ctx context.Context, workerID int, cfg ActiveConf
 }
 
 func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig, job *Job) error {
+	refreshed, enabled := r.activeWorkerConfig(workerID)
+	if !enabled {
+		return r.pauseClaimedJob(ctx, workerID, job)
+	}
+	cfg = refreshed
 	baseFields := jobLogFields(job)
 	LogInfo(EventAuditStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "attempts": job.Attempts, "status": "processing"}))
+	if job.Snapshot.ModelContractVersion != PromptAuditModelContractVersion {
+		return r.finishFailure(ctx, job, &GuardError{Code: "prompt_audit_model_contract_mismatch"})
+	}
 	scanText, err := r.payload.Get(ctx, job.ID)
 	if err != nil {
 		return r.finishFailure(ctx, job, &GuardError{Code: "payload_missing", Retryable: false, Cause: err})
@@ -151,12 +203,23 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 	results := make([]*NormalizedResult, 0, len(chunks))
 	started := r.clock.Now()
 	for index, chunk := range chunks {
+		if gateErr := r.attemptConfigGate(workerID, cfg.ConfigVersion); gateErr != nil {
+			return r.pauseClaimedJobForReason(ctx, workerID, job, gateErr)
+		}
 		if err := r.repo.RefreshLease(ctx, job.ID, job.ClaimVersion, r.clock.Now()); err != nil {
 			return err
 		}
+		if gateErr := r.attemptConfigGate(workerID, cfg.ConfigVersion); gateErr != nil {
+			return r.pauseClaimedJobForReason(ctx, workerID, job, gateErr)
+		}
 		chunkStarted := r.clock.Now()
 		LogInfo(EventChunkStarted, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks), "chunk_chars": len([]rune(chunk)), "input_chars": job.Snapshot.PromptLength, "input_limit": minimumInputLimit(endpoints), "status": "started"}))
-		result, scanErr := scanWithFailover(ctx, r.scanner, cfg.Scanners, endpoints, chunk, r.metrics)
+		result, scanErr := scanWithFailover(ctx, r.scanner, cfg.Scanners, endpoints, chunk, r.metrics, func() error {
+			return r.attemptConfigGate(workerID, cfg.ConfigVersion)
+		})
+		if errors.Is(scanErr, errPromptAuditWorkerPaused) || errors.Is(scanErr, errPromptAuditConfigChanged) {
+			return r.pauseClaimedJobForReason(ctx, workerID, job, scanErr)
+		}
 		if scanErr != nil {
 			LogWarn(EventChunkFailed, mergeLogFields(baseFields, map[string]any{
 				"worker_id": workerID, "chunk_index": index + 1, "chunk_total": len(chunks),
@@ -201,6 +264,32 @@ func (r *Runner) processJob(ctx context.Context, workerID int, cfg ActiveConfig,
 		LogWarn(EventFindingRecorded, mergeLogFields(baseFields, map[string]any{"worker_id": workerID, "event_id": event.ID, "decision": aggregated.Decision, "risk_level": aggregated.RiskLevel, "action": aggregated.Action, "guard_endpoint_id": aggregated.GuardEndpointID, "status": "recorded"}))
 	}
 	return nil
+}
+
+func (r *Runner) pauseClaimedJob(ctx context.Context, workerID int, job *Job) error {
+	return r.pauseClaimedJobForReason(ctx, workerID, job, errPromptAuditWorkerPaused)
+}
+
+func (r *Runner) pauseClaimedJobForReason(ctx context.Context, workerID int, job *Job, reason error) error {
+	if job == nil {
+		return errPromptAuditWorkerPaused
+	}
+	code := promptAuditWorkerPausedCode
+	message := "prompt audit worker paused"
+	status := "deferred_disabled"
+	if errors.Is(reason, errPromptAuditConfigChanged) {
+		code = promptAuditConfigChangedCode
+		message = "prompt audit config changed"
+		status = "deferred_config_changed"
+	}
+	if err := r.repo.Pause(ctx, job.ID, job.ClaimVersion, r.clock.Now(), code, message); err != nil {
+		r.setLastError("pause_job_failed", err.Error())
+		return err
+	}
+	LogInfo(EventProcessFailed, mergeLogFields(jobLogFields(job), map[string]any{
+		"worker_id": workerID, "status": status, "error_code": code,
+	}))
+	return errPromptAuditWorkerPaused
 }
 
 func (r *Runner) observeAsyncFailure(err error, latency time.Duration) {
@@ -306,24 +395,44 @@ func (r *Runner) setLastError(code, _ string) {
 	r.runtime.lastErrorMu.Unlock()
 }
 
-func scanWithFailover(ctx context.Context, scanner PromptScanner, scanners []string, endpoints []ActiveEndpoint, chunk string, metrics Metrics) (*NormalizedResult, error) {
+func scanWithFailover(
+	ctx context.Context,
+	scanner PromptScanner,
+	scanners []string,
+	endpoints []ActiveEndpoint,
+	chunk string,
+	metrics Metrics,
+	gate func() error,
+) (*NormalizedResult, error) {
 	var lastErr error
+	var retryableErr error
 	for index, endpoint := range endpoints {
+		if gate != nil {
+			if err := gate(); err != nil {
+				return nil, err
+			}
+		}
+		if index > 0 && metrics != nil {
+			metrics.IncFailover()
+		}
 		result, err := scanner.Scan(ctx, endpoint, chunk, scanners)
 		if err == nil && result != nil {
 			return result, nil
 		}
 		if err == nil {
-			err = &GuardError{Code: ErrorCodeInvalidResponse, Retryable: false}
+			err = &GuardError{Code: ErrorCodeInvalidResponse, Failoverable: true}
 		}
 		lastErr = err
 		var guardErr *GuardError
-		if !errors.As(err, &guardErr) || !guardErr.Retryable {
+		if errors.As(err, &guardErr) && guardErr.Retryable {
+			retryableErr = err
+		}
+		if !errors.As(err, &guardErr) || !guardErr.Failoverable {
 			return nil, err
 		}
-		if index < len(endpoints)-1 && metrics != nil {
-			metrics.IncFailover()
-		}
+	}
+	if retryableErr != nil {
+		return nil, retryableErr
 	}
 	if lastErr == nil {
 		lastErr = &GuardError{Code: ErrorCodeUnavailable}

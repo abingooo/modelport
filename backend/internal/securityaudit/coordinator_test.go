@@ -28,11 +28,17 @@ type fakePromptEngine struct {
 	err       error
 	enqueues  atomic.Int64
 	evaluates atomic.Int64
+	request   Request
 }
 
 type fakeInstructionEngine struct {
 	decision *InstructionDecision
+	route    PromptAuditRoute
 	calls    atomic.Int64
+}
+
+type fakeInstructionOnlyEngine struct {
+	calls atomic.Int64
 }
 
 func (f *fakeInstructionEngine) EvaluateInstruction(context.Context, Request) *InstructionDecision {
@@ -40,12 +46,39 @@ func (f *fakeInstructionEngine) EvaluateInstruction(context.Context, Request) *I
 	return f.decision
 }
 
+func (f *fakeInstructionEngine) ResolvePromptAuditRoute(Request) PromptAuditRoute {
+	return f.route
+}
+
+func (f *fakeInstructionOnlyEngine) EvaluateInstruction(context.Context, Request) *InstructionDecision {
+	f.calls.Add(1)
+	return &InstructionDecision{Allow: true}
+}
+
+func testPromptAuditRoute() PromptAuditRoute {
+	return PromptAuditRoute{
+		Eligible: true, AuditSource: PromptAuditSourceInstructionV2,
+		InstructionConfigVersion: 17, ClientProfileKey: InstructionClientOther,
+		ClientProfileName: "Other", TriggerReason: PromptAuditTriggerNonResponses,
+		ModelContractVersion: PromptAuditModelContractVersion,
+	}
+}
+
+func newPromptEligibleCoordinator(legacy LegacyEngine, prompt PromptEngine) *Coordinator {
+	return NewCoordinatorWithInstruction(legacy, prompt, &fakeInstructionEngine{
+		decision: &InstructionDecision{Allow: true},
+		route:    testPromptAuditRoute(),
+	})
+}
+
 func (f *fakePromptEngine) EffectiveMode() Mode { return f.mode }
-func (f *fakePromptEngine) Enqueue(context.Context, Request) error {
+func (f *fakePromptEngine) Enqueue(_ context.Context, req Request) error {
+	f.request = req
 	f.enqueues.Add(1)
 	return f.err
 }
-func (f *fakePromptEngine) Evaluate(context.Context, Request) (*PromptDecision, error) {
+func (f *fakePromptEngine) Evaluate(_ context.Context, req Request) (*PromptDecision, error) {
+	f.request = req
 	f.evaluates.Add(1)
 	return f.decision, f.err
 }
@@ -74,7 +107,7 @@ func TestCoordinatorModesAndPriority(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			legacy := &fakeLegacyEngine{decision: tt.legacy}
 			prompt := &fakePromptEngine{mode: tt.mode, decision: tt.prompt, err: tt.promptErr}
-			decision := NewCoordinator(legacy, prompt).Check(context.Background(), Request{Body: []byte(`{}`)})
+			decision := newPromptEligibleCoordinator(legacy, prompt).Check(context.Background(), Request{Body: []byte(`{}`)})
 			require.Equal(t, tt.wantKind, decision.Kind)
 			require.Equal(t, tt.wantCode, decision.ErrorCode)
 			require.Equal(t, int64(1), legacy.calls.Load())
@@ -132,7 +165,7 @@ func TestCoordinatorDoesNotMutateRequestBody(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"hello"}]}`)
 	original := append([]byte(nil), body...)
 	prompt := &fakePromptEngine{mode: ModeAsync}
-	decision := NewCoordinator(&fakeLegacyEngine{}, prompt).Check(context.Background(), Request{Body: body})
+	decision := newPromptEligibleCoordinator(&fakeLegacyEngine{}, prompt).Check(context.Background(), Request{Body: body})
 	require.True(t, decision.AllowNextStage)
 	require.Equal(t, original, body)
 }
@@ -164,7 +197,7 @@ func TestCoordinatorBlockingPriorityCoversBothEngineDecisionMatrix(t *testing.T)
 			t.Run(fmt.Sprintf("legacy_%s_prompt_%s", legacyCase.name, promptCase.name), func(t *testing.T) {
 				legacy := &fakeLegacyEngine{decision: legacyCase.decision}
 				prompt := &fakePromptEngine{mode: ModeBlocking, decision: promptCase.decision}
-				decision := NewCoordinator(legacy, prompt).Check(context.Background(), Request{})
+				decision := newPromptEligibleCoordinator(legacy, prompt).Check(context.Background(), Request{})
 
 				require.Same(t, legacyCase.decision, decision.Legacy)
 				require.Same(t, promptCase.decision, decision.Prompt)
@@ -195,7 +228,7 @@ func TestCoordinatorPreservesIndependentEngineFactsAndMapsOnlyGatewayOutcome(t *
 		Categories: []string{"pii"}, ScannerScores: map[string]float64{"pii": 1},
 	}
 	promptDecision := &PromptDecision{Kind: DecisionBlock, Result: promptResult}
-	decision := NewCoordinator(
+	decision := newPromptEligibleCoordinator(
 		&fakeLegacyEngine{decision: legacyDecision},
 		&fakePromptEngine{mode: ModeBlocking, decision: promptDecision},
 	).Check(context.Background(), Request{})
@@ -211,7 +244,7 @@ func TestCoordinatorPreservesIndependentEngineFactsAndMapsOnlyGatewayOutcome(t *
 func TestCoordinatorAsyncEnqueueFailuresNeverChangeResponseOrDownstreamDispatch(t *testing.T) {
 	for _, enqueueErr := range []error{ErrQueueFull, ErrQueueAdmissionBusy, errors.New("redis unavailable"), errors.New("publish failed")} {
 		prompt := &fakePromptEngine{mode: ModeAsync, err: enqueueErr}
-		decision := NewCoordinator(&fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}, prompt).Check(context.Background(), Request{})
+		decision := newPromptEligibleCoordinator(&fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}, prompt).Check(context.Background(), Request{})
 		downstreamDispatches := 0
 		status := http.StatusOK
 		responseBody := "unchanged-upstream-response"
@@ -226,5 +259,99 @@ func TestCoordinatorAsyncEnqueueFailuresNeverChangeResponseOrDownstreamDispatch(
 		require.Equal(t, 1, downstreamDispatches)
 		require.Equal(t, int64(1), prompt.enqueues.Load())
 		require.Zero(t, prompt.evaluates.Load())
+	}
+}
+
+func TestCoordinatorPromptPatchEligibilityAndResponsesExclusion(t *testing.T) {
+	eligibleRoute := testPromptAuditRoute()
+	tests := []struct {
+		name                 string
+		request              Request
+		route                PromptAuditRoute
+		wantEnqueue          int64
+		wantInstructionCalls int64
+	}{
+		{name: "eligible non responses", request: Request{Protocol: "openai_chat_completions"}, route: eligibleRoute, wantEnqueue: 1, wantInstructionCalls: 1},
+		{name: "ineligible non responses", request: Request{Protocol: "openai_chat_completions"}, wantInstructionCalls: 1},
+		{name: "responses http is always excluded", request: Request{Protocol: "openai_responses"}, route: eligibleRoute, wantInstructionCalls: 1},
+		{name: "responses websocket alias is always excluded", request: Request{Protocol: "responses_websocket"}, route: eligibleRoute, wantInstructionCalls: 1},
+		{name: "responses endpoint is always excluded", request: Request{Protocol: "openai_chat", Endpoint: "/v1/responses"}, route: eligibleRoute, wantInstructionCalls: 1},
+		{name: "completed instruction still permits eligible patch", request: Request{Protocol: "anthropic_messages", InstructionAuditCompleted: true}, route: eligibleRoute, wantEnqueue: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prompt := &fakePromptEngine{mode: ModeAsync}
+			instruction := &fakeInstructionEngine{
+				decision: &InstructionDecision{Allow: true}, route: test.route,
+			}
+			decision := NewCoordinatorWithInstruction(
+				&fakeLegacyEngine{}, prompt, instruction,
+			).Check(context.Background(), test.request)
+
+			require.True(t, decision.AllowNextStage)
+			require.Equal(t, test.wantEnqueue, prompt.enqueues.Load())
+			require.Equal(t, test.wantInstructionCalls, instruction.calls.Load())
+			if test.wantEnqueue > 0 {
+				require.True(t, prompt.request.PromptAuditRouteStamped)
+				require.Equal(t, int64(17), prompt.request.InstructionConfigVersion)
+				require.Equal(t, InstructionClientOther, prompt.request.PromptClientProfileKey)
+			}
+		})
+	}
+}
+
+func TestCoordinatorPromptPatchRequiresEligibilityProvider(t *testing.T) {
+	tests := []struct {
+		name        string
+		instruction InstructionEngine
+	}{
+		{name: "no instruction engine"},
+		{name: "instruction engine without eligibility provider", instruction: &fakeInstructionOnlyEngine{}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+			prompt := &fakePromptEngine{
+				mode: ModeBlocking, decision: &PromptDecision{Kind: DecisionBlock},
+			}
+			decision := NewCoordinatorWithInstruction(legacy, prompt, test.instruction).
+				Check(context.Background(), Request{Protocol: "anthropic_messages"})
+
+			require.Equal(t, DecisionAllow, decision.Kind)
+			require.True(t, decision.AllowNextStage)
+			require.Equal(t, int64(1), legacy.calls.Load())
+			require.Zero(t, prompt.enqueues.Load())
+			require.Zero(t, prompt.evaluates.Load())
+		})
+	}
+}
+
+func TestCoordinatorPromptPatchFailsClosedWhenInstructionConfigIsUnavailable(t *testing.T) {
+	tests := []struct {
+		name     string
+		mode     Mode
+		request  Request
+		wantKind DecisionKind
+		wantCode string
+	}{
+		{name: "blocking", mode: ModeBlocking, request: Request{Protocol: "anthropic_messages"}, wantKind: DecisionUnavailable, wantCode: ErrorCodeUnavailable},
+		{name: "async remains best effort", mode: ModeAsync, request: Request{Protocol: "anthropic_messages"}, wantKind: DecisionAllow},
+		{name: "responses remains excluded", mode: ModeBlocking, request: Request{Protocol: "openai_responses"}, wantKind: DecisionAllow},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+			prompt := &fakePromptEngine{mode: test.mode, decision: &PromptDecision{Kind: DecisionAllow, AllowNextStage: true}}
+			route := PromptAuditRoute{InstructionConfigUnavailable: true}
+			instruction := &fakeInstructionEngine{decision: &InstructionDecision{Allow: true}, route: route}
+
+			decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), test.request)
+
+			require.Equal(t, test.wantKind, decision.Kind)
+			require.Equal(t, test.wantCode, decision.ErrorCode)
+			require.Equal(t, int64(1), legacy.calls.Load())
+			require.Zero(t, prompt.enqueues.Load())
+			require.Zero(t, prompt.evaluates.Load())
+		})
 	}
 }

@@ -1,7 +1,7 @@
 export default {
   promptAudit: {
     title: '提示词审计',
-    description: '通过 OpenAI 兼容 Qwen3Guard 节点异步复核或同步阻止用户输入；事件的完整提示词会入库保存，仅供管理员复核。',
+    description: '使用 OpenAI 兼容安全模型补充审核符合条件的非 Responses 请求；事件的完整提示词会入库保存，仅供管理员复核。',
     configVersion: '配置版本 v{version}',
     tabs: { config: '配置', events: '事件' },
     actions: { refresh: '刷新运行态', retry: '重试', Allow: '放行', Warn: '警告', Block: '阻止' },
@@ -42,18 +42,20 @@ export default {
     },
     metrics: { total: '总计', allowed: '放行', flagged: '标记', blocked: '阻止', unavailable: '不可用', timeouts: '超时', failovers: '故障切换' },
     pool: {
-      title: '审计池', description: '按顺序使用启用的 OpenAI 兼容节点；探测由服务端真实网络环境发起。',
+      title: '审计池', description: '按顺序使用启用的 OpenAI 兼容安全模型节点；探测由服务端真实网络环境发起。',
       add: '新增节点', edit: '编辑节点', empty: '尚未配置审计节点。', node: '节点', model: '模型', limits: '超时 / 单片上限', credential: '凭据与探测',
       configured: 'API Key 已配置', missing: '未配置 API Key', invalid: 'API Key 无法解密，请重新输入', probe: '连接测试', probing: '探测中…',
       probeProgress: '配置校验 ✓ · 请求已发送 · 等待服务响应…', probeResult: '配置校验 ✓ · 请求 ✓ · HTTP {http} · {status} · {latency} ms',
-      name: '节点名称', id: '稳定节点 ID', baseUrl: 'Base URL', apiKey: 'API Key', keepSecret: '留空以保留已保存的 API Key', reenterSecret: '已保存的 API Key 无法解密（加密密钥已变更），请重新输入',
-      secretHint: '明文只在本次编辑内存中存在；保存成功后会立即清除。', clearSecret: '显式清除已保存的 API Key', timeout: '总超时（毫秒）', inputLimit: '单片 Unicode 字符上限',
+      name: '节点名称', id: '稳定节点 ID', provider: '供应商预设', providers: { qwen: '通义千问', deepseek: 'DeepSeek', doubao: '豆包', custom: '自定义' }, baseUrl: 'Base URL', apiKey: 'API Key', keepSecret: '留空以保留已保存的 API Key', reenterSecret: '已保存的 API Key 无法解密（加密密钥已变更），请重新输入',
+      secretHint: '明文只在本次编辑内存中存在；保存成功后会立即清除。', clearSecret: '显式清除已保存的 API Key', modelHint: '模型 ID 可自由编辑，供应商预设只提供候选项。', responseMode: '响应模式', responseModes: { auto: '自动探测', json_schema: 'JSON Schema', json_object: 'JSON 对象', text_json: '文本中的 JSON' }, configuredResponseMode: '配置模式', effectiveResponseMode: '实际模式', pendingProbe: '等待成功探测', maxOutputTokens: '最大输出 Token', timeout: '总超时（毫秒）', inputLimit: '单片 Unicode 字符上限',
+      requiresReconfigure: '旧版节点需要重新配置', requiresReconfigureHint: '编辑并保存该节点后才能启用。',
       toggleNode: '切换节点 {name}', deleteConfirm: '从草稿中删除节点“{name}”？保存配置后生效。',
     },
     policy: {
-      title: '审计策略', description: '配置适用分组、九类输入风险、Worker 与队列边界。', scope: '适用范围', allGroups: '全部分组', selectedGroups: '指定分组',
+      title: '审计策略', description: '查看继承的指令审核范围，并配置输入风险分类、Worker 与队列边界。', scope: '适用范围', allGroups: '全部分组', selectedGroups: '指定分组',
       searchGroups: '搜索分组', noGroups: '没有匹配分组', missingGroups: '配置中包含已删除的分组 ID', selectedCount: '已选择 {count} 个分组',
-      scanners: 'Qwen3Guard 输入风险分类', workerCount: 'Worker 数量', queueCapacity: '持久队列容量', strategy: '节点策略', strategyHint: '按配置顺序优先尝试，必要时故障切换。',
+      inheritedScope: '继承指令审核范围', inheritedScopeHint: '提示词审计使用指令审核 V2 的有效分组范围；范围变更统一在指令审核中管理。', instructionModes: { off: '指令审核已关闭', observe: '指令审核观察模式', enforce: '指令审核拦截模式' }, scopeLoading: '正在加载指令审核的有效范围…', instructionModeOff: '指令审核当前未生效，因此补充审计不会处理请求。', noInheritedGroups: '当前没有有效的指令审核分组范围。', scopeBindings: '{count} 个有效客户端范围', nonResponsesOnly: '该补充审计只考虑符合条件的非 Responses 请求；Responses 请求仍只由指令审核处理。', manageInstructionScope: '管理指令审核范围',
+      scanners: '输入风险分类', workerCount: 'Worker 数量', queueCapacity: '持久队列容量', strategy: '节点策略', strategyHint: '按配置顺序优先尝试，必要时故障切换。',
     },
     saveBar: { enabled: '启用提示词审计', blocking: '同步阻止', blockingLatestTurnOnly: '仅审最新输入和上一轮输出', storePass: '保存安全事件', dirty: '有未保存的更改', synced: '配置已同步' },
     blockingConfirm: {
@@ -91,10 +93,10 @@ export default {
     },
     messages: { saved: '提示词审计配置已保存，明文 API Key 状态已清除。', probeSucceeded: '审计节点连接正常。', deleted: '已删除 {count} 条审计事件。' },
     errors: {
-      loadConfig: '无法加载提示词审计配置。', loadRuntime: '无法加载提示词审计运行态。', loadGroups: '无法加载分组列表。', loadEvents: '无法加载审计事件。', loadDetail: '无法加载事件详情。', saveConfig: '配置保存失败。', probe: '节点探测失败。', delete: '事件删除失败。', previewDelete: '无法生成删除预览，请检查时间范围。', deleteConfirmation: '删除确认无效或已过期，请重新预览。',
+      loadConfig: '无法加载提示词审计配置。', loadRuntime: '无法加载提示词审计运行态。', loadGroups: '无法加载分组列表。', loadInstructionScope: '无法加载继承的指令审核范围。', loadEvents: '无法加载审计事件。', loadDetail: '无法加载事件详情。', saveConfig: '配置保存失败。', probe: '节点探测失败。', delete: '事件删除失败。', previewDelete: '无法生成删除预览，请检查时间范围。', deleteConfirmation: '删除确认无效或已过期，请重新预览。',
       prompt_audit_config_conflict: '配置已被其他管理员更新。请重新加载服务端配置，再决定如何合并本地草稿。',
       prompt_audit_encryption_key_required: '未配置固定加密密钥，审计节点 API Key 将在服务重启后失效。请先设置 TOTP_ENCRYPTION_KEY 环境变量并重启服务。',
-      prompt_guard_requires_audit_enabled: '开启同步阻止前必须先启用提示词审计。', prompt_audit_invalid_endpoint: '审计节点配置无效。', prompt_audit_endpoint_required: '启用审计前至少需要一个启用节点。', prompt_audit_groups_required: '指定分组模式至少需要选择一个分组。', prompt_audit_scanners_required: '至少需要启用一个风险分类。',
+      prompt_guard_requires_audit_enabled: '开启同步阻止前必须先启用提示词审计。', prompt_audit_invalid_endpoint: '审计节点配置无效。', prompt_audit_endpoint_required: '启用审计前至少需要一个启用节点。', prompt_audit_groups_required: '指定分组模式至少需要选择一个分组。', prompt_audit_scanners_required: '至少需要启用一个风险分类。', prompt_audit_endpoint_requires_reconfigure: '请先编辑并保存该旧版节点，再启用它。', prompt_audit_endpoint_token_replacement_required: '已保存的凭据无法解密；启用该节点前请重新填写 API Key，或明确清除凭据。', prompt_audit_retired_native_model: '该旧版 Qwen3Guard 模型只支持已退役的专用协议，不能通过新的 OpenAI 兼容通用协议调用；请选择兼容的安全审核模型。', prompt_audit_invalid_response_mode: '节点响应模式无效。', prompt_audit_invalid_max_output_tokens: '节点最大输出 Token 必须在 64 到 4096 之间。', prompt_audit_endpoint_probe_required: '自动响应模式必须先通过真实探测才能启用节点。', prompt_audit_endpoint_probe_failed: '节点未通过安全分类实测。',
     },
   },
 }

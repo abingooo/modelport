@@ -229,7 +229,7 @@ func validHandlerUpdateRequest(token string) UpdateConfigRequest {
 		AllGroups:             true,
 		Endpoints: []UpdateEndpoint{{
 			ID: "guard-1", Name: "Guard One", Protocol: "openai_compatible",
-			BaseURL: "http://127.0.0.1:18080", Model: DefaultGuardModel, Token: token,
+			BaseURL: "http://127.0.0.1:18080", Model: testReviewerModel, Token: token,
 			TimeoutMS: 1000, InputLimit: 1024, Enabled: true,
 		}},
 	}

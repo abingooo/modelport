@@ -72,7 +72,7 @@ func TestAsyncImagePromptGuardRunsBeforeTaskCreation(t *testing.T) {
 	store := &asyncImageMemoryStore{tasks: map[string]*service.ImageTaskRecord{}}
 	tasks := service.NewImageTaskServiceWithUploader(store, nil, time.Hour, time.Minute)
 	engine := blockingHandlerPromptEngine()
-	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: securityaudit.NewCoordinator(nil, engine)}
+	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: newPromptPatchTestCoordinator(engine)}
 	h := &AsyncImageHandler{tasks: tasks, openAI: openAI}
 	executions := 0
 	h.execute = func(string, *gin.Context) { executions++ }
@@ -100,7 +100,7 @@ func TestAsyncImageSuccessfulPrecheckIsNotRepeatedByDetachedExecution(t *testing
 	store := &asyncImageMemoryStore{tasks: map[string]*service.ImageTaskRecord{}}
 	tasks := service.NewImageTaskServiceWithUploader(store, nil, time.Hour, time.Minute)
 	engine := &handlerPromptEngine{mode: securityaudit.ModeBlocking, decision: &securityaudit.PromptDecision{Kind: securityaudit.DecisionAllow, AllowNextStage: true}}
-	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: securityaudit.NewCoordinator(nil, engine)}
+	openAI := &OpenAIGatewayHandler{securityAuditCoordinator: newPromptPatchTestCoordinator(engine)}
 	h := &AsyncImageHandler{tasks: tasks, openAI: openAI}
 	var executionMu sync.Mutex
 	repeatedDecision := false
@@ -147,7 +147,7 @@ func TestSecurityAuditBlockingFailuresLeaveAllDownstreamCountersAtZero(t *testin
 			engine := &handlerPromptEngine{mode: securityaudit.ModeBlocking, decision: &securityaudit.PromptDecision{
 				Kind: kind, ErrorCode: promptDecision.ErrorCode, AllowNextStage: false,
 			}}
-			coordinator := securityaudit.NewCoordinator(nil, engine)
+			coordinator := newPromptPatchTestCoordinator(engine)
 			recorder := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(recorder)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-test","messages":[{"role":"user","content":"guard me"}]}`))

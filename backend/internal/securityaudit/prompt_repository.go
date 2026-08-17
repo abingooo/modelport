@@ -23,44 +23,46 @@ var (
 )
 
 type Job struct {
-	ID                  int64
-	Snapshot            PromptSnapshot
-	ExecutionMode       Mode
-	ConfigVersion       int64
-	Status              string
-	Attempts            int
-	MaxAttempts         int
-	ClaimVersion        int64
-	NextAttemptAt       time.Time
-	ProcessingStartedAt *time.Time
-	ProcessedAt         *time.Time
-	LastErrorCode       string
-	LastErrorMessage    string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
+	ID                    int64
+	Snapshot              PromptSnapshot
+	ExecutionMode         Mode
+	ConfigVersion         int64
+	EffectiveResponseMode string
+	Status                string
+	Attempts              int
+	MaxAttempts           int
+	ClaimVersion          int64
+	NextAttemptAt         time.Time
+	ProcessingStartedAt   *time.Time
+	ProcessedAt           *time.Time
+	LastErrorCode         string
+	LastErrorMessage      string
+	CreatedAt             time.Time
+	UpdatedAt             time.Time
 }
 
 type Event struct {
-	ID              int64              `json:"id"`
-	JobID           int64              `json:"job_id"`
-	Snapshot        PromptSnapshot     `json:"snapshot"`
-	Decision        EventDecision      `json:"decision"`
-	RiskLevel       RiskLevel          `json:"risk_level"`
-	Action          Action             `json:"action"`
-	Categories      []string           `json:"categories"`
-	MatchedScanners []string           `json:"matched_scanners"`
-	ScannerScores   map[string]float64 `json:"scanner_scores"`
-	ScannerEvidence map[string]string  `json:"scanner_evidence"`
-	ScannerBackend  string             `json:"scanner_backend"`
-	ScannerVersion  string             `json:"scanner_version"`
-	GuardEndpointID string             `json:"guard_endpoint_id"`
-	PolicyID        string             `json:"policy_id"`
-	PolicyVersion   int                `json:"policy_version"`
-	ConfigVersion   int64              `json:"config_version"`
-	ChunkTotal      int                `json:"chunk_total"`
-	LatencyMS       int                `json:"latency_ms"`
-	IssueSummaries  []IssueSummary     `json:"issue_summaries"`
-	CreatedAt       time.Time          `json:"created_at"`
+	ID                    int64              `json:"id"`
+	JobID                 int64              `json:"job_id"`
+	Snapshot              PromptSnapshot     `json:"snapshot"`
+	Decision              EventDecision      `json:"decision"`
+	RiskLevel             RiskLevel          `json:"risk_level"`
+	Action                Action             `json:"action"`
+	Categories            []string           `json:"categories"`
+	MatchedScanners       []string           `json:"matched_scanners"`
+	ScannerScores         map[string]float64 `json:"scanner_scores"`
+	ScannerEvidence       map[string]string  `json:"scanner_evidence"`
+	ScannerBackend        string             `json:"scanner_backend"`
+	ScannerVersion        string             `json:"scanner_version"`
+	GuardEndpointID       string             `json:"guard_endpoint_id"`
+	PolicyID              string             `json:"policy_id"`
+	PolicyVersion         int                `json:"policy_version"`
+	ConfigVersion         int64              `json:"config_version"`
+	EffectiveResponseMode string             `json:"effective_response_mode"`
+	ChunkTotal            int                `json:"chunk_total"`
+	LatencyMS             int                `json:"latency_ms"`
+	IssueSummaries        []IssueSummary     `json:"issue_summaries"`
+	CreatedAt             time.Time          `json:"created_at"`
 }
 
 type JobRepository interface {
@@ -70,6 +72,7 @@ type JobRepository interface {
 	ClaimNextJob(ctx context.Context, now time.Time) (*Job, bool, error)
 	RefreshLease(ctx context.Context, jobID, claimVersion int64, now time.Time) error
 	Complete(ctx context.Context, job *Job, result *NormalizedResult, storePassEvents bool) (*Event, error)
+	Pause(ctx context.Context, jobID, claimVersion int64, next time.Time, code, message string) error
 	Retry(ctx context.Context, jobID, claimVersion int64, next time.Time, code, message string) error
 	Fail(ctx context.Context, jobID, claimVersion int64, code, message string) error
 	ReclaimStale(ctx context.Context, stagingBefore, processingBefore time.Time, limit int) (int64, error)
@@ -114,7 +117,7 @@ func (r *PostgreSQLRepository) CreateStagingWithCapacity(ctx context.Context, sn
 	if maxAttempts <= 0 {
 		maxAttempts = 3
 	}
-	job, err := insertJob(ctx, tx, snapshot.Redacted(), ModeAsync, configVersion, "staging", maxAttempts)
+	job, err := insertJob(ctx, tx, snapshot.Redacted(), ModeAsync, configVersion, "", "staging", maxAttempts)
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +148,7 @@ func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time) 
 		WITH candidate AS (
 			SELECT id FROM prompt_audit_jobs
 			WHERE status IN ('queued','retry') AND next_attempt_at <= $1
+			  AND model_contract_version = $2
 			ORDER BY next_attempt_at, id
 			FOR UPDATE SKIP LOCKED
 			LIMIT 1
@@ -154,7 +158,7 @@ func (r *PostgreSQLRepository) ClaimNextJob(ctx context.Context, now time.Time) 
 			processing_started_at=$1, updated_at=$1
 		FROM candidate
 		WHERE j.id=candidate.id
-		RETURNING `+jobColumns("j"), now.UTC())
+		RETURNING `+jobColumns("j"), now.UTC(), PromptAuditModelContractVersion)
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
@@ -180,8 +184,9 @@ func (r *PostgreSQLRepository) Complete(ctx context.Context, job *Job, result *N
 	defer func() { _ = tx.Rollback() }()
 	updateResult, err := tx.ExecContext(ctx, `
 		UPDATE prompt_audit_jobs SET status='done', processed_at=NOW(), updated_at=NOW(),
-			last_error_code='', last_error_message=''
-		WHERE id=$1 AND status='processing' AND claim_version=$2`, job.ID, job.ClaimVersion)
+			last_error_code='', last_error_message='', effective_response_mode=$3
+		WHERE id=$1 AND status='processing' AND claim_version=$2`,
+		job.ID, job.ClaimVersion, result.EffectiveResponseMode)
 	if err := requireOneRow(updateResult, err, ErrLeaseLost); err != nil {
 		return nil, err
 	}
@@ -203,6 +208,16 @@ func (r *PostgreSQLRepository) Retry(ctx context.Context, jobID, claimVersion in
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE prompt_audit_jobs SET status='retry', next_attempt_at=$3, processing_started_at=NULL,
 			updated_at=NOW(), last_error_code=$4, last_error_message=$5
+		WHERE id=$1 AND status='processing' AND claim_version=$2`,
+		jobID, claimVersion, next.UTC(), code, message)
+	return requireOneRow(result, err, ErrLeaseLost)
+}
+
+func (r *PostgreSQLRepository) Pause(ctx context.Context, jobID, claimVersion int64, next time.Time, code, _ string) error {
+	code, message := sanitizeStoredError(code)
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE prompt_audit_jobs SET status='retry', attempts=GREATEST(attempts-1, 0), next_attempt_at=$3,
+			processing_started_at=NULL, updated_at=NOW(), last_error_code=$4, last_error_message=$5
 		WHERE id=$1 AND status='processing' AND claim_version=$2`,
 		jobID, claimVersion, next.UTC(), code, message)
 	return requireOneRow(result, err, ErrLeaseLost)
@@ -287,7 +302,9 @@ func (r *PostgreSQLRepository) RecordBlocking(ctx context.Context, snapshot Prom
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	job, err := insertJob(ctx, tx, snapshot.Redacted(), ModeBlocking, configVersion, "done", 1)
+	job, err := insertJob(
+		ctx, tx, snapshot.Redacted(), ModeBlocking, configVersion, result.EffectiveResponseMode, "done", 1,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +331,16 @@ type sqlQueryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
-func insertJob(ctx context.Context, queryer sqlQueryer, snapshot PromptSnapshot, mode Mode, configVersion int64, status string, maxAttempts int) (*Job, error) {
+func insertJob(
+	ctx context.Context,
+	queryer sqlQueryer,
+	snapshot PromptSnapshot,
+	mode Mode,
+	configVersion int64,
+	effectiveResponseMode string,
+	status string,
+	maxAttempts int,
+) (*Job, error) {
 	processedExpr := "NULL"
 	if status == "done" || status == "failed" {
 		processedExpr = "NOW()"
@@ -323,14 +349,20 @@ func insertJob(ctx context.Context, queryer sqlQueryer, snapshot PromptSnapshot,
 		INSERT INTO prompt_audit_jobs (
 			request_id,user_id,username_snapshot,user_email_snapshot,api_key_id,api_key_name_snapshot,
 			group_id,group_name,provider,endpoint,protocol,model,prompt_hash,redacted_preview,
-			prompt_length,message_count,stage,execution_mode,config_version,status,max_attempts,processed_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,`+processedExpr+`)
+			prompt_length,message_count,stage,execution_mode,config_version,
+			audit_source,instruction_config_version,client_profile_key,client_profile_name,trigger_reason,
+			model_contract_version,effective_response_mode,status,max_attempts,processed_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
+			$20,$21,$22,$23,$24,$25,$26,$27,$28,`+processedExpr+`)
 		RETURNING `+jobColumns("prompt_audit_jobs"),
 		snapshot.RequestID, nullableID(snapshot.UserID), snapshot.UsernameSnapshot, snapshot.UserEmailSnapshot,
 		nullableID(snapshot.APIKeyID), snapshot.APIKeyNameSnapshot, snapshot.GroupID, snapshot.GroupName,
 		snapshot.Provider, snapshot.Endpoint, snapshot.Protocol, snapshot.Model, snapshot.PromptHash,
 		snapshot.RedactedPreview, snapshot.PromptLength, snapshot.MessageCount, normalizeStage(snapshot.Stage),
-		string(mode), configVersion, status, maxAttempts)
+		string(mode), configVersion, normalizeAuditSource(snapshot.AuditSource),
+		nonnegativeInt64(snapshot.InstructionConfigVersion), snapshot.ClientProfileKey, snapshot.ClientProfileName,
+		snapshot.TriggerReason, normalizeModelContractVersion(snapshot.ModelContractVersion), effectiveResponseMode,
+		status, maxAttempts)
 	return scanJob(row)
 }
 
@@ -348,17 +380,24 @@ func insertEvent(ctx context.Context, queryer sqlQueryer, jobID int64, snapshot 
 			job_id,request_id,user_id,username_snapshot,user_email_snapshot,api_key_id,api_key_name_snapshot,
 			group_id,group_name,provider,endpoint,protocol,model,prompt_hash,redacted_preview,stage,
 			decision,risk_level,action,categories,matched_scanners,scanner_scores,scanner_evidence,
-			scanner_backend,scanner_version,guard_endpoint_id,policy_id,policy_version,config_version,chunk_total,latency_ms,
+			scanner_backend,scanner_version,guard_endpoint_id,policy_id,policy_version,config_version,
+			audit_source,instruction_config_version,client_profile_key,client_profile_name,trigger_reason,
+			model_contract_version,effective_response_mode,chunk_total,latency_ms,
 			full_prompt
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,
-			$20::jsonb,$21::jsonb,$22::jsonb,$23::jsonb,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+			$20::jsonb,$21::jsonb,$22::jsonb,$23::jsonb,$24,$25,$26,$27,$28,$29,
+			$30,$31,$32,$33,$34,$35,$36,$37,$38,$39)
 		RETURNING `+eventDetailColumns("prompt_audit_events"),
 		jobID, snapshot.RequestID, nullableID(snapshot.UserID), snapshot.UsernameSnapshot, snapshot.UserEmailSnapshot,
 		nullableID(snapshot.APIKeyID), snapshot.APIKeyNameSnapshot, snapshot.GroupID, snapshot.GroupName,
 		snapshot.Provider, snapshot.Endpoint, snapshot.Protocol, snapshot.Model, snapshot.PromptHash,
 		snapshot.RedactedPreview, normalizeStage(snapshot.Stage), string(result.Decision), string(result.RiskLevel),
 		string(result.Action), categories, matched, scores, evidenceJSON, result.ScannerBackend, result.ScannerVersion,
-		result.GuardEndpointID, result.PolicyID, result.PolicyVersion, configVersion, result.ChunkTotal, result.LatencyMS,
+		result.GuardEndpointID, result.PolicyID, result.PolicyVersion, configVersion,
+		normalizeAuditSource(snapshot.AuditSource), nonnegativeInt64(snapshot.InstructionConfigVersion),
+		snapshot.ClientProfileKey, snapshot.ClientProfileName, snapshot.TriggerReason,
+		normalizeModelContractVersion(snapshot.ModelContractVersion), result.EffectiveResponseMode,
+		result.ChunkTotal, result.LatencyMS,
 		snapshot.FullPrompt)
 	return scanEvent(row, true)
 }
@@ -374,7 +413,10 @@ func scanJob(row rowScanner) (*Job, error) {
 		&apiKeyID, &job.Snapshot.APIKeyNameSnapshot, &groupID, &job.Snapshot.GroupName, &job.Snapshot.Provider,
 		&job.Snapshot.Endpoint, &job.Snapshot.Protocol, &job.Snapshot.Model, &job.Snapshot.PromptHash,
 		&job.Snapshot.RedactedPreview, &job.Snapshot.PromptLength, &job.Snapshot.MessageCount, &job.Snapshot.Stage,
-		&job.ExecutionMode, &job.ConfigVersion, &job.Status, &job.Attempts, &job.MaxAttempts, &job.ClaimVersion,
+		&job.ExecutionMode, &job.ConfigVersion, &job.Snapshot.AuditSource,
+		&job.Snapshot.InstructionConfigVersion, &job.Snapshot.ClientProfileKey, &job.Snapshot.ClientProfileName,
+		&job.Snapshot.TriggerReason, &job.Snapshot.ModelContractVersion, &job.EffectiveResponseMode,
+		&job.Status, &job.Attempts, &job.MaxAttempts, &job.ClaimVersion,
 		&job.NextAttemptAt, &processingStarted, &processed, &job.LastErrorCode, &job.LastErrorMessage,
 		&job.CreatedAt, &job.UpdatedAt,
 	)
@@ -399,10 +441,34 @@ func jobColumns(alias string) string {
 	return fmt.Sprintf(`%[1]s.id,%[1]s.request_id,%[1]s.user_id,%[1]s.username_snapshot,%[1]s.user_email_snapshot,
 		%[1]s.api_key_id,%[1]s.api_key_name_snapshot,%[1]s.group_id,%[1]s.group_name,%[1]s.provider,
 		%[1]s.endpoint,%[1]s.protocol,%[1]s.model,%[1]s.prompt_hash,%[1]s.redacted_preview,
-		%[1]s.prompt_length,%[1]s.message_count,%[1]s.stage,%[1]s.execution_mode,%[1]s.config_version,%[1]s.status,
+		%[1]s.prompt_length,%[1]s.message_count,%[1]s.stage,%[1]s.execution_mode,%[1]s.config_version,
+		%[1]s.audit_source,%[1]s.instruction_config_version,%[1]s.client_profile_key,%[1]s.client_profile_name,
+		%[1]s.trigger_reason,%[1]s.model_contract_version,%[1]s.effective_response_mode,%[1]s.status,
 		%[1]s.attempts,%[1]s.max_attempts,%[1]s.claim_version,%[1]s.next_attempt_at,
 		%[1]s.processing_started_at,%[1]s.processed_at,%[1]s.last_error_code,%[1]s.last_error_message,
 		%[1]s.created_at,%[1]s.updated_at`, alias)
+}
+
+func normalizeAuditSource(source string) string {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return "legacy"
+	}
+	return source
+}
+
+func normalizeModelContractVersion(version int) int {
+	if version < 1 {
+		return 1
+	}
+	return version
+}
+
+func nonnegativeInt64(value int64) int64 {
+	if value < 0 {
+		return 0
+	}
+	return value
 }
 
 func normalizeStage(stage string) string {

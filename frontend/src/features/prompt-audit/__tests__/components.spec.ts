@@ -16,10 +16,12 @@ vi.mock('vue-i18n', async () => {
 
 const DialogStub = defineComponent({ props: ['show', 'title'], emits: ['close'], template: '<div v-if="show" data-test="dialog"><slot /><slot name="footer" /></div>' })
 const PaginationStub = defineComponent({ props: ['total', 'page', 'pageSize'], emits: ['update:page', 'update:pageSize'], template: '<div data-test="pagination" />' })
+const RouterLinkStub = defineComponent({ props: ['to'], template: '<a><slot /></a>' })
 
 const endpoint = (): PromptAuditEndpointDraft => ({
   id: 'guard-1', name: 'Guard One', protocol: 'openai_compatible', base_url: 'http://127.0.0.1:8000',
-  model: 'guard-model', timeout_ms: 3000, input_limit: 4000, enabled: true,
+  provider: 'custom', model: 'guard-model', timeout_ms: 3000, input_limit: 4000,
+  response_mode: 'auto', max_output_tokens: 256, effective_response_mode: 'json_object', requires_reconfigure: false, enabled: true,
   has_token: true, token_status: 'configured', token: '', clear_token: false,
 })
 
@@ -32,6 +34,9 @@ describe('Prompt Audit components', () => {
       global: { stubs: { BaseDialog: DialogStub } },
     })
     expect(wrapper.text()).toContain('admin.promptAudit.pool.configured')
+    expect(wrapper.text()).toContain('admin.promptAudit.pool.providers.custom')
+    expect(wrapper.text()).toContain('admin.promptAudit.pool.configuredResponseMode')
+    expect(wrapper.text()).toContain('admin.promptAudit.pool.effectiveResponseMode')
     const edit = wrapper.findAll('button').find((button) => button.text().includes('common.edit'))
     expect(edit).toBeTruthy()
     await edit!.trigger('click')
@@ -56,8 +61,7 @@ describe('Prompt Audit components', () => {
       props: { endpoints: [invalidEndpoint], probeResults: {}, probingIds: [] },
       global: { stubs: { BaseDialog: DialogStub } },
     })
-    expect(wrapper.text()).toContain('admin.promptAudit.pool.invalid')
-    expect(wrapper.text()).not.toContain('admin.promptAudit.pool.configured')
+    expect(wrapper.get('[data-test="credential-status"]').text()).toBe('admin.promptAudit.pool.invalid')
 
     const edit = wrapper.findAll('button').find((button) => button.text().includes('common.edit'))
     await edit!.trigger('click')
@@ -65,23 +69,104 @@ describe('Prompt Audit components', () => {
     expect(token.attributes('placeholder')).toContain('admin.promptAudit.pool.reenterSecret')
   })
 
-  it('supports group search, stale configured groups, nine scanners, and bounded worker inputs', async () => {
+  it('applies provider URL presets conservatively while keeping model and response controls editable', async () => {
+    const wrapper = mount(EndpointPool, {
+      props: { endpoints: [], probeResults: {}, probingIds: [] },
+      global: { stubs: { BaseDialog: DialogStub } },
+    })
+    await wrapper.get('[data-test="add-endpoint"]').trigger('click')
+
+    const provider = wrapper.get<HTMLSelectElement>('[aria-label="admin.promptAudit.pool.provider"]')
+    const baseURL = wrapper.get<HTMLInputElement>('[aria-label="admin.promptAudit.pool.baseUrl"]')
+    const model = wrapper.get<HTMLInputElement>('[aria-label="admin.promptAudit.pool.model"]')
+    expect(baseURL.element.value).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1')
+    expect(model.element.value).toBe('qwen3.7-plus')
+    await provider.setValue('deepseek')
+    expect(baseURL.element.value).toBe('https://api.deepseek.com')
+    expect(model.element.value).toBe('deepseek-chat')
+
+    await baseURL.setValue('https://gateway.example.test/v1')
+    await provider.setValue('doubao')
+    expect(baseURL.element.value).toBe('https://gateway.example.test/v1')
+    expect(model.element.value).toBe('')
+    await model.setValue('custom-safety-model')
+    await provider.setValue('qwen')
+    expect(model.element.value).toBe('custom-safety-model')
+    expect(baseURL.element.value).toBe('https://gateway.example.test/v1')
+    await provider.setValue('doubao')
+    expect(model.element.value).toBe('custom-safety-model')
+    expect(baseURL.element.value).toBe('https://gateway.example.test/v1')
+    await wrapper.get('[aria-label="admin.promptAudit.pool.responseMode"]').setValue('text_json')
+    await wrapper.get('[aria-label="admin.promptAudit.pool.maxOutputTokens"]').setValue('512')
+    await wrapper.get('[data-test="save-endpoint"]').trigger('click')
+
+    const saved = (wrapper.emitted('update:endpoints')?.at(-1)?.[0] as PromptAuditEndpointDraft[])[0]
+    expect(saved).toMatchObject({
+      provider: 'doubao',
+      base_url: 'https://gateway.example.test/v1',
+      model: 'custom-safety-model',
+      response_mode: 'text_json',
+      effective_response_mode: 'text_json',
+      max_output_tokens: 512,
+    })
+  })
+
+  it('shows probe-negotiated response mode and requires legacy nodes to be edited before enabling', async () => {
+    const legacy = { ...endpoint(), enabled: false, effective_response_mode: '' as const, requires_reconfigure: true }
+    const wrapper = mount(EndpointPool, {
+      props: {
+        endpoints: [legacy],
+        probeResults: { 'guard-1': { ok: true, status: 'healthy', message: 'ok', latency_ms: 3, http_status: 200, retryable: false, checked_at: '', token_applied: true, effective_response_mode: 'text_json' } },
+        probingIds: [],
+      },
+      global: { stubs: { BaseDialog: DialogStub } },
+    })
+    expect(wrapper.get('[data-test="requires-reconfigure"]').text()).toContain('admin.promptAudit.pool.requiresReconfigure')
+    expect(wrapper.get('[role="switch"]').attributes()).toHaveProperty('disabled')
+    expect(wrapper.get('[data-test="effective-response-mode"]').text()).toContain('admin.promptAudit.pool.responseModes.text_json')
+
+    await wrapper.findAll('button').find((button) => button.text().includes('common.edit'))!.trigger('click')
+    await wrapper.get('[data-test="save-endpoint"]').trigger('click')
+    const saved = (wrapper.emitted('update:endpoints')?.at(-1)?.[0] as PromptAuditEndpointDraft[])[0]
+    expect(saved.requires_reconfigure).toBe(false)
+  })
+
+  it('shows inherited scope read-only, preserves hidden legacy scope fields, and edits worker bounds', async () => {
     const draft: PromptAuditDraft = {
       enabled: true, blocking_enabled: false, blocking_latest_turn_only: false, store_pass_events: false, effective_mode: 'async_audit', strategy: 'priority',
       worker_count: 4, queue_capacity: 100, scanners: SCANNER_CATALOG.map((item) => item.id), all_groups: false, group_ids: [1, 99],
       endpoints: [endpoint()], config_version: 1, updated_at: '', updated_by: 0, change_summary: '',
     }
     const wrapper = mount(PolicyPanel, {
-      props: { draft, groups: [{ id: 1, name: 'Alpha', platform: 'openai', status: 'active' }, { id: 2, name: 'Beta', platform: 'claude', status: 'inactive' }] },
+      props: {
+        draft,
+        inheritedGroups: [{ group_id: 1, name: 'Alpha', platform: 'openai', status: 'active', scope_count: 2 }],
+        instructionMode: 'observe',
+        scopeLoading: false,
+        scopeError: '',
+      },
+      global: { stubs: { RouterLink: RouterLinkStub } },
     })
-    expect(wrapper.text()).toContain('99')
+    expect(wrapper.get('[data-test="scope-groups"]').text()).toContain('Alpha')
+    expect(wrapper.get('[data-test="scope-groups"]').text()).toContain('#1')
+    expect(wrapper.find('[aria-label="admin.promptAudit.policy.searchGroups"]').exists()).toBe(false)
+    expect(wrapper.find('input[type="radio"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="manage-instruction-scope"]').exists()).toBe(true)
+    expect(wrapper.getComponent(RouterLinkStub).props('to')).toEqual({ path: '/admin/instruction-audit', query: { tab: 'scopes' } })
     expect(wrapper.findAll('input[type="checkbox"]').filter((input) => SCANNER_CATALOG.some((scanner) => input.attributes('aria-label') === `admin.promptAudit.scanners.${scanner.id}`))).toHaveLength(9)
-    await wrapper.get('[aria-label="admin.promptAudit.policy.searchGroups"]').setValue('Beta')
-    expect(wrapper.text()).toContain('Beta')
-    expect(wrapper.text()).not.toContain('Alpha')
     await wrapper.get('[aria-label="admin.promptAudit.policy.workerCount"]').setValue('6')
     const emitted = wrapper.emitted('update:draft')?.at(-1)?.[0] as PromptAuditDraft
     expect(emitted.worker_count).toBe(6)
+    expect(emitted.all_groups).toBe(false)
+    expect(emitted.group_ids).toEqual([1, 99])
+
+    await wrapper.setProps({ instructionMode: 'off', inheritedGroups: [] })
+    expect(wrapper.get('[data-test="scope-mode-off"]').exists()).toBe(true)
+    expect(wrapper.get('[data-test="scope-empty"]').exists()).toBe(true)
+    await wrapper.setProps({ scopeError: 'scope unavailable' })
+    expect(wrapper.get('[data-test="scope-error"]').text()).toBe('scope unavailable')
+    await wrapper.setProps({ scopeLoading: true })
+    expect(wrapper.get('[data-test="scope-loading"]').exists()).toBe(true)
   })
 
   it('keeps identity fields separate, supports selection, and opens filter deletion from the toolbar', async () => {

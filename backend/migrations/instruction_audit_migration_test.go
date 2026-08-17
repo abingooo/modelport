@@ -316,3 +316,32 @@ func TestInstructionAuditV2SourceAccountMigrationBackfillsDurableSnapshots(t *te
 	require.NotContains(t, sql, "truncate")
 	require.NotContains(t, sql, "delete from")
 }
+
+func TestPromptAuditInstructionPatchMigrationDisablesLegacyContractWithoutDroppingSecrets(t *testing.T) {
+	body, err := FS.ReadFile("224_prompt_audit_instruction_patch.sql")
+	require.NoError(t, err)
+	sql := strings.ToLower(string(body))
+	require.Contains(t, sql, "add column if not exists prompt_audit_enabled")
+	require.Contains(t, sql, "chk_instruction_audit_v2_internal_prompt_audit")
+	for _, column := range []string{
+		"audit_source", "instruction_config_version", "client_profile_key", "client_profile_name",
+		"trigger_reason", "model_contract_version", "effective_response_mode",
+	} {
+		require.Equal(t, 2, strings.Count(sql, "add column if not exists "+column))
+	}
+	require.Contains(t, sql, "alter column scanner_version type varchar(255)")
+	require.Contains(t, sql, "last_error_code = 'model_contract_retired'")
+	require.Contains(t, sql, "where model_contract_version <> 2")
+	require.Contains(t, sql, "status in ('staging', 'queued', 'retry', 'processing')")
+	require.Contains(t, sql, "current_contract >= 2")
+	require.Contains(t, sql, "length(current_config->>'model_contract_version') <= 9")
+	require.Contains(t, sql, "length(current_config->>'config_version') <= 18")
+	require.Contains(t, sql, "'enabled', false")
+	require.Contains(t, sql, "'blocking_enabled', false")
+	require.Contains(t, sql, "'requires_reconfigure', true")
+	require.Contains(t, sql, "endpoint.value || jsonb_build_object")
+	require.NotContains(t, sql, "token_ciphertext', ''")
+	require.NotContains(t, sql, "delete from prompt_audit")
+	require.NotContains(t, sql, "drop table")
+	require.NotContains(t, sql, "truncate")
+}

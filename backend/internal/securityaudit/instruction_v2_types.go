@@ -150,17 +150,18 @@ type InstructionV2ClientMatcher struct {
 }
 
 type InstructionV2ClientProfile struct {
-	ID                int64                        `json:"id"`
-	ProfileKey        string                       `json:"profile_key"`
-	Name              string                       `json:"name"`
-	Description       string                       `json:"description"`
-	Matchers          []InstructionV2ClientMatcher `json:"matchers"`
-	Priority          int                          `json:"priority"`
-	Enabled           bool                         `json:"enabled"`
-	BuiltIn           bool                         `json:"built_in"`
-	ImmutableInternal bool                         `json:"immutable_internal"`
-	CreatedAt         time.Time                    `json:"created_at"`
-	UpdatedAt         time.Time                    `json:"updated_at"`
+	ID                 int64                        `json:"id"`
+	ProfileKey         string                       `json:"profile_key"`
+	Name               string                       `json:"name"`
+	Description        string                       `json:"description"`
+	Matchers           []InstructionV2ClientMatcher `json:"matchers"`
+	Priority           int                          `json:"priority"`
+	Enabled            bool                         `json:"enabled"`
+	PromptAuditEnabled bool                         `json:"prompt_audit_enabled"`
+	BuiltIn            bool                         `json:"built_in"`
+	ImmutableInternal  bool                         `json:"immutable_internal"`
+	CreatedAt          time.Time                    `json:"created_at"`
+	UpdatedAt          time.Time                    `json:"updated_at"`
 }
 
 type SaveInstructionV2ClientProfileRequest struct {
@@ -170,6 +171,10 @@ type SaveInstructionV2ClientProfileRequest struct {
 	Matchers    []InstructionV2ClientMatcher `json:"matchers"`
 	Priority    int                          `json:"priority"`
 	Enabled     bool                         `json:"enabled"`
+}
+
+type UpdateInstructionV2ClientProfilePromptAuditRequest struct {
+	Enabled *bool `json:"enabled" binding:"required"`
 }
 
 type InstructionV2Scope struct {

@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const maxBlockingEvaluationTimeout = 2 * time.Duration(MaxTimeoutMS) * time.Millisecond
+
 type GuardEvaluator struct {
 	scanner PromptScanner
 	repo    JobRepository
@@ -64,11 +66,7 @@ func (g *GuardEvaluator) Evaluate(ctx context.Context, cfg ActiveConfig, snapsho
 		logGuardFailure(snapshot, cfg, DecisionUnavailable, ErrorCodeUnavailable, "", g.clock.Now().Sub(start))
 		return nil, &GuardError{Code: ErrorCodeUnavailable}
 	}
-	timeout := time.Duration(endpoints[0].TimeoutMS) * time.Millisecond
-	if timeout <= 0 {
-		timeout = DefaultTimeoutMS * time.Millisecond
-	}
-	evalCtx, cancel := context.WithTimeout(ctx, timeout)
+	evalCtx, cancel := context.WithTimeout(ctx, blockingEvaluationTimeout(endpoints))
 	defer cancel()
 	inputLimit := minimumInputLimit(endpoints)
 	chunks := SplitRunes(snapshot.ScanText, inputLimit)
@@ -189,38 +187,64 @@ func logGuardFailure(snapshot PromptSnapshot, cfg ActiveConfig, kind DecisionKin
 
 func (g *GuardEvaluator) scanChunk(ctx context.Context, cfg ActiveConfig, endpoints []ActiveEndpoint, chunk string) (*NormalizedResult, error) {
 	var lastErr error
+	var retryableErr error
 	for index, endpoint := range endpoints {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, parentContextGuardError(ctxErr)
+		}
 		semaphore := g.nodeSemaphore(endpoint.ID)
 		select {
 		case semaphore <- struct{}{}:
 		case <-ctx.Done():
-			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Timeout: errors.Is(ctx.Err(), context.DeadlineExceeded), Cause: ctx.Err()}
+			return nil, parentContextGuardError(ctx.Err())
 		default:
 			if g.metrics != nil {
 				g.metrics.IncBulkheadFull()
 			}
-			lastErr = &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
+			lastErr = &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true}
 			if index < len(endpoints)-1 && g.metrics != nil {
 				g.metrics.IncFailover()
 			}
 			continue
 		}
-		result, err := callPromptScanner(ctx, g.scanner, endpoint, chunk, cfg.Scanners)
+		timeout := time.Duration(endpoint.TimeoutMS) * time.Millisecond
+		if timeout <= 0 {
+			timeout = DefaultTimeoutMS * time.Millisecond
+		}
+		endpointCtx, cancel := context.WithTimeout(ctx, timeout)
+		result, err := callPromptScanner(endpointCtx, g.scanner, endpoint, chunk, cfg.Scanners)
+		endpointCtxErr := endpointCtx.Err()
+		cancel()
 		<-semaphore
 		if err == nil && result != nil {
 			return result, nil
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, parentContextGuardError(ctxErr)
+		}
+		if errors.Is(endpointCtxErr, context.DeadlineExceeded) {
+			err = &GuardError{
+				Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true,
+				Timeout: true, Cause: endpointCtxErr,
+			}
+		}
 		if err == nil {
-			err = &GuardError{Code: ErrorCodeInvalidResponse, Retryable: false}
+			err = &GuardError{Code: ErrorCodeInvalidResponse, Failoverable: true}
 		}
 		lastErr = err
 		var guardErr *GuardError
-		if !errors.As(err, &guardErr) || !guardErr.Retryable {
+		if errors.As(err, &guardErr) && guardErr.Retryable {
+			retryableErr = err
+		}
+		if !errors.As(err, &guardErr) || !guardErr.Failoverable {
 			return nil, err
 		}
 		if index < len(endpoints)-1 && g.metrics != nil {
 			g.metrics.IncFailover()
 		}
+	}
+	if retryableErr != nil {
+		return nil, retryableErr
 	}
 	if lastErr == nil {
 		lastErr = &GuardError{Code: ErrorCodeUnavailable}
@@ -228,11 +252,20 @@ func (g *GuardEvaluator) scanChunk(ctx context.Context, cfg ActiveConfig, endpoi
 	return nil, lastErr
 }
 
+func parentContextGuardError(err error) *GuardError {
+	guardErr := &GuardError{Code: ErrorCodeUnavailable, Cause: err}
+	if errors.Is(err, context.DeadlineExceeded) {
+		guardErr.Retryable = true
+		guardErr.Timeout = true
+	}
+	return guardErr
+}
+
 func callPromptScanner(ctx context.Context, scanner PromptScanner, endpoint ActiveEndpoint, chunk string, scanners []string) (result *NormalizedResult, err error) {
 	defer func() {
 		if recover() != nil {
 			result = nil
-			err = &GuardError{Code: ErrorCodeUnavailable, Retryable: false}
+			err = &GuardError{Code: ErrorCodeUnavailable, Failoverable: true}
 		}
 	}()
 	return scanner.Scan(ctx, endpoint, chunk, scanners)
@@ -261,6 +294,24 @@ func minimumInputLimit(endpoints []ActiveEndpoint) int {
 		}
 	}
 	return limit
+}
+
+func blockingEvaluationTimeout(endpoints []ActiveEndpoint) time.Duration {
+	total := time.Duration(0)
+	for _, endpoint := range endpoints {
+		timeout := time.Duration(endpoint.TimeoutMS) * time.Millisecond
+		if timeout <= 0 {
+			timeout = DefaultTimeoutMS * time.Millisecond
+		}
+		if total >= maxBlockingEvaluationTimeout-timeout {
+			return maxBlockingEvaluationTimeout
+		}
+		total += timeout
+	}
+	if total <= 0 {
+		return DefaultTimeoutMS * time.Millisecond
+	}
+	return total
 }
 
 func guardErrorCode(err error) string {

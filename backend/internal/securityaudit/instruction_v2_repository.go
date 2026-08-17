@@ -461,7 +461,7 @@ func (r *InstructionV2Repository) DeleteAINode(ctx context.Context, id, actorID 
 
 func (r *InstructionV2Repository) ListClientProfiles(ctx context.Context) ([]InstructionV2ClientProfile, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, profile_key, name, description, matchers, priority, enabled,
+		SELECT id, profile_key, name, description, matchers, priority, enabled, prompt_audit_enabled,
 		       built_in, immutable_internal, created_at, updated_at
 		FROM instruction_audit_v2_client_profiles ORDER BY priority, id`)
 	if err != nil {
@@ -474,7 +474,8 @@ func (r *InstructionV2Repository) ListClientProfiles(ctx context.Context) ([]Ins
 		var matchers []byte
 		if err := rows.Scan(
 			&item.ID, &item.ProfileKey, &item.Name, &item.Description, &matchers, &item.Priority,
-			&item.Enabled, &item.BuiltIn, &item.ImmutableInternal, &item.CreatedAt, &item.UpdatedAt,
+			&item.Enabled, &item.PromptAuditEnabled, &item.BuiltIn, &item.ImmutableInternal,
+			&item.CreatedAt, &item.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -497,6 +498,7 @@ func (r *InstructionV2Repository) SaveClientProfile(ctx context.Context, id int6
 	}
 	defer func() { _ = tx.Rollback() }()
 	var item InstructionV2ClientProfile
+	var promptAuditEnabled bool
 	if id == 0 {
 		err = tx.QueryRowContext(ctx, `
 			INSERT INTO instruction_audit_v2_client_profiles
@@ -511,10 +513,10 @@ func (r *InstructionV2Repository) SaveClientProfile(ctx context.Context, id int6
 		var existingMatchers []byte
 		var existingPriority int
 		if err = tx.QueryRowContext(ctx, `
-			SELECT profile_key, name, description, matchers, priority, built_in, immutable_internal
+			SELECT profile_key, name, description, matchers, priority, built_in, immutable_internal, prompt_audit_enabled
 			FROM instruction_audit_v2_client_profiles WHERE id = $1 FOR UPDATE`, id).Scan(
 			&existingKey, &existingName, &existingDescription, &existingMatchers,
-			&existingPriority, &builtIn, &immutable,
+			&existingPriority, &builtIn, &immutable, &promptAuditEnabled,
 		); err != nil {
 			return InstructionV2ClientProfile{}, 0, err
 		}
@@ -559,7 +561,46 @@ func (r *InstructionV2Repository) SaveClientProfile(ctx context.Context, id int6
 	}
 	item.ProfileKey, item.Name, item.Description, item.Matchers = request.ProfileKey, request.Name, request.Description, request.Matchers
 	item.Priority, item.Enabled = request.Priority, request.Enabled
+	item.PromptAuditEnabled = promptAuditEnabled
 	return item, version, nil
+}
+
+func (r *InstructionV2Repository) SetClientProfilePromptAudit(
+	ctx context.Context,
+	id int64,
+	enabled bool,
+	actorID int64,
+) (int64, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var profileKey string
+	var profileEnabled, immutableInternal bool
+	if err := tx.QueryRowContext(ctx, `
+		SELECT profile_key, enabled, immutable_internal
+		FROM instruction_audit_v2_client_profiles
+		WHERE id = $1 FOR UPDATE`, id).Scan(&profileKey, &profileEnabled, &immutableInternal); err != nil {
+		return 0, err
+	}
+	if enabled && (immutableInternal || profileKey == InstructionClientModelPortInternal) {
+		return 0, errInstructionV2PromptInternalProfile
+	}
+	if enabled && !profileEnabled {
+		return 0, errInstructionV2PromptProfileDisabled
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE instruction_audit_v2_client_profiles
+		SET prompt_audit_enabled = $2, updated_by = NULLIF($3, 0), updated_at = NOW()
+		WHERE id = $1`, id, enabled, actorID); err != nil {
+		return 0, err
+	}
+	version, err := r.bumpConfigVersion(ctx, tx, actorID)
+	if err != nil {
+		return 0, err
+	}
+	return version, tx.Commit()
 }
 
 func (r *InstructionV2Repository) DeleteClientProfile(ctx context.Context, id, actorID int64) (int64, error) {

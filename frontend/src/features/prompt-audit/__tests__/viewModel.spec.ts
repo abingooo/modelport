@@ -3,10 +3,12 @@ import type { PromptAuditConfig } from '../types'
 import {
   buildUpdateRequest,
   configToDraft,
+  createDefaultEndpoint,
   draftFingerprint,
   emptyEventFilters,
   eventFilterPayload,
   hasExplicitDeleteRange,
+  inferPromptAuditProvider,
   SCANNER_CATALOG,
 } from '../viewModel'
 
@@ -23,8 +25,9 @@ const config = (): PromptAuditConfig => ({
   all_groups: true,
   group_ids: [],
   endpoints: [{
-    id: 'guard-1', name: 'Guard One', protocol: 'openai_compatible', base_url: 'http://127.0.0.1:8000',
-    model: 'sileader/qwen3guard:0.6b', timeout_ms: 3000, input_limit: 4000, enabled: true,
+    id: 'guard-1', name: 'Guard One', protocol: 'openai_compatible', provider: 'custom', base_url: 'http://127.0.0.1:8000',
+    model: 'safety-model', timeout_ms: 3000, input_limit: 4000, response_mode: 'auto', max_output_tokens: 256,
+    effective_response_mode: 'json_object', requires_reconfigure: false, enabled: true,
     has_token: true, token_status: 'configured',
   }],
   config_version: 7,
@@ -37,6 +40,36 @@ describe('Prompt Audit view model', () => {
   it('normalizes legacy null collections from the public config', () => {
     const legacy = { ...config(), group_ids: null, scanners: null, endpoints: null } as unknown as PromptAuditConfig
     expect(configToDraft(legacy)).toMatchObject({ group_ids: [], scanners: [], endpoints: [] })
+  })
+
+  it('normalizes missing legacy endpoint contract fields without restoring the retired Guard model', () => {
+    const endpoint = { ...config().endpoints[0] } as Record<string, unknown>
+    delete endpoint.provider
+    delete endpoint.response_mode
+    delete endpoint.max_output_tokens
+    delete endpoint.effective_response_mode
+    delete endpoint.requires_reconfigure
+    const legacy = { ...config(), endpoints: [endpoint] } as unknown as PromptAuditConfig
+
+    expect(configToDraft(legacy).endpoints[0]).toMatchObject({
+      provider: 'custom',
+      model: 'safety-model',
+      response_mode: 'auto',
+      max_output_tokens: 256,
+      effective_response_mode: '',
+      requires_reconfigure: false,
+    })
+  })
+
+  it('uses Qwen defaults for new nodes and infers presets from normalized URLs', () => {
+    expect(createDefaultEndpoint(1)).toMatchObject({
+      provider: 'qwen',
+      base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      model: 'qwen3.7-plus',
+      response_mode: 'auto',
+      max_output_tokens: 256,
+    })
+    expect(inferPromptAuditProvider('https://api.deepseek.com/')).toBe('deepseek')
   })
 
   it('models all nine official input scanners', () => {
@@ -61,6 +94,22 @@ describe('Prompt Audit view model', () => {
     const draft = configToDraft(config())
     draft.blocking_latest_turn_only = true
     expect(buildUpdateRequest(draft)).toMatchObject({ blocking_latest_turn_only: true })
+  })
+
+  it('round-trips hidden legacy group fields and the generic model contract exactly', () => {
+    const draft = configToDraft({ ...config(), all_groups: true, group_ids: [9, 3] })
+    draft.endpoints[0].response_mode = 'text_json'
+    draft.endpoints[0].max_output_tokens = 512
+
+    expect(buildUpdateRequest(draft)).toMatchObject({
+      all_groups: true,
+      group_ids: [3, 9],
+      endpoints: [expect.objectContaining({
+        model: 'safety-model',
+        response_mode: 'text_json',
+        max_output_tokens: 512,
+      })],
+    })
   })
 
   it('tracks dirty state from the full normalized save payload', () => {

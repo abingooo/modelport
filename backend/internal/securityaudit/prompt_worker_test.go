@@ -58,6 +58,33 @@ func (s *fakeConfigStore) RuntimeState() (int64, int64, *time.Time, string) {
 func (s *fakeConfigStore) Encrypt(value string) (string, error) { return value, nil }
 func (s *fakeConfigStore) Decrypt(value string) (string, error) { return value, nil }
 
+type configStoreState struct {
+	cfg    ActiveConfig
+	active bool
+}
+
+type sequencedConfigStore struct {
+	*fakeConfigStore
+	mu     sync.Mutex
+	states []configStoreState
+	reads  int
+}
+
+func (s *sequencedConfigStore) Active() (ActiveConfig, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	index := s.reads
+	if index >= len(s.states) {
+		index = len(s.states) - 1
+	}
+	s.reads++
+	if index < 0 {
+		return ActiveConfig{}, false
+	}
+	state := s.states[index]
+	return cloneActiveConfig(state.cfg), state.active
+}
+
 type fakeJobRepository struct {
 	mu sync.Mutex
 
@@ -67,6 +94,7 @@ type fakeJobRepository struct {
 	publishErr  error
 	refreshErr  error
 	completeErr error
+	pauseErr    error
 	retryErr    error
 	failErr     error
 
@@ -79,11 +107,16 @@ type fakeJobRepository struct {
 	retryAt         time.Time
 	retryCode       string
 	retried         int
+	paused          int
+	pauseCode       string
+	pausedAttempts  int
 	failedCode      string
 	failed          int
 	refreshes       int
+	claimCalls      int
 
 	claimQueue []*Job
+	claimedJob *Job
 
 	recordBlockingCalls    int
 	recordBlockingSnapshot PromptSnapshot
@@ -126,11 +159,16 @@ func (r *fakeJobRepository) MarkStagingFailed(_ context.Context, _ int64, code, 
 func (r *fakeJobRepository) ClaimNextJob(context.Context, time.Time) (*Job, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.claimCalls++
 	if len(r.claimQueue) == 0 {
 		return nil, false, nil
 	}
 	job := r.claimQueue[0]
 	r.claimQueue = r.claimQueue[1:]
+	job.Status = "processing"
+	job.Attempts++
+	job.ClaimVersion++
+	r.claimedJob = job
 	return job, true, nil
 }
 func (r *fakeJobRepository) RefreshLease(context.Context, int64, int64, time.Time) error {
@@ -159,6 +197,24 @@ func (r *fakeJobRepository) Retry(_ context.Context, _, _ int64, next time.Time,
 	r.retried++
 	r.retryAt, r.retryCode = next, code
 	return r.retryErr
+}
+func (r *fakeJobRepository) Pause(_ context.Context, jobID, claimVersion int64, _ time.Time, code, _ string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pauseErr != nil {
+		return r.pauseErr
+	}
+	if r.claimedJob == nil || r.claimedJob.ID != jobID || r.claimedJob.Status != "processing" || r.claimedJob.ClaimVersion != claimVersion {
+		return ErrLeaseLost
+	}
+	r.paused++
+	r.pauseCode = code
+	r.claimedJob.Status = "retry"
+	if r.claimedJob.Attempts > 0 {
+		r.claimedJob.Attempts--
+	}
+	r.pausedAttempts = r.claimedJob.Attempts
+	return nil
 }
 func (r *fakeJobRepository) Fail(_ context.Context, _, _ int64, code, _ string) error {
 	r.mu.Lock()
@@ -190,6 +246,7 @@ type fakePayloadStore struct {
 	pingErr   error
 	setTTL    time.Duration
 	deleted   []int64
+	getCalls  int
 }
 
 func (s *fakePayloadStore) Set(_ context.Context, jobID int64, value string, ttl time.Duration) error {
@@ -210,6 +267,7 @@ func (s *fakePayloadStore) Set(_ context.Context, jobID int64, value string, ttl
 func (s *fakePayloadStore) Get(_ context.Context, jobID int64) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.getCalls++
 	if s.getErr != nil {
 		return "", s.getErr
 	}
@@ -240,7 +298,12 @@ func asyncConfig() ActiveConfig {
 }
 
 func asyncRequest() Request {
-	return Request{RequestID: "request-async", Protocol: "openai_chat_completions", Body: []byte(`{"messages":[{"role":"user","content":"payload canary text"}]}`)}
+	return Request{
+		RequestID: "request-async", Protocol: "openai_chat_completions", Body: []byte(`{"messages":[{"role":"user","content":"payload canary text"}]}`),
+		PromptAuditRouteStamped: true, PromptAuditSource: PromptAuditSourceInstructionV2,
+		InstructionConfigVersion: 2, PromptClientProfileKey: "other", PromptAuditTriggerReason: PromptAuditTriggerNonResponses,
+		PromptModelContractVersion: PromptAuditModelContractVersion,
+	}
 }
 
 func TestEnqueuerStagingPayloadPublishProtocolAndFailureCleanup(t *testing.T) {
@@ -296,13 +359,11 @@ func TestEnqueuerSkipsOffOutOfScopeAndNoText(t *testing.T) {
 		req  Request
 	}{
 		{name: "off", cfg: ActiveConfig{}, req: asyncRequest()},
-		{name: "out of scope", cfg: func() ActiveConfig {
-			cfg := asyncConfig()
-			cfg.AllGroups = false
-			cfg.GroupIDs = []int64{9}
-			return cfg
-		}(), req: asyncRequest()},
-		{name: "no user text", cfg: asyncConfig(), req: Request{Protocol: "openai_chat_completions", Body: []byte(`{"messages":[{"role":"function","content":"not audited"}]}`)}},
+		{name: "no user text", cfg: asyncConfig(), req: func() Request {
+			req := asyncRequest()
+			req.Body = []byte(`{"messages":[{"role":"function","content":"not audited"}]}`)
+			return req
+		}()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -361,7 +422,368 @@ func TestEnqueuerRecordsAcceptedDroppedAndSkippedMetrics(t *testing.T) {
 
 func workerJob(attempts, maxAttempts int) *Job {
 	return &Job{ID: 51, ClaimVersion: 3, Attempts: attempts, MaxAttempts: maxAttempts, ConfigVersion: 7,
-		Snapshot: PromptSnapshot{RequestID: "worker-request", PromptLength: 6, RedactedPreview: "red***"}}
+		Snapshot: PromptSnapshot{RequestID: "worker-request", PromptLength: 6, RedactedPreview: "red***", ModelContractVersion: PromptAuditModelContractVersion}}
+}
+
+func TestWorkerDoesNotClaimQueuedJobsWhilePromptAuditIsDisabled(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*ActiveConfig)
+	}{
+		{name: "global risk control disabled", mutate: func(cfg *ActiveConfig) { cfg.RiskControlEnabled = false }},
+		{name: "prompt audit disabled", mutate: func(cfg *ActiveConfig) { cfg.Enabled = false }},
+		{name: "all endpoints disabled", mutate: func(cfg *ActiveConfig) { cfg.Endpoints[0].Enabled = false }},
+		{name: "all endpoints deleted", mutate: func(cfg *ActiveConfig) { cfg.Endpoints = nil }},
+		{name: "all endpoints require reconfiguration", mutate: func(cfg *ActiveConfig) { cfg.Endpoints[0].RequiresReconfigure = true }},
+		{name: "all endpoint tokens invalid", mutate: func(cfg *ActiveConfig) { cfg.Endpoints[0].TokenInvalid = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := asyncConfig()
+			test.mutate(&cfg)
+			repo := &fakeJobRepository{claimQueue: []*Job{workerJob(1, 3)}}
+			payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+			scannerCalls := 0
+			runner := NewRunner(&fakeConfigStore{cfg: cfg, active: true}, repo, payload, PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+				scannerCalls++
+				return integrationResult(EventPass), nil
+			}), NewAtomicMetrics())
+
+			runner.runWorkerCycle(context.Background(), 0)
+
+			require.Zero(t, repo.claimCalls)
+			require.Len(t, repo.claimQueue, 1)
+			require.Zero(t, payload.getCalls)
+			require.Zero(t, scannerCalls)
+			require.Zero(t, repo.retried)
+		})
+	}
+}
+
+func TestWorkerDefersClaimedJobWhenPromptAuditIsDisabledBeforeOutboundScan(t *testing.T) {
+	for _, stage := range []struct {
+		name              string
+		enabledStateReads int
+		wantPayloadReads  int
+	}{
+		{name: "immediately after claim", enabledStateReads: 1, wantPayloadReads: 0},
+		{name: "after payload read", enabledStateReads: 2, wantPayloadReads: 1},
+	} {
+		for _, gate := range []struct {
+			name   string
+			mutate func(*ActiveConfig)
+		}{
+			{name: "global risk control disabled", mutate: func(cfg *ActiveConfig) { cfg.RiskControlEnabled = false }},
+			{name: "prompt audit disabled", mutate: func(cfg *ActiveConfig) { cfg.Enabled = false }},
+		} {
+			t.Run(stage.name+"/"+gate.name, func(t *testing.T) {
+				enabled := asyncConfig()
+				disabled := asyncConfig()
+				gate.mutate(&disabled)
+				states := make([]configStoreState, 0, stage.enabledStateReads+1)
+				for index := 0; index < stage.enabledStateReads; index++ {
+					states = append(states, configStoreState{cfg: enabled, active: true})
+				}
+				states = append(states, configStoreState{cfg: disabled, active: true})
+				configStore := &sequencedConfigStore{
+					fakeConfigStore: &fakeConfigStore{cfg: enabled, active: true},
+					states:          states,
+				}
+				job := workerJob(1, 3)
+				repo := &fakeJobRepository{claimQueue: []*Job{job}}
+				payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+				scannerCalls := 0
+				runner := NewRunner(configStore, repo, payload, PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+					scannerCalls++
+					return integrationResult(EventPass), nil
+				}), NewAtomicMetrics())
+				now := time.Unix(250, 0).UTC()
+				runner.clock = fixedClock{now: now}
+
+				runner.runWorkerCycle(context.Background(), 0)
+
+				require.Equal(t, 1, repo.claimCalls)
+				require.Equal(t, stage.wantPayloadReads, payload.getCalls)
+				require.Zero(t, scannerCalls)
+				require.Equal(t, 1, repo.paused)
+				require.Equal(t, promptAuditWorkerPausedCode, repo.pauseCode)
+				require.Equal(t, 1, repo.pausedAttempts, "pausing must restore the attempt consumed by claim")
+				require.Equal(t, 1, job.Attempts)
+				require.Equal(t, "retry", job.Status)
+				require.Zero(t, repo.retried)
+				require.Zero(t, repo.completeCount)
+				require.Zero(t, repo.failed)
+				require.Empty(t, payload.deleted)
+				active, processed, failed, _, lastProcessed, _, _ := runner.Snapshot()
+				require.Zero(t, active)
+				require.Zero(t, processed)
+				require.Zero(t, failed)
+				require.Nil(t, lastProcessed)
+			})
+		}
+	}
+}
+
+func TestWorkerStopsFailoverWhenPromptAuditIsDisabled(t *testing.T) {
+	for _, gate := range []struct {
+		name   string
+		mutate func(*ActiveConfig)
+	}{
+		{name: "global risk control disabled", mutate: func(cfg *ActiveConfig) { cfg.RiskControlEnabled = false }},
+		{name: "prompt audit disabled", mutate: func(cfg *ActiveConfig) { cfg.Enabled = false }},
+	} {
+		t.Run(gate.name, func(t *testing.T) {
+			enabled := asyncConfig()
+			enabled.Endpoints = []ActiveEndpoint{
+				{ID: "first", Enabled: true, TimeoutMS: 1000, InputLimit: 100},
+				{ID: "second", Enabled: true, TimeoutMS: 1000, InputLimit: 100},
+			}
+			disabled := cloneActiveConfig(enabled)
+			gate.mutate(&disabled)
+			states := make([]configStoreState, 0, 6)
+			for index := 0; index < 5; index++ {
+				states = append(states, configStoreState{cfg: enabled, active: true})
+			}
+			states = append(states, configStoreState{cfg: disabled, active: true})
+			configStore := &sequencedConfigStore{
+				fakeConfigStore: &fakeConfigStore{cfg: disabled, active: true},
+				states:          states,
+			}
+			job := workerJob(2, 3)
+			repo := &fakeJobRepository{claimQueue: []*Job{job}}
+			payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+			calls := make([]string, 0, 2)
+			metrics := NewAtomicMetrics()
+			runner := NewRunner(configStore, repo, payload, PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+				calls = append(calls, endpoint.ID)
+				if endpoint.ID == "first" {
+					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true}
+				}
+				return integrationResult(EventPass), nil
+			}), metrics)
+
+			runner.runWorkerCycle(context.Background(), 0)
+
+			require.Equal(t, []string{"first"}, calls)
+			require.Equal(t, 1, repo.paused)
+			require.Equal(t, 2, job.Attempts, "disabled failover must not consume the claimed attempt")
+			require.Equal(t, "retry", job.Status)
+			require.Zero(t, repo.retried)
+			require.Zero(t, repo.failed)
+			require.Zero(t, repo.completeCount)
+			require.Empty(t, payload.deleted)
+			require.Contains(t, payload.values, job.ID)
+			require.Zero(t, metrics.Snapshot().Failovers, "a skipped endpoint is not a failover call")
+			active, processed, failed, _, lastProcessed, _, _ := runner.Snapshot()
+			require.Zero(t, active)
+			require.Zero(t, processed)
+			require.Zero(t, failed)
+			require.Nil(t, lastProcessed)
+		})
+	}
+}
+
+func TestWorkerPausesOnConfigChangeBeforeNextChunk(t *testing.T) {
+	cfg := asyncConfig()
+	cfg.Endpoints[0] = ActiveEndpoint{
+		ID: "guard", Enabled: true, BaseURL: "https://old.example/v1", Model: "old-model",
+		Token: "old-token", TimeoutMS: 1000, InputLimit: 3,
+	}
+	configStore := &fakeConfigStore{cfg: cfg, active: true}
+	job := workerJob(1, 3)
+	repo := &fakeJobRepository{claimQueue: []*Job{job}}
+	payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+	calledEndpoints := make([]ActiveEndpoint, 0, 2)
+	calledScanners := make([][]string, 0, 2)
+	calledChunks := make([]string, 0, 2)
+	runner := NewRunner(configStore, repo, payload, PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, chunk string, scanners []string) (*NormalizedResult, error) {
+		calledEndpoints = append(calledEndpoints, endpoint)
+		calledScanners = append(calledScanners, append([]string(nil), scanners...))
+		calledChunks = append(calledChunks, chunk)
+		if len(calledEndpoints) == 1 {
+			next := cloneActiveConfig(configStore.cfg)
+			next.ConfigVersion++
+			next.Scanners = []string{"jailbreak"}
+			next.StorePassEvents = true
+			next.Endpoints[0] = ActiveEndpoint{
+				ID: "guard", Enabled: true, BaseURL: "https://new.example/v1", Model: "new-model",
+				Token: "new-token", TimeoutMS: 2000, InputLimit: 6,
+			}
+			configStore.cfg = next
+		}
+		return &NormalizedResult{
+			Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe",
+			GuardEndpointID: endpoint.ID,
+		}, nil
+	}), NewAtomicMetrics())
+
+	runner.runWorkerCycle(context.Background(), 0)
+
+	require.Len(t, calledEndpoints, 1)
+	require.Equal(t, "old-token", calledEndpoints[0].Token)
+	require.Equal(t, "https://old.example/v1", calledEndpoints[0].BaseURL)
+	require.Equal(t, "old-model", calledEndpoints[0].Model)
+	require.Equal(t, [][]string{{"pii"}}, calledScanners)
+	require.Equal(t, []string{"abc"}, calledChunks)
+	require.Equal(t, 1, repo.paused)
+	require.Equal(t, promptAuditConfigChangedCode, repo.pauseCode)
+	require.Equal(t, 1, repo.pausedAttempts, "config reload must restore the attempt consumed by claim")
+	require.Equal(t, "retry", job.Status)
+	require.Zero(t, repo.retried)
+	require.Zero(t, repo.completeCount)
+	require.Zero(t, repo.failed)
+	require.Empty(t, payload.deleted)
+	require.Contains(t, payload.values, job.ID)
+	require.Equal(t, int64(7), job.ConfigVersion)
+
+	repo.claimQueue = append(repo.claimQueue, job)
+	runner.runWorkerCycle(context.Background(), 0)
+
+	require.Len(t, calledEndpoints, 2)
+	require.Equal(t, "new-token", calledEndpoints[1].Token)
+	require.Equal(t, "https://new.example/v1", calledEndpoints[1].BaseURL)
+	require.Equal(t, "new-model", calledEndpoints[1].Model)
+	require.Equal(t, [][]string{{"pii"}, {"jailbreak"}}, calledScanners)
+	require.Equal(t, []string{"abc", "abcdef"}, calledChunks, "the next attempt must re-split with the new input limit")
+	require.Equal(t, 1, repo.completeCount)
+	require.True(t, repo.completedStore)
+	require.Equal(t, []int64{job.ID}, payload.deleted)
+}
+
+func TestWorkerPausesOnConfigChangeBeforeFailover(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mutate     func(*ActiveConfig)
+		retryFresh bool
+	}{
+		{
+			name: "endpoint disabled",
+			mutate: func(cfg *ActiveConfig) {
+				cfg.Endpoints[1].Enabled = false
+			},
+		},
+		{
+			name: "endpoint deleted",
+			mutate: func(cfg *ActiveConfig) {
+				cfg.Endpoints = cfg.Endpoints[:1]
+			},
+		},
+		{
+			name: "endpoint token and model updated",
+			mutate: func(cfg *ActiveConfig) {
+				cfg.Endpoints[1].BaseURL = "https://new-second.example/v1"
+				cfg.Endpoints[1].Model = "new-second-model"
+				cfg.Endpoints[1].Token = "new-second-token"
+			},
+			retryFresh: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := asyncConfig()
+			cfg.Endpoints = []ActiveEndpoint{
+				{ID: "first", Enabled: true, BaseURL: "https://first.example/v1", Model: "first-model", Token: "first-token", TimeoutMS: 1000, InputLimit: 100},
+				{ID: "second", Enabled: true, BaseURL: "https://old-second.example/v1", Model: "old-second-model", Token: "old-second-token", TimeoutMS: 1000, InputLimit: 100},
+			}
+			configStore := &fakeConfigStore{cfg: cfg, active: true}
+			job := workerJob(2, 3)
+			repo := &fakeJobRepository{claimQueue: []*Job{job}}
+			payload := &fakePayloadStore{values: map[int64]string{51: "abcdef"}}
+			calledEndpoints := make([]ActiveEndpoint, 0, 2)
+			metrics := NewAtomicMetrics()
+			changed := false
+			runner := NewRunner(configStore, repo, payload, PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+				calledEndpoints = append(calledEndpoints, endpoint)
+				if endpoint.ID == "first" {
+					if !changed {
+						next := cloneActiveConfig(configStore.cfg)
+						next.ConfigVersion++
+						test.mutate(&next)
+						configStore.cfg = next
+						changed = true
+					}
+					return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true}
+				}
+				return &NormalizedResult{
+					Decision: EventPass, RiskLevel: RiskLow, Action: ActionAllow, Safety: "Safe",
+					GuardEndpointID: endpoint.ID,
+				}, nil
+			}), metrics)
+
+			runner.runWorkerCycle(context.Background(), 0)
+
+			require.Len(t, calledEndpoints, 1)
+			require.Equal(t, "first", calledEndpoints[0].ID)
+			require.Equal(t, 1, repo.paused)
+			require.Equal(t, promptAuditConfigChangedCode, repo.pauseCode)
+			require.Equal(t, 2, repo.pausedAttempts, "config reload must restore the attempt consumed by claim")
+			require.Equal(t, "retry", job.Status)
+			require.Zero(t, repo.retried)
+			require.Zero(t, repo.completeCount)
+			require.Zero(t, repo.failed)
+			require.Empty(t, payload.deleted)
+			require.Contains(t, payload.values, job.ID)
+			require.Zero(t, metrics.Snapshot().Failovers, "a config fence is not an outbound failover")
+
+			if test.retryFresh {
+				repo.claimQueue = append(repo.claimQueue, job)
+				runner.runWorkerCycle(context.Background(), 0)
+				require.Len(t, calledEndpoints, 3)
+				require.Equal(t, "first", calledEndpoints[1].ID)
+				require.Equal(t, "second", calledEndpoints[2].ID)
+				require.Equal(t, "first-token", calledEndpoints[1].Token)
+				require.Equal(t, "new-second-token", calledEndpoints[2].Token)
+				require.Equal(t, "https://new-second.example/v1", calledEndpoints[2].BaseURL)
+				require.Equal(t, "new-second-model", calledEndpoints[2].Model)
+				require.Equal(t, 1, repo.completeCount)
+			}
+		})
+	}
+}
+
+func TestWorkerRejectsLegacyModelContractWithoutCallingReviewer(t *testing.T) {
+	repo := &fakeJobRepository{}
+	payload := &fakePayloadStore{values: map[int64]string{51: "abc"}}
+	calls := 0
+	runner := NewRunner(&fakeConfigStore{cfg: asyncConfig(), active: true}, repo, payload, PromptScannerFunc(func(context.Context, ActiveEndpoint, string, []string) (*NormalizedResult, error) {
+		calls++
+		return integrationResult(EventPass), nil
+	}), NewAtomicMetrics())
+	job := workerJob(1, 3)
+	job.Snapshot.ModelContractVersion = 1
+	require.Error(t, runner.processJob(context.Background(), 0, asyncConfig(), job))
+	require.Zero(t, calls)
+	require.Equal(t, 1, repo.failed)
+	require.Equal(t, "prompt_audit_model_contract_mismatch", repo.failedCode)
+}
+
+func TestScanWithFailoverSeparatesFailoverFromAsyncRetry(t *testing.T) {
+	t.Run("non retryable invalid output still fails over", func(t *testing.T) {
+		calls := 0
+		result, err := scanWithFailover(context.Background(), PromptScannerFunc(func(_ context.Context, _ ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+			calls++
+			if calls == 1 {
+				return nil, &GuardError{Code: ErrorCodeInvalidResponse, Failoverable: true}
+			}
+			return integrationResult(EventPass), nil
+		}), AllScannerIDs, []ActiveEndpoint{{ID: "one"}, {ID: "two"}}, "text", NewAtomicMetrics(), nil)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, 2, calls)
+	})
+
+	t.Run("exhaustion preserves any retryable endpoint failure", func(t *testing.T) {
+		calls := 0
+		_, err := scanWithFailover(context.Background(), PromptScannerFunc(func(_ context.Context, _ ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
+			calls++
+			if calls == 1 {
+				return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true}
+			}
+			return nil, &GuardError{Code: ErrorCodeInvalidResponse, Failoverable: true}
+		}), AllScannerIDs, []ActiveEndpoint{{ID: "one"}, {ID: "two"}}, "text", NewAtomicMetrics(), nil)
+		var guardErr *GuardError
+		require.ErrorAs(t, err, &guardErr)
+		require.True(t, guardErr.Retryable)
+		require.Equal(t, 2, calls)
+	})
 }
 
 func TestWorkerCompletesPassWithoutEventRefreshesEveryChunkAndDeletesPayload(t *testing.T) {
@@ -436,7 +858,7 @@ func TestWorkerRetryBackoffTerminalFailureAndFailover(t *testing.T) {
 	metrics := NewAtomicMetrics()
 	scanner := PromptScannerFunc(func(_ context.Context, endpoint ActiveEndpoint, _ string, _ []string) (*NormalizedResult, error) {
 		if endpoint.ID == "first" {
-			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true}
+			return nil, &GuardError{Code: ErrorCodeUnavailable, Retryable: true, Failoverable: true}
 		}
 		return integrationResult(EventPass), nil
 	})
@@ -556,7 +978,7 @@ func TestPromptAuditSyntheticAsyncBaseline(t *testing.T) {
 		jobID := int64(index)
 		payload.values[jobID] = text
 		job := &Job{ID: jobID, ClaimVersion: 1, Attempts: 1, MaxAttempts: 1, ConfigVersion: cfg.ConfigVersion,
-			Snapshot: PromptSnapshot{RequestID: fmt.Sprintf("baseline-%03d", index), PromptLength: len([]rune(text)), RedactedPreview: "synthetic"}}
+			Snapshot: PromptSnapshot{RequestID: fmt.Sprintf("baseline-%03d", index), PromptLength: len([]rune(text)), RedactedPreview: "synthetic", ModelContractVersion: PromptAuditModelContractVersion}}
 		err := runner.processJob(context.Background(), 0, cfg, job)
 		if index <= 98 {
 			require.NoError(t, err)
