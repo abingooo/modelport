@@ -194,4 +194,3 @@ export const lotteryAPI = {
 }
 
 export default lotteryAPI
-

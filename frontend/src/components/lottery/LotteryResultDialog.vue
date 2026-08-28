@@ -74,4 +74,3 @@ async function copyCode() {
   if (props.entry?.reward_code) await copyToClipboard(props.entry.reward_code, t('common.copiedToClipboard'))
 }
 </script>
-

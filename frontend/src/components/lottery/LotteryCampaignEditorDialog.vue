@@ -295,4 +295,3 @@ watch(() => form.mode, (mode) => {
   if (mode === 'instant') form.full_draw_enabled = false
 })
 </script>
-

@@ -75,4 +75,3 @@ function statusClass(status: LotteryEntry['status']) {
   return 'badge-gray'
 }
 </script>
-

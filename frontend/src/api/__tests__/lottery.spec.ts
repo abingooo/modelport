@@ -37,4 +37,3 @@ describe('lottery API', () => {
     expect(remove).toHaveBeenCalledWith('/admin/lottery/1')
   })
 })
-

@@ -55,4 +55,3 @@ describe('LotteryCampaignEditorDialog', () => {
     expect(payload).toMatchObject({ mode: 'scheduled', full_draw_participant_limit: 25 })
   })
 })
-

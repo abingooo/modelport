@@ -1,5 +1,6 @@
 # 确保所有 SQL 迁移文件使用 LF 换行符
 backend/migrations/*.sql text eol=lf
+backend/migrations/modelport_legacy/** whitespace=blank-at-eol,space-before-tab,-blank-at-eof
 
 # Go 源代码文件
 *.go text eol=lf
