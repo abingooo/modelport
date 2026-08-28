@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 cd "$repo_root"
 
 fail() {
@@ -14,6 +14,16 @@ upstream_workflow=.github/workflows/release.yml
 github_slot_check=custom/release/assert-github-slots-absent
 image_slot_check=custom/release/assert-image-tags-absent
 version=$(tr -d '[:space:]' < custom/VERSION)
+
+for required_release_dependency in "$github_slot_check" "$image_slot_check"; do
+  [ -x "$required_release_dependency" ] || \
+    fail "release dependency is missing or not executable: $required_release_dependency"
+  git ls-files --error-unmatch "$required_release_dependency" >/dev/null 2>&1 || \
+    fail "release dependency is not tracked by Git: $required_release_dependency"
+  if git check-ignore --no-index -q "$required_release_dependency"; then
+    fail "release dependency is ignored: $required_release_dependency"
+  fi
+done
 
 [ "$version" = '0.1.183.1' ] || fail 'custom/VERSION is not 0.1.183.1'
 [ "$(tr -d '[:space:]' < backend/cmd/server/VERSION)" = "$version" ] || \
@@ -32,6 +42,7 @@ grep -Fqx '  LEGACY_MODELPORT_TAG: custom-v0.1.176.2' "$workflow" || \
   fail 'legacy compatibility tag changed'
 grep -Fqx '          make_latest: false' "$workflow" || \
   fail 'GitHub Release must not become the mutable latest release'
+# shellcheck disable=SC2016 # The workflow expression is matched literally.
 grep -Fq 'repos/${GITHUB_REPOSITORY}/immutable-releases' "$workflow" || \
   fail 'workflow must preflight GitHub Immutable Releases'
 grep -Fq "'.immutable' <<< \"\${release_json}\"" "$workflow" || \
@@ -73,6 +84,7 @@ github_slot_check_count=$(grep -Fc '/bin/sh custom/release/assert-github-slots-a
 [ "$github_slot_check_count" -eq 2 ] || fail 'GitHub slots must be checked before build and before release'
 grep -Fq '/bin/sh custom/release/assert-image-tags-absent' "$workflow" || \
   fail 'GHCR tags must use a fail-closed existence check'
+# shellcheck disable=SC2016 # The workflow command is matched literally.
 grep -Fq 'created="$(git show -s --format=%cI "${GITHUB_SHA}")"' "$workflow" || \
   fail 'image creation time must come from the exact release commit'
 
@@ -104,6 +116,17 @@ case "${MODELPORT_TEST_DOCKER_MODE:-absent}" in
   manifest_unknown) echo 'manifest unknown' >&2; exit 1 ;;
   unauthorized) echo 'unexpected status from HEAD request: 401 Unauthorized' >&2; exit 1 ;;
   network) echo 'dial tcp: network is unreachable' >&2; exit 1 ;;
+  token_404) echo 'unexpected status from token request: 404 Not Found' >&2; exit 1 ;;
+  mixed_404_unauthorized)
+    echo 'unexpected status from HEAD request: 404 Not Found' >&2
+    echo 'token request failed: 401 Unauthorized' >&2
+    exit 1
+    ;;
+  mixed_manifest_network)
+    echo 'manifest unknown' >&2
+    echo 'dial tcp: network is unreachable' >&2
+    exit 1
+    ;;
   version_404_unauthorized) echo 'ghcr.io/abingooo/modelport:custom-v0.1.404.1: 401 Unauthorized' >&2; exit 1 ;;
   sha_404_unauthorized) echo 'ghcr.io/abingooo/modelport:sha-a404b123456789abcdef0123456789abcdef0123: 401 Unauthorized' >&2; exit 1 ;;
 esac
@@ -147,7 +170,9 @@ MODELPORT_TEST_DOCKER_MODE=absent run_image_slot_check >/dev/null || \
   fail 'a confirmed 404 GHCR response was rejected'
 MODELPORT_TEST_DOCKER_MODE=manifest_unknown run_image_slot_check >/dev/null || \
   fail 'a confirmed manifest-unknown GHCR response was rejected'
-for docker_mode in exists unauthorized network version_404_unauthorized sha_404_unauthorized; do
+for docker_mode in \
+  exists unauthorized network token_404 mixed_404_unauthorized mixed_manifest_network \
+  version_404_unauthorized sha_404_unauthorized; do
   if MODELPORT_TEST_DOCKER_MODE="$docker_mode" run_image_slot_check >/dev/null 2>&1; then
     fail "GHCR state $docker_mode was treated as absence"
   fi

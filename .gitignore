@@ -94,6 +94,8 @@ temp/
 dist/
 build/
 release/
+!custom/release/
+!custom/release/**
 release-assets/
 
 # 后端嵌入的前端构建产物
