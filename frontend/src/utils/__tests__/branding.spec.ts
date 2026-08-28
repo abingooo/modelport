@@ -11,6 +11,15 @@ describe('updateFavicon', () => {
 
     const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
     expect(link?.href).toBe('https://example.com/custom-logo.png')
+    expect(link?.type).toBe('image/png')
+  })
+
+  it('restores the ModelPort favicon when a custom logo is cleared', () => {
+    updateFavicon('')
+
+    const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    expect(link?.getAttribute('href')).toBe('/branding/modelport-mark-light.png')
+    expect(link?.type).toBe('image/png')
   })
 
   it('ignores unsafe logo URLs', () => {

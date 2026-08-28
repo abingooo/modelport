@@ -5,6 +5,7 @@ export default {
   },
   // Home Page
   home: {
+    primaryNavigation: 'Primary navigation',
     viewOnGithub: 'View on GitHub',
     viewDocs: 'View Documentation',
     docs: 'Docs',
@@ -14,9 +15,12 @@ export default {
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
+    harborSceneLabel: 'Animated ModelPort harbor with two-way cargo traffic and models moving through the gateway',
+    heroKicker: 'Unified Model Gateway',
+    metaDescription: 'ModelPort is a unified multi-model API gateway for connecting, routing, and billing OpenAI, Anthropic, and Google-compatible requests.',
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
-    heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',
+    heroDescription: 'Connect, route, and bill different protocols and model capabilities through one dependable port.',
     tags: {
       subscriptionToApi: 'Subscription to API',
       stickySession: 'Session Persistence',
@@ -110,6 +114,7 @@ export default {
       button: 'Sign Up Free'
     },
     footer: {
+      copyrightNotice: 'All rights reserved',
       allRightsReserved: 'All rights reserved.'
     }
   },

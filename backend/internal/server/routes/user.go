@@ -95,6 +95,15 @@ func RegisterUserRoutes(
 			channels.GET("/available", h.AvailableChannel.List)
 		}
 
+		// 抽奖活动与个人参与记录
+		lottery := authenticated.Group("/lottery")
+		{
+			lottery.GET("", h.Lottery.List)
+			lottery.GET("/history", h.Lottery.History)
+			lottery.GET("/:id", h.Lottery.Get)
+			lottery.POST("/:id/participate", h.Lottery.Participate)
+		}
+
 		// 使用记录（聚合统计属重查询，叠加更严格的按用户限流）
 		usage := authenticated.Group("/usage")
 		usage.Use(panelRateLimiter.Heavy())

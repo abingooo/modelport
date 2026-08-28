@@ -817,6 +817,18 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+// ProvideLotteryService constructs and starts the scheduled lottery worker.
+// The worker is stopped by the application cleanup hook.
+func ProvideLotteryService(
+	repo LotteryRepository,
+	billingCache *BillingCacheService,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+) *LotteryService {
+	svc := NewLotteryService(repo, billingCache, authCacheInvalidator)
+	svc.Start()
+	return svc
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
@@ -891,6 +903,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsScheduledReportService,
 	NewEmailService,
 	NewNotificationEmailService,
+	ProvideSecurityNotificationService,
 	ProvideEmailQueueService,
 	NewTurnstileService,
 	NewTencentCaptchaService,
@@ -934,6 +947,7 @@ var ProviderSet = wire.NewSet(
 	NewModelPricingResolver,
 	NewModelPlazaService,
 	NewContentModerationService,
+	ProvideLotteryService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
 	ProvidePaymentService,

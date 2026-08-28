@@ -19,6 +19,8 @@ const (
 	FieldUserID = "user_id"
 	// FieldAPIKeyID holds the string denoting the api_key_id field in the database.
 	FieldAPIKeyID = "api_key_id"
+	// FieldGroupID holds the string denoting the group_id field in the database.
+	FieldGroupID = "group_id"
 	// FieldAccountID holds the string denoting the account_id field in the database.
 	FieldAccountID = "account_id"
 	// FieldProvider holds the string denoting the provider field in the database.
@@ -53,6 +55,8 @@ const (
 	FieldHoldAmount = "hold_amount"
 	// FieldActualCost holds the string denoting the actual_cost field in the database.
 	FieldActualCost = "actual_cost"
+	// FieldIsFreeBilling holds the string denoting the is_free_billing field in the database.
+	FieldIsFreeBilling = "is_free_billing"
 	// FieldCurrency holds the string denoting the currency field in the database.
 	FieldCurrency = "currency"
 	// FieldHoldID holds the string denoting the hold_id field in the database.
@@ -103,6 +107,7 @@ var Columns = []string{
 	FieldBatchID,
 	FieldUserID,
 	FieldAPIKeyID,
+	FieldGroupID,
 	FieldAccountID,
 	FieldProvider,
 	FieldModel,
@@ -120,6 +125,7 @@ var Columns = []string{
 	FieldEstimatedCost,
 	FieldHoldAmount,
 	FieldActualCost,
+	FieldIsFreeBilling,
 	FieldCurrency,
 	FieldHoldID,
 	FieldIdempotencyKey,
@@ -185,6 +191,8 @@ var (
 	DefaultCancelledCount int
 	// DefaultEstimatedCost holds the default value on creation for the "estimated_cost" field.
 	DefaultEstimatedCost float64
+	// DefaultIsFreeBilling holds the default value on creation for the "is_free_billing" field.
+	DefaultIsFreeBilling bool
 	// DefaultCurrency holds the default value on creation for the "currency" field.
 	DefaultCurrency string
 	// CurrencyValidator is a validator for the "currency" field. It is called by the builders before save.
@@ -232,6 +240,11 @@ func ByUserID(opts ...sql.OrderTermOption) OrderOption {
 // ByAPIKeyID orders the results by the api_key_id field.
 func ByAPIKeyID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAPIKeyID, opts...).ToFunc()
+}
+
+// ByGroupID orders the results by the group_id field.
+func ByGroupID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGroupID, opts...).ToFunc()
 }
 
 // ByAccountID orders the results by the account_id field.
@@ -317,6 +330,11 @@ func ByHoldAmount(opts ...sql.OrderTermOption) OrderOption {
 // ByActualCost orders the results by the actual_cost field.
 func ByActualCost(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldActualCost, opts...).ToFunc()
+}
+
+// ByIsFreeBilling orders the results by the is_free_billing field.
+func ByIsFreeBilling(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIsFreeBilling, opts...).ToFunc()
 }
 
 // ByCurrency orders the results by the currency field.

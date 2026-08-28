@@ -56,6 +56,32 @@ func TestPeakMultiplierAt_NilReceiver(t *testing.T) {
 	}
 }
 
+func TestFreeGroupOverridesTextImageAndVideoMultipliers(t *testing.T) {
+	apiKey := &APIKey{Group: &Group{
+		IsFree:               true,
+		SubscriptionType:     SubscriptionTypeSubscription,
+		PeakRateEnabled:      true,
+		PeakStart:            "00:00",
+		PeakEnd:              "23:59",
+		PeakRateMultiplier:   4,
+		ImageRateIndependent: true,
+		ImageRateMultiplier:  3,
+		VideoRateIndependent: true,
+		VideoRateMultiplier:  2,
+	}}
+
+	textMultiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, 1.5, at(12, 0))
+	if textMultiplier != 0 || imageMultiplier != 0 {
+		t.Fatalf("free group multipliers = (%v, %v), want (0, 0)", textMultiplier, imageMultiplier)
+	}
+	if got := resolveVideoRateMultiplier(apiKey, 1.5); got != 0 {
+		t.Fatalf("free group video multiplier = %v, want 0", got)
+	}
+	if got := resolveGroupBillingMultiplier(apiKey, 1.5); got != 0 {
+		t.Fatalf("free group base multiplier = %v, want 0", got)
+	}
+}
+
 func TestPeakMultiplierAt_Boundaries(t *testing.T) {
 	g := newPeakGroup(true, "14:00", "18:00", 3.0)
 	cases := []struct {

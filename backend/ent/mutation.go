@@ -11315,6 +11315,8 @@ type BatchImageJobMutation struct {
 	adduser_id          *int64
 	api_key_id          *int64
 	addapi_key_id       *int64
+	group_id            *int64
+	addgroup_id         *int64
 	account_id          *int64
 	addaccount_id       *int64
 	provider            *string
@@ -11340,6 +11342,7 @@ type BatchImageJobMutation struct {
 	addhold_amount      *float64
 	actual_cost         *float64
 	addactual_cost      *float64
+	is_free_billing     *bool
 	currency            *string
 	hold_id             *string
 	idempotency_key     *string
@@ -11626,6 +11629,76 @@ func (m *BatchImageJobMutation) ResetAPIKeyID() {
 	m.api_key_id = nil
 	m.addapi_key_id = nil
 	delete(m.clearedFields, batchimagejob.FieldAPIKeyID)
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *BatchImageJobMutation) SetGroupID(i int64) {
+	m.group_id = &i
+	m.addgroup_id = nil
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *BatchImageJobMutation) GroupID() (r int64, exists bool) {
+	v := m.group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the BatchImageJob entity.
+// If the BatchImageJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BatchImageJobMutation) OldGroupID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// AddGroupID adds i to the "group_id" field.
+func (m *BatchImageJobMutation) AddGroupID(i int64) {
+	if m.addgroup_id != nil {
+		*m.addgroup_id += i
+	} else {
+		m.addgroup_id = &i
+	}
+}
+
+// AddedGroupID returns the value that was added to the "group_id" field in this mutation.
+func (m *BatchImageJobMutation) AddedGroupID() (r int64, exists bool) {
+	v := m.addgroup_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (m *BatchImageJobMutation) ClearGroupID() {
+	m.group_id = nil
+	m.addgroup_id = nil
+	m.clearedFields[batchimagejob.FieldGroupID] = struct{}{}
+}
+
+// GroupIDCleared returns if the "group_id" field was cleared in this mutation.
+func (m *BatchImageJobMutation) GroupIDCleared() bool {
+	_, ok := m.clearedFields[batchimagejob.FieldGroupID]
+	return ok
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *BatchImageJobMutation) ResetGroupID() {
+	m.group_id = nil
+	m.addgroup_id = nil
+	delete(m.clearedFields, batchimagejob.FieldGroupID)
 }
 
 // SetAccountID sets the "account_id" field.
@@ -12505,6 +12578,42 @@ func (m *BatchImageJobMutation) ResetActualCost() {
 	m.actual_cost = nil
 	m.addactual_cost = nil
 	delete(m.clearedFields, batchimagejob.FieldActualCost)
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (m *BatchImageJobMutation) SetIsFreeBilling(b bool) {
+	m.is_free_billing = &b
+}
+
+// IsFreeBilling returns the value of the "is_free_billing" field in the mutation.
+func (m *BatchImageJobMutation) IsFreeBilling() (r bool, exists bool) {
+	v := m.is_free_billing
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsFreeBilling returns the old "is_free_billing" field's value of the BatchImageJob entity.
+// If the BatchImageJob object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *BatchImageJobMutation) OldIsFreeBilling(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsFreeBilling is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsFreeBilling requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsFreeBilling: %w", err)
+	}
+	return oldValue.IsFreeBilling, nil
+}
+
+// ResetIsFreeBilling resets all changes to the "is_free_billing" field.
+func (m *BatchImageJobMutation) ResetIsFreeBilling() {
+	m.is_free_billing = nil
 }
 
 // SetCurrency sets the "currency" field.
@@ -13496,7 +13605,7 @@ func (m *BatchImageJobMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *BatchImageJobMutation) Fields() []string {
-	fields := make([]string, 0, 40)
+	fields := make([]string, 0, 42)
 	if m.batch_id != nil {
 		fields = append(fields, batchimagejob.FieldBatchID)
 	}
@@ -13505,6 +13614,9 @@ func (m *BatchImageJobMutation) Fields() []string {
 	}
 	if m.api_key_id != nil {
 		fields = append(fields, batchimagejob.FieldAPIKeyID)
+	}
+	if m.group_id != nil {
+		fields = append(fields, batchimagejob.FieldGroupID)
 	}
 	if m.account_id != nil {
 		fields = append(fields, batchimagejob.FieldAccountID)
@@ -13556,6 +13668,9 @@ func (m *BatchImageJobMutation) Fields() []string {
 	}
 	if m.actual_cost != nil {
 		fields = append(fields, batchimagejob.FieldActualCost)
+	}
+	if m.is_free_billing != nil {
+		fields = append(fields, batchimagejob.FieldIsFreeBilling)
 	}
 	if m.currency != nil {
 		fields = append(fields, batchimagejob.FieldCurrency)
@@ -13631,6 +13746,8 @@ func (m *BatchImageJobMutation) Field(name string) (ent.Value, bool) {
 		return m.UserID()
 	case batchimagejob.FieldAPIKeyID:
 		return m.APIKeyID()
+	case batchimagejob.FieldGroupID:
+		return m.GroupID()
 	case batchimagejob.FieldAccountID:
 		return m.AccountID()
 	case batchimagejob.FieldProvider:
@@ -13665,6 +13782,8 @@ func (m *BatchImageJobMutation) Field(name string) (ent.Value, bool) {
 		return m.HoldAmount()
 	case batchimagejob.FieldActualCost:
 		return m.ActualCost()
+	case batchimagejob.FieldIsFreeBilling:
+		return m.IsFreeBilling()
 	case batchimagejob.FieldCurrency:
 		return m.Currency()
 	case batchimagejob.FieldHoldID:
@@ -13720,6 +13839,8 @@ func (m *BatchImageJobMutation) OldField(ctx context.Context, name string) (ent.
 		return m.OldUserID(ctx)
 	case batchimagejob.FieldAPIKeyID:
 		return m.OldAPIKeyID(ctx)
+	case batchimagejob.FieldGroupID:
+		return m.OldGroupID(ctx)
 	case batchimagejob.FieldAccountID:
 		return m.OldAccountID(ctx)
 	case batchimagejob.FieldProvider:
@@ -13754,6 +13875,8 @@ func (m *BatchImageJobMutation) OldField(ctx context.Context, name string) (ent.
 		return m.OldHoldAmount(ctx)
 	case batchimagejob.FieldActualCost:
 		return m.OldActualCost(ctx)
+	case batchimagejob.FieldIsFreeBilling:
+		return m.OldIsFreeBilling(ctx)
 	case batchimagejob.FieldCurrency:
 		return m.OldCurrency(ctx)
 	case batchimagejob.FieldHoldID:
@@ -13823,6 +13946,13 @@ func (m *BatchImageJobMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetAPIKeyID(v)
+		return nil
+	case batchimagejob.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
 		return nil
 	case batchimagejob.FieldAccountID:
 		v, ok := value.(int64)
@@ -13942,6 +14072,13 @@ func (m *BatchImageJobMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetActualCost(v)
+		return nil
+	case batchimagejob.FieldIsFreeBilling:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsFreeBilling(v)
 		return nil
 	case batchimagejob.FieldCurrency:
 		v, ok := value.(string)
@@ -14097,6 +14234,9 @@ func (m *BatchImageJobMutation) AddedFields() []string {
 	if m.addapi_key_id != nil {
 		fields = append(fields, batchimagejob.FieldAPIKeyID)
 	}
+	if m.addgroup_id != nil {
+		fields = append(fields, batchimagejob.FieldGroupID)
+	}
 	if m.addaccount_id != nil {
 		fields = append(fields, batchimagejob.FieldAccountID)
 	}
@@ -14139,6 +14279,8 @@ func (m *BatchImageJobMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedUserID()
 	case batchimagejob.FieldAPIKeyID:
 		return m.AddedAPIKeyID()
+	case batchimagejob.FieldGroupID:
+		return m.AddedGroupID()
 	case batchimagejob.FieldAccountID:
 		return m.AddedAccountID()
 	case batchimagejob.FieldItemCount:
@@ -14181,6 +14323,13 @@ func (m *BatchImageJobMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddAPIKeyID(v)
+		return nil
+	case batchimagejob.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddGroupID(v)
 		return nil
 	case batchimagejob.FieldAccountID:
 		v, ok := value.(int64)
@@ -14262,6 +14411,9 @@ func (m *BatchImageJobMutation) ClearedFields() []string {
 	var fields []string
 	if m.FieldCleared(batchimagejob.FieldAPIKeyID) {
 		fields = append(fields, batchimagejob.FieldAPIKeyID)
+	}
+	if m.FieldCleared(batchimagejob.FieldGroupID) {
+		fields = append(fields, batchimagejob.FieldGroupID)
 	}
 	if m.FieldCleared(batchimagejob.FieldAccountID) {
 		fields = append(fields, batchimagejob.FieldAccountID)
@@ -14349,6 +14501,9 @@ func (m *BatchImageJobMutation) ClearField(name string) error {
 	case batchimagejob.FieldAPIKeyID:
 		m.ClearAPIKeyID()
 		return nil
+	case batchimagejob.FieldGroupID:
+		m.ClearGroupID()
+		return nil
 	case batchimagejob.FieldAccountID:
 		m.ClearAccountID()
 		return nil
@@ -14435,6 +14590,9 @@ func (m *BatchImageJobMutation) ResetField(name string) error {
 	case batchimagejob.FieldAPIKeyID:
 		m.ResetAPIKeyID()
 		return nil
+	case batchimagejob.FieldGroupID:
+		m.ResetGroupID()
+		return nil
 	case batchimagejob.FieldAccountID:
 		m.ResetAccountID()
 		return nil
@@ -14485,6 +14643,9 @@ func (m *BatchImageJobMutation) ResetField(name string) error {
 		return nil
 	case batchimagejob.FieldActualCost:
 		m.ResetActualCost()
+		return nil
+	case batchimagejob.FieldIsFreeBilling:
+		m.ResetIsFreeBilling()
 		return nil
 	case batchimagejob.FieldCurrency:
 		m.ResetCurrency()
@@ -22088,6 +22249,7 @@ type GroupMutation struct {
 	description                             *string
 	rate_multiplier                         *float64
 	addrate_multiplier                      *float64
+	is_free                                 *bool
 	peak_rate_enabled                       *bool
 	peak_start                              *string
 	peak_end                                *string
@@ -22555,6 +22717,42 @@ func (m *GroupMutation) AddedRateMultiplier() (r float64, exists bool) {
 func (m *GroupMutation) ResetRateMultiplier() {
 	m.rate_multiplier = nil
 	m.addrate_multiplier = nil
+}
+
+// SetIsFree sets the "is_free" field.
+func (m *GroupMutation) SetIsFree(b bool) {
+	m.is_free = &b
+}
+
+// IsFree returns the value of the "is_free" field in the mutation.
+func (m *GroupMutation) IsFree() (r bool, exists bool) {
+	v := m.is_free
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsFree returns the old "is_free" field's value of the Group entity.
+// If the Group object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *GroupMutation) OldIsFree(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsFree is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsFree requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsFree: %w", err)
+	}
+	return oldValue.IsFree, nil
+}
+
+// ResetIsFree resets all changes to the "is_free" field.
+func (m *GroupMutation) ResetIsFree() {
+	m.is_free = nil
 }
 
 // SetPeakRateEnabled sets the "peak_rate_enabled" field.
@@ -25773,7 +25971,7 @@ func (m *GroupMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *GroupMutation) Fields() []string {
-	fields := make([]string, 0, 62)
+	fields := make([]string, 0, 63)
 	if m.created_at != nil {
 		fields = append(fields, group.FieldCreatedAt)
 	}
@@ -25791,6 +25989,9 @@ func (m *GroupMutation) Fields() []string {
 	}
 	if m.rate_multiplier != nil {
 		fields = append(fields, group.FieldRateMultiplier)
+	}
+	if m.is_free != nil {
+		fields = append(fields, group.FieldIsFree)
 	}
 	if m.peak_rate_enabled != nil {
 		fields = append(fields, group.FieldPeakRateEnabled)
@@ -25980,6 +26181,8 @@ func (m *GroupMutation) Field(name string) (ent.Value, bool) {
 		return m.Description()
 	case group.FieldRateMultiplier:
 		return m.RateMultiplier()
+	case group.FieldIsFree:
+		return m.IsFree()
 	case group.FieldPeakRateEnabled:
 		return m.PeakRateEnabled()
 	case group.FieldPeakStart:
@@ -26113,6 +26316,8 @@ func (m *GroupMutation) OldField(ctx context.Context, name string) (ent.Value, e
 		return m.OldDescription(ctx)
 	case group.FieldRateMultiplier:
 		return m.OldRateMultiplier(ctx)
+	case group.FieldIsFree:
+		return m.OldIsFree(ctx)
 	case group.FieldPeakRateEnabled:
 		return m.OldPeakRateEnabled(ctx)
 	case group.FieldPeakStart:
@@ -26275,6 +26480,13 @@ func (m *GroupMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetRateMultiplier(v)
+		return nil
+	case group.FieldIsFree:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsFree(v)
 		return nil
 	case group.FieldPeakRateEnabled:
 		v, ok := value.(bool)
@@ -27196,6 +27408,9 @@ func (m *GroupMutation) ResetField(name string) error {
 		return nil
 	case group.FieldRateMultiplier:
 		m.ResetRateMultiplier()
+		return nil
+	case group.FieldIsFree:
+		m.ResetIsFree()
 		return nil
 	case group.FieldPeakRateEnabled:
 		m.ResetPeakRateEnabled()

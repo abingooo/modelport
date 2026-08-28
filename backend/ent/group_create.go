@@ -106,6 +106,20 @@ func (_c *GroupCreate) SetNillableRateMultiplier(v *float64) *GroupCreate {
 	return _c
 }
 
+// SetIsFree sets the "is_free" field.
+func (_c *GroupCreate) SetIsFree(v bool) *GroupCreate {
+	_c.mutation.SetIsFree(v)
+	return _c
+}
+
+// SetNillableIsFree sets the "is_free" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableIsFree(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetIsFree(*v)
+	}
+	return _c
+}
+
 // SetPeakRateEnabled sets the "peak_rate_enabled" field.
 func (_c *GroupCreate) SetPeakRateEnabled(v bool) *GroupCreate {
 	_c.mutation.SetPeakRateEnabled(v)
@@ -995,6 +1009,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultRateMultiplier
 		_c.mutation.SetRateMultiplier(v)
 	}
+	if _, ok := _c.mutation.IsFree(); !ok {
+		v := group.DefaultIsFree
+		_c.mutation.SetIsFree(v)
+	}
 	if _, ok := _c.mutation.PeakRateEnabled(); !ok {
 		v := group.DefaultPeakRateEnabled
 		_c.mutation.SetPeakRateEnabled(v)
@@ -1160,6 +1178,9 @@ func (_c *GroupCreate) check() error {
 	}
 	if _, ok := _c.mutation.RateMultiplier(); !ok {
 		return &ValidationError{Name: "rate_multiplier", err: errors.New(`ent: missing required field "Group.rate_multiplier"`)}
+	}
+	if _, ok := _c.mutation.IsFree(); !ok {
+		return &ValidationError{Name: "is_free", err: errors.New(`ent: missing required field "Group.is_free"`)}
 	}
 	if _, ok := _c.mutation.PeakRateEnabled(); !ok {
 		return &ValidationError{Name: "peak_rate_enabled", err: errors.New(`ent: missing required field "Group.peak_rate_enabled"`)}
@@ -1379,6 +1400,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.RateMultiplier(); ok {
 		_spec.SetField(group.FieldRateMultiplier, field.TypeFloat64, value)
 		_node.RateMultiplier = value
+	}
+	if value, ok := _c.mutation.IsFree(); ok {
+		_spec.SetField(group.FieldIsFree, field.TypeBool, value)
+		_node.IsFree = value
 	}
 	if value, ok := _c.mutation.PeakRateEnabled(); ok {
 		_spec.SetField(group.FieldPeakRateEnabled, field.TypeBool, value)
@@ -1835,6 +1860,18 @@ func (u *GroupUpsert) UpdateRateMultiplier() *GroupUpsert {
 // AddRateMultiplier adds v to the "rate_multiplier" field.
 func (u *GroupUpsert) AddRateMultiplier(v float64) *GroupUpsert {
 	u.Add(group.FieldRateMultiplier, v)
+	return u
+}
+
+// SetIsFree sets the "is_free" field.
+func (u *GroupUpsert) SetIsFree(v bool) *GroupUpsert {
+	u.Set(group.FieldIsFree, v)
+	return u
+}
+
+// UpdateIsFree sets the "is_free" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateIsFree() *GroupUpsert {
+	u.SetExcluded(group.FieldIsFree)
 	return u
 }
 
@@ -2904,6 +2941,20 @@ func (u *GroupUpsertOne) AddRateMultiplier(v float64) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateRateMultiplier() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRateMultiplier()
+	})
+}
+
+// SetIsFree sets the "is_free" field.
+func (u *GroupUpsertOne) SetIsFree(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetIsFree(v)
+	})
+}
+
+// UpdateIsFree sets the "is_free" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateIsFree() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateIsFree()
 	})
 }
 
@@ -4294,6 +4345,20 @@ func (u *GroupUpsertBulk) AddRateMultiplier(v float64) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateRateMultiplier() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateRateMultiplier()
+	})
+}
+
+// SetIsFree sets the "is_free" field.
+func (u *GroupUpsertBulk) SetIsFree(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetIsFree(v)
+	})
+}
+
+// UpdateIsFree sets the "is_free" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateIsFree() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateIsFree()
 	})
 }
 

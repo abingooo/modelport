@@ -114,6 +114,10 @@ RUN mkdir -p /app/data && chown -R sub2api:sub2api /app
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh
 RUN chmod +x /app/docker-entrypoint.sh
 
+# Run the application as an unprivileged user by default. An explicit root
+# override remains available for one-time bind-volume ownership preparation.
+USER sub2api
+
 # Expose port (can be overridden by SERVER_PORT env var)
 EXPOSE 8080
 
@@ -121,6 +125,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD wget -q -T 5 -O /dev/null http://localhost:${SERVER_PORT:-8080}/health || exit 1
 
-# Run the application (entrypoint fixes /app/data ownership then execs as sub2api)
+# Run the application (the default user is already sub2api).
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["/app/sub2api"]

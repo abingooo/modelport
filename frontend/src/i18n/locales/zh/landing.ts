@@ -5,6 +5,7 @@ export default {
   },
   // Home Page
   home: {
+    primaryNavigation: '主导航',
     viewOnGithub: '在 GitHub 上查看',
     viewDocs: '查看文档',
     docs: '文档',
@@ -14,9 +15,12 @@ export default {
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
+    harborSceneLabel: '货船双向往来、模型货柜持续装卸的动态 ModelPort 港口',
+    heroKicker: '统一模型网关',
+    metaDescription: '模型港 ModelPort 是统一接入、调度与计费的多模型 API 网关，兼容 OpenAI、Anthropic 与 Google 调用方式',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
-    heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',
+    heroDescription: '统一接入、调度与计费，让不同协议与模型能力汇聚于同一个端口',
     tags: {
       subscriptionToApi: '订阅转 API',
       stickySession: '会话保持',
@@ -110,6 +114,7 @@ export default {
       button: '免费注册'
     },
     footer: {
+      copyrightNotice: '保留所有权利',
       allRightsReserved: '保留所有权利。'
     }
   },

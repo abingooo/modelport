@@ -48,6 +48,8 @@ const messages: Record<string, string> = {
   'keys.lastUsedIP': 'Last Used IP',
   'keys.rateLimitColumn': 'Rate Limit',
   'keys.searchPlaceholder': 'Search name or key...',
+  'keys.selectGroup': 'Select group',
+  'keys.testKey': 'Test',
   'keys.status.active': 'Active',
   'keys.status.expired': 'Expired',
   'keys.status.inactive': 'Inactive',
@@ -173,6 +175,12 @@ const DataTableStub = {
         <div data-test="current-concurrency">
           <slot name="cell-current_concurrency" :value="row.current_concurrency" :row="row" />
         </div>
+        <div data-test="key-group">
+          <slot name="cell-group" :value="row.group" :row="row" />
+        </div>
+        <div data-test="key-actions">
+          <slot name="cell-actions" :value="row" :row="row" />
+        </div>
         <div
           v-if="columns.some((col) => col.key === 'last_used_ip')"
           data-test="last-used-ip"
@@ -230,6 +238,12 @@ const mountView = async () => {
         SearchInput: SearchInputStub,
         Icon: IconStub,
         UseKeyModal: true,
+        KeyTestModal: {
+          name: 'KeyTestModal',
+          props: ['show', 'apiKey', 'baseUrl'],
+          emits: ['close', 'tested'],
+          template: '<div v-if="show" data-test="key-test-modal">{{ apiKey?.name }}</div>',
+        },
         EndpointPopover: true,
         GroupBadge: true,
         GroupOptionItem: true,
@@ -394,6 +408,26 @@ describe('user KeysView column settings', () => {
     expect(wrapper.get('[data-test="current-concurrency"]').text()).toBe('3')
   })
 
+  it('opens the downstream test modal for the selected API key', async () => {
+    getPublicSettings.mockResolvedValueOnce({
+      api_base_url: 'https://gateway.modelport.test/v1',
+    })
+    const wrapper = await mountView()
+
+    await getButtonByText(wrapper, 'Test').trigger('click')
+    await nextTick()
+
+    const modal = wrapper.get('[data-test="key-test-modal"]')
+    expect(modal.text()).toBe('test-key')
+    const component = wrapper.findComponent({ name: 'KeyTestModal' })
+    expect(component.props('apiKey')).toMatchObject({ id: 1, key: 'sk-test-key' })
+    expect(component.props('baseUrl')).toBe('https://gateway.modelport.test/v1')
+
+    listKeys.mockClear()
+    component.vm.$emit('tested')
+    await flushPromises()
+    expect(listKeys).toHaveBeenCalledTimes(1)
+  })
   it('marks current concurrency as sortable', async () => {
     const wrapper = await mountView()
 

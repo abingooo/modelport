@@ -2,6 +2,13 @@ export default {
     settings: {
       title: 'System Settings',
       description: 'Manage registration, email verification, default values, and SMTP settings',
+      instructionAudit: {
+        title: 'Instruction Audit',
+        description: 'Apply instruction review to requests in configured downstream groups.',
+        configure: 'Manage Rules',
+        enabled: 'Enable Instruction Audit',
+        summary: '{hashes} active hashes and {groups} audited groups',
+      },
       tabs: {
         general: 'General',
         agreement: 'Agreement',
@@ -597,7 +604,7 @@ export default {
         backendModeDescription:
           'Disables user registration, public site, and self-service features. Only admin can log in and manage the platform.',
         siteName: 'Site Name',
-        siteNamePlaceholder: 'Sub2API',
+        siteNamePlaceholder: 'ModelPort',
         siteNameHint: 'Displayed in emails and page titles',
         siteSubtitle: 'Site Subtitle',
         siteSubtitlePlaceholder: 'Subscription to API Conversion Platform',

@@ -5,6 +5,7 @@ package routes
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -19,6 +20,7 @@ import (
 )
 
 const authRouteRedisImageTag = "redis:8.4-alpine"
+const authRouteExternalRedisAddressEnv = "SUB2API_TEST_REDIS_ADDR"
 
 func TestAuthRegisterRateLimitThresholdHitReturns429(t *testing.T) {
 	ctx := context.Background()
@@ -46,6 +48,10 @@ func TestAuthRegisterRateLimitThresholdHitReturns429(t *testing.T) {
 
 func startAuthRouteRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
+	if address := strings.TrimSpace(os.Getenv(authRouteExternalRedisAddressEnv)); address != "" {
+		requireAuthRouteLoopbackRedisAddress(t, address)
+		return openAuthRouteTestRedis(t, ctx, address)
+	}
 	ensureAuthRouteDockerAvailable(t)
 
 	redisContainer, err := tcredis.Run(ctx, authRouteRedisImageTag)
@@ -59,15 +65,27 @@ func startAuthRouteRedis(t *testing.T, ctx context.Context) *redis.Client {
 	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
 	require.NoError(t, err)
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
-		DB:   0,
-	})
+	return openAuthRouteTestRedis(t, ctx, fmt.Sprintf("%s:%d", redisHost, redisPort.Int()))
+}
+
+func openAuthRouteTestRedis(t *testing.T, ctx context.Context, address string) *redis.Client {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: address, DB: 0})
 	require.NoError(t, rdb.Ping(ctx).Err())
 	t.Cleanup(func() {
 		_ = rdb.Close()
 	})
 	return rdb
+}
+
+func requireAuthRouteLoopbackRedisAddress(t *testing.T, address string) {
+	t.Helper()
+	host, port, err := net.SplitHostPort(address)
+	require.NoError(t, err, authRouteExternalRedisAddressEnv+" must be a host:port address")
+	require.NotEmpty(t, port)
+	ip := net.ParseIP(host)
+	require.True(t, strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()),
+		authRouteExternalRedisAddressEnv+" must use a loopback host")
 }
 
 func ensureAuthRouteDockerAvailable(t *testing.T) {

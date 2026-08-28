@@ -44,10 +44,28 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		zap.Any("group_id", apiKey.GroupID),
 	)
 
-	// Read request body
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	// Read request body while retaining the untouched decoded bytes for
+	// instruction audit. Prompt Audit continues to receive the normalized body.
+	body, instructionAuditBody, bodyLease, err := readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(
+		c.Request,
+		instructionRequestBodyReadLimit(h.securityAuditCoordinator, gatewayMaxBodySize(h.cfg)),
+		instructionRequestBodyBudget(h.securityAuditCoordinator),
+	)
+	defer bodyLease.Release()
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+				decision := h.checkInstructionAudit(
+					c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+					preAuditModel, instructionAuditBody, service.IsOpenAIResponsesCompactPath(c), "http",
+				)
+				bodyLease.Release()
+				if decision != nil && !decision.AllowNextStage {
+					h.responsesSecurityAuditError(c, decision)
+					return
+				}
+			}
 			h.responsesErrorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
@@ -59,6 +77,16 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		h.responsesErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+	if decision := h.checkInstructionAudit(
+		c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+		preAuditModel, instructionAuditBody, service.IsOpenAIResponsesCompactPath(c), "http",
+	); decision != nil && !decision.AllowNextStage {
+		bodyLease.Release()
+		h.responsesSecurityAuditError(c, decision)
+		return
+	}
+	bodyLease.Release()
 
 	setOpsRequestContext(c, "", false)
 
@@ -116,7 +144,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.AllowNextStage {
+	if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body, "http"); decision != nil && !decision.AllowNextStage {
 		h.responsesSecurityAuditError(c, decision)
 		return
 	}

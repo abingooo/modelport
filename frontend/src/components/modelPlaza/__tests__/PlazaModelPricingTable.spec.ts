@@ -44,6 +44,7 @@ function mountTable(
   rateMultiplier: number,
   userRateMultiplier?: number | null,
   extraProps?: {
+    isFree?: boolean
     imageRateIndependent?: boolean
     imageRateMultiplier?: number | null
     peakWindow?: string
@@ -91,6 +92,41 @@ describe('PlazaModelPricingTable', () => {
     expect(struck.exists()).toBe(true)
     expect(struck.text()).toBe('1x')
     expect(text).toContain('0.8x')
+  })
+
+  it('免费分组将实付倍率和价格归零，同时保留官方参考价格', () => {
+    const image = tokenModel({
+      name: 'gpt-image-free',
+      pricing: {
+        billing_mode: 'image',
+        input_price: null,
+        output_price: null,
+        cache_write_price: null,
+        cache_read_price: null,
+        image_input_price: null,
+        image_output_price: null,
+        per_request_price: 0.04,
+        intervals: [],
+      },
+    })
+    const wrapper = mountTable([tokenModel(), image], 2, 0.5, {
+      isFree: true,
+      imageRateIndependent: true,
+      imageRateMultiplier: 4,
+    })
+    const paidCells = wrapper.findAll('tbody .pz-cell')
+    const imageRow = wrapper.findAll('tbody tr').find((row) => row.text().includes('gpt-image-free'))
+
+    expect(paidCells[0].text()).toBe('$0.00')
+    expect(paidCells[1].text()).toBe('$0.00')
+    expect(paidCells[2].text()).toContain('$0.00')
+    expect(imageRow?.get('.pz-cell').text()).toContain('$0.00')
+    expect(imageRow?.text()).toContain('0x')
+    expect(imageRow?.text()).not.toContain('4x')
+    expect(wrapper.text()).toContain('$3.00')
+    expect(wrapper.text()).toContain('$15.00')
+    expect(wrapper.text()).toContain('0x')
+    expect(wrapper.find('.line-through').exists()).toBe(false)
   })
 
   it('模型按官方输出价从高到低排序,无官方价的排最后', () => {

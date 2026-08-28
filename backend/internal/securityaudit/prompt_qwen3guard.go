@@ -191,6 +191,8 @@ type OpenAICompatibleScanner struct {
 	clients sync.Map
 }
 
+const promptAuditReviewPurposeHeader = "prompt-audit-review"
+
 func NewOpenAICompatibleScanner() *OpenAICompatibleScanner { return &OpenAICompatibleScanner{} }
 
 func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpoint, chunk string, enabledScanners []string) (*NormalizedResult, error) {
@@ -218,6 +220,7 @@ func (s *OpenAICompatibleScanner) Scan(ctx context.Context, endpoint ActiveEndpo
 		return nil, &GuardError{Code: ErrorCodeUnavailable, Cause: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ModelPort-Internal-Purpose", promptAuditReviewPurposeHeader)
 	if endpoint.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+endpoint.Token)
 	}

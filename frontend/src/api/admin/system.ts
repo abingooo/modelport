@@ -19,6 +19,9 @@ export interface VersionInfo {
   cached: boolean
   warning?: string
   build_type: string // "source" for manual builds, "release" for CI builds
+  update_mode: 'manual' | 'binary' | 'docker'
+  update_channel?: 'stable' | 'develop'
+  repository: string
 }
 
 /**
@@ -43,6 +46,7 @@ export async function checkUpdates(force = false): Promise<VersionInfo> {
 export interface UpdateResult {
   message: string
   need_restart: boolean
+  update_queued?: boolean
 }
 
 export interface RollbackVersionInfo {

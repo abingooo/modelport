@@ -88,6 +88,12 @@ describe('useAppStore', () => {
     localStorage.clear()
   })
 
+  it('uses ModelPort as the product fallback before settings load', () => {
+    const store = useAppStore()
+
+    expect(store.siteName).toBe('ModelPort')
+  })
+
   // --- Toast 消息管理 ---
 
   describe('Toast 消息管理', () => {

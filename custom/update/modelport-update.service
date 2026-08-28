@@ -1,0 +1,28 @@
+[Unit]
+Description=Apply a queued ModelPort Docker update
+Requires=docker.service
+Wants=network-online.target
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=20min
+TimeoutStopSec=10min
+Environment=MODELPORT_DEPLOY_DIR=/opt/modelport
+Environment=MODELPORT_COMPOSE_OVERRIDE_FILE=/opt/modelport/modelport-compose.override.yml
+Environment=HOME=/var/cache/modelport-update
+Environment=TUF_ROOT=/var/cache/modelport-update/sigstore-tuf
+ExecStart=/usr/local/sbin/modelport-docker-updater
+User=root
+Group=root
+UMask=0077
+CacheDirectory=modelport-update
+CacheDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/modelport /var/cache/modelport-update
+
+[Install]
+WantedBy=multi-user.target

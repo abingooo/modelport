@@ -67,6 +67,31 @@ func TestBatchImageSettlementService_ZeroSuccessCanComplete(t *testing.T) {
 	require.Equal(t, 0.0, billing.captures[0].ActualAmount)
 }
 
+func TestBatchImageSettlementService_FreeJobDoesNotRequireBillingRepository(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job := testSettlingBatchImageJob("imgbatch_free_without_billing_repo")
+	job.IsFreeBilling = true
+	job.PricingSnapshotVersion = 1
+	job.BaseUnitPrice = 0.25
+	job.BillableUnitPrice = 0.25
+	job.SuccessCount = 2
+	job.FailCount = 0
+	job.ItemCount = 2
+	repo.jobs[job.BatchID] = job
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := &BatchImageSettlementService{
+		Repo: repo, Pricing: &fakeBatchImagePricingResolver{unitPrice: 99}, UsageLogRepo: usageLogs,
+	}
+
+	result, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.Zero(t, result.ActualCost)
+	require.Equal(t, BatchImageJobStatusCompleted, repo.jobs[job.BatchID].Status)
+	require.NotNil(t, usageLogs.lastLog)
+	require.InDelta(t, 0.5, usageLogs.lastLog.TotalCost, 1e-12)
+	require.Zero(t, usageLogs.lastLog.ActualCost)
+}
+
 func TestBatchImageSettlementService_CompletedJobReturnsAlreadySettledWithoutBilling(t *testing.T) {
 	repo := newFakeBatchImageRepository()
 	job := testSettlingBatchImageJob("imgbatch_done")
@@ -185,6 +210,160 @@ func TestBatchImageSettlementService_UsesSubmittedPricingSnapshot(t *testing.T) 
 	require.Len(t, billing.captures, 1)
 	require.InDelta(t, 0.5, billing.captures[0].ActualAmount, 1e-12)
 	require.InDelta(t, 0.55, billing.captures[0].HoldAmount, 1e-12)
+}
+
+func TestBatchImageSettlementService_PaidUsageLogSeparatesRawCostAndMultipliers(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job, groupID := testBatchImageSettlementCostContractJob("imgbatch_paid_cost_contract")
+	repo.jobs[job.BatchID] = job
+	billing := &fakeBatchImageBillingRepo{}
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	channelService := newTestChannelServiceForStats(t, &Channel{ID: 101, Status: StatusActive}, groupID, "gemini")
+	svc := &BatchImageSettlementService{
+		Repo:           repo,
+		BillingRepo:    billing,
+		UsageLogRepo:   usageLogs,
+		Pricing:        &fakeBatchImagePricingResolver{unitPrice: 99},
+		ChannelService: channelService,
+	}
+
+	result, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.InDelta(t, 0.25, result.ActualCost, 1e-12)
+	require.Len(t, billing.captures, 1)
+	require.InDelta(t, 0.25, billing.captures[0].ActualAmount, 1e-12)
+
+	log := usageLogs.lastLog
+	require.NotNil(t, log)
+	require.InDelta(t, 0.5, log.TotalCost, 1e-12)
+	require.InDelta(t, 0.5, log.ImageOutputCost, 1e-12)
+	require.InDelta(t, 0.25, log.ActualCost, 1e-12)
+	require.InDelta(t, 0.4, log.RateMultiplier, 1e-12)
+	require.NotNil(t, log.AccountRateMultiplier)
+	require.InDelta(t, 1.25, *log.AccountRateMultiplier, 1e-12)
+	require.NotNil(t, log.AccountStatsCost)
+	require.InDelta(t, 0.5, *log.AccountStatsCost, 1e-12)
+	require.NotNil(t, log.GroupID)
+	require.Equal(t, groupID, *log.GroupID)
+}
+
+func TestBatchImageSettlementService_FreeUsageLogKeepsRawAccountCost(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job, groupID := testBatchImageSettlementCostContractJob("imgbatch_free_cost_contract")
+	job.IsFreeBilling = true
+	repo.jobs[job.BatchID] = job
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	channelService := newTestChannelServiceForStats(t, &Channel{ID: 102, Status: StatusActive}, groupID, "gemini")
+	svc := &BatchImageSettlementService{
+		Repo:           repo,
+		UsageLogRepo:   usageLogs,
+		Pricing:        &fakeBatchImagePricingResolver{unitPrice: 99},
+		ChannelService: channelService,
+	}
+
+	result, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.Zero(t, result.ActualCost)
+
+	log := usageLogs.lastLog
+	require.NotNil(t, log)
+	require.InDelta(t, 0.5, log.TotalCost, 1e-12)
+	require.InDelta(t, 0.5, log.ImageOutputCost, 1e-12)
+	require.Zero(t, log.ActualCost)
+	require.Zero(t, log.RateMultiplier)
+	require.NotNil(t, log.AccountRateMultiplier)
+	require.InDelta(t, 1.25, *log.AccountRateMultiplier, 1e-12)
+	require.NotNil(t, log.AccountStatsCost)
+	require.InDelta(t, 0.5, *log.AccountStatsCost, 1e-12)
+	require.NotNil(t, log.GroupID)
+	require.Equal(t, groupID, *log.GroupID)
+}
+
+func TestBatchImageSettlementService_CustomAccountStatsPricingUsesSuccessfulImageCount(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job, groupID := testBatchImageSettlementCostContractJob("imgbatch_custom_account_cost")
+	repo.jobs[job.BatchID] = job
+	channel := &Channel{
+		ID:     103,
+		Status: StatusActive,
+		AccountStatsPricingRules: []AccountStatsPricingRule{
+			{
+				GroupIDs: []int64{groupID},
+				Pricing: []ChannelModelPricing{
+					{
+						Platform:        "gemini",
+						Models:          []string{job.Model},
+						BillingMode:     BillingModeImage,
+						PerRequestPrice: testPtrFloat64(0.4),
+					},
+				},
+			},
+		},
+	}
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := &BatchImageSettlementService{
+		Repo:           repo,
+		BillingRepo:    &fakeBatchImageBillingRepo{},
+		UsageLogRepo:   usageLogs,
+		Pricing:        &fakeBatchImagePricingResolver{unitPrice: 99},
+		ChannelService: newTestChannelServiceForStats(t, channel, groupID, "gemini"),
+	}
+
+	_, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.NotNil(t, usageLogs.lastLog)
+	require.NotNil(t, usageLogs.lastLog.AccountStatsCost)
+	require.InDelta(t, 0.8, *usageLogs.lastLog.AccountStatsCost, 1e-12)
+}
+
+func TestBatchImageSettlementService_ApplyPricingToAccountStatsUsesRawTotal(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job, groupID := testBatchImageSettlementCostContractJob("imgbatch_apply_pricing_account_cost")
+	repo.jobs[job.BatchID] = job
+	channel := &Channel{ID: 104, Status: StatusActive, ApplyPricingToAccountStats: true}
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := &BatchImageSettlementService{
+		Repo:           repo,
+		BillingRepo:    &fakeBatchImageBillingRepo{},
+		UsageLogRepo:   usageLogs,
+		Pricing:        &fakeBatchImagePricingResolver{unitPrice: 99},
+		ChannelService: newTestChannelServiceForStats(t, channel, groupID, "gemini"),
+	}
+
+	_, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.NotNil(t, usageLogs.lastLog)
+	require.NotNil(t, usageLogs.lastLog.AccountStatsCost)
+	require.InDelta(t, 0.5, *usageLogs.lastLog.AccountStatsCost, 1e-12)
+}
+
+func TestBatchImageSettlementService_AlreadySettledDoesNotDuplicateCostWrites(t *testing.T) {
+	repo := newFakeBatchImageRepository()
+	job, groupID := testBatchImageSettlementCostContractJob("imgbatch_cost_contract_repeat")
+	repo.jobs[job.BatchID] = job
+	billing := &fakeBatchImageBillingRepo{}
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	svc := &BatchImageSettlementService{
+		Repo:           repo,
+		BillingRepo:    billing,
+		UsageLogRepo:   usageLogs,
+		Pricing:        &fakeBatchImagePricingResolver{unitPrice: 99},
+		ChannelService: newTestChannelServiceForStats(t, &Channel{ID: 105, Status: StatusActive}, groupID, "gemini"),
+	}
+
+	first, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.False(t, first.AlreadySettled)
+	second, err := svc.Settle(context.Background(), job.BatchID)
+	require.NoError(t, err)
+	require.True(t, second.AlreadySettled)
+	require.Equal(t, first.RequestID, second.RequestID)
+	require.InDelta(t, first.ActualCost, second.ActualCost, 1e-12)
+	require.Len(t, billing.captures, 1)
+	require.Equal(t, 1, usageLogs.calls)
+	require.NotNil(t, usageLogs.lastLog)
+	require.NotNil(t, usageLogs.lastLog.AccountStatsCost)
+	require.InDelta(t, 0.5, *usageLogs.lastLog.AccountStatsCost, 1e-12)
 }
 
 func TestBatchImageSettlementService_BillingFailureLeavesSettlingAndRecordsError(t *testing.T) {
@@ -413,6 +592,26 @@ func testSettlingBatchImageJob(batchID string) *BatchImageJob {
 		HoldAmount:        &holdAmount,
 		HoldID:            &holdID,
 	}
+}
+
+func testBatchImageSettlementCostContractJob(batchID string) (*BatchImageJob, int64) {
+	job := testSettlingBatchImageJob(batchID)
+	groupID := int64(777)
+	job.GroupID = &groupID
+	job.SuccessCount = 2
+	job.FailCount = 0
+	job.ItemCount = 2
+	job.PricingSnapshotVersion = 1
+	job.BaseUnitPrice = 0.25
+	job.GroupRateMultiplier = 0.5
+	job.AccountRateMultiplier = 1.25
+	job.BatchDiscountMultiplier = 0.8
+	job.BillableUnitPrice = 0.125
+	job.HoldUnitPrice = 0.125
+	holdAmount := 0.25
+	job.EstimatedCost = holdAmount
+	job.HoldAmount = &holdAmount
+	return job, groupID
 }
 
 type fakeBatchImagePricingResolver struct {

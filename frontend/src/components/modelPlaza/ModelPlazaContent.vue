@@ -98,8 +98,9 @@ const descriptionHtml = computed(() => {
   return DOMPurify.sanitize(marked.parse(md) as string)
 })
 
-/** 生效倍率 = 用户专属倍率 ?? 分组默认倍率。 */
+/** 免费分组恒为 0；否则生效倍率 = 用户专属倍率 ?? 分组默认倍率。 */
 function effectiveRate(g: ModelPlazaGroup): number {
+  if (g.is_free) return 0
   return g.user_rate_multiplier ?? g.rate_multiplier
 }
 

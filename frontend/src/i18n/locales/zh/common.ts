@@ -205,6 +205,8 @@ export default {
     securityAudit: '安全审计',
     contentModeration: '内容审核',
     promptAudit: '提示词审计',
+    instructionAudit: '指令审核',
+    lottery: '幸运抽奖',
     auditLogs: '操作日志',
   },
 
@@ -442,6 +444,7 @@ export default {
   stepUp: {
     title: '需要二次验证',
     hint: '请输入身份验证器应用中的 6 位验证码以继续此敏感操作。',
+    digitLabel: '验证码第 {position} 位',
     verifyFailed: '验证失败，请重试',
     notEnabled: '此操作需要开启二次验证，请先在个人资料中启用 TOTP。',
     adminApiKeyForbidden: '管理 API Key 无法执行此操作，请使用已通过二次验证的管理员会话。'

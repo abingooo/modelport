@@ -94,6 +94,7 @@ temp/
 dist/
 build/
 release/
+release-assets/
 
 # 后端嵌入的前端构建产物
 # Keep a placeholder file so `//go:embed all:dist` always has a match in CI/lint,
@@ -133,6 +134,9 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/MODELPORT_REBUILD_V0.1.183.1_CN.md
+!docs/releases/
+!docs/releases/*.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

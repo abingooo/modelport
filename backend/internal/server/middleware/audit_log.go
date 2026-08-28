@@ -54,10 +54,15 @@ func SkipAudit(c *gin.Context) {
 var auditExtraAllowedKeys = map[string]struct{}{
 	"result": {}, "error_code": {}, "enabled": {}, "blocking_enabled": {},
 	"config_version": {}, "endpoint_count": {}, "scanner_count": {},
-	"all_groups": {}, "group_count": {}, "guard_endpoint_id": {},
+	"all_groups": {}, "group_count": {}, "group_id": {}, "guard_endpoint_id": {},
+	"scope_count": {}, "all_clients": {}, "client_profile_count": {},
 	"http_status": {}, "latency_ms": {}, "token_applied": {}, "retryable": {},
 	"event_id": {}, "requested_count": {}, "deleted_events": {}, "deleted_jobs": {},
 	"matched_count": {}, "snapshot_max_id": {}, "filter_hash": {}, "confirm": {},
+	"before": {}, "after": {}, "confirm_no_rules": {}, "hash_id": {}, "status": {},
+	"rule_set_id": {}, "hash_count": {}, "user_id": {}, "model": {}, "binding_id": {}, "source": {},
+	"grant_id": {}, "auth_method": {}, "authorization_result": {}, "risk_hash_id": {},
+	"review_job_id": {}, "ai_node_id": {}, "action": {},
 }
 
 // SetAuditExtra adds allowlisted, scalar details to the current audit entry.

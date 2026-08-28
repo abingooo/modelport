@@ -255,9 +255,15 @@
             </div>
           </template>
 
-          <template #cell-rate_multiplier="{ value }">
-            <span class="text-sm text-gray-700 dark:text-gray-300"
-              >{{ value }}x</span
+          <template #cell-rate_multiplier="{ row }">
+            <span
+              v-if="row.is_free"
+              class="inline-flex rounded-md bg-cyan-50 px-2 py-0.5 text-xs font-semibold text-cyan-700 dark:bg-cyan-900/20 dark:text-cyan-300"
+            >
+              {{ t("admin.groups.freeBilling.badge") }}
+            </span>
+            <span v-else class="text-sm text-gray-700 dark:text-gray-300"
+              >{{ row.rate_multiplier }}x</span
             >
           </template>
 
@@ -485,6 +491,42 @@
             :placeholder="t('admin.groups.enterGroupName')"
             data-tour="group-form-name"
           />
+        </div>
+        <div>
+          <label class="input-label">{{ t("admin.groups.freeBilling.title") }}</label>
+          <div
+            class="grid grid-cols-2 rounded-md bg-gray-100 p-1 dark:bg-dark-700"
+            role="group"
+            :aria-label="t('admin.groups.freeBilling.title')"
+          >
+            <button
+              type="button"
+              :aria-pressed="!createForm.is_free"
+              :class="[
+                'rounded px-3 py-2 text-sm font-medium transition-colors',
+                !createForm.is_free
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-600 dark:text-white'
+                  : 'text-gray-500 dark:text-gray-400',
+              ]"
+              @click="setCreateBillingMode(false)"
+            >
+              {{ t("admin.groups.freeBilling.standard") }}
+            </button>
+            <button
+              type="button"
+              :aria-pressed="createForm.is_free"
+              :class="[
+                'rounded px-3 py-2 text-sm font-medium transition-colors',
+                createForm.is_free
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400',
+              ]"
+              @click="setCreateBillingMode(true)"
+            >
+              {{ t("admin.groups.freeBilling.free") }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t("admin.groups.freeBilling.hint") }}</p>
         </div>
         <div>
           <label class="input-label">{{
@@ -2215,6 +2257,42 @@
             class="input"
             data-tour="edit-group-form-name"
           />
+        </div>
+        <div>
+          <label class="input-label">{{ t("admin.groups.freeBilling.title") }}</label>
+          <div
+            class="grid grid-cols-2 rounded-md bg-gray-100 p-1 dark:bg-dark-700"
+            role="group"
+            :aria-label="t('admin.groups.freeBilling.title')"
+          >
+            <button
+              type="button"
+              :aria-pressed="!editForm.is_free"
+              :class="[
+                'rounded px-3 py-2 text-sm font-medium transition-colors',
+                !editForm.is_free
+                  ? 'bg-white text-gray-900 shadow-sm dark:bg-dark-600 dark:text-white'
+                  : 'text-gray-500 dark:text-gray-400',
+              ]"
+              @click="setEditBillingMode(false)"
+            >
+              {{ t("admin.groups.freeBilling.standard") }}
+            </button>
+            <button
+              type="button"
+              :aria-pressed="editForm.is_free"
+              :class="[
+                'rounded px-3 py-2 text-sm font-medium transition-colors',
+                editForm.is_free
+                  ? 'bg-cyan-600 text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400',
+              ]"
+              @click="setEditBillingMode(true)"
+            >
+              {{ t("admin.groups.freeBilling.free") }}
+            </button>
+          </div>
+          <p class="input-hint">{{ t("admin.groups.freeBilling.hint") }}</p>
         </div>
         <div>
           <label class="input-label">{{
@@ -5041,6 +5119,7 @@ const createForm = reactive({
   description: "",
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
+  is_free: false,
   is_exclusive: false,
   subscription_type: "standard" as SubscriptionType,
   daily_limit_usd: null as number | null,
@@ -5401,6 +5480,7 @@ const editForm = reactive({
   description: "",
   platform: "anthropic" as GroupPlatform,
   rate_multiplier: 1.0,
+  is_free: false,
   is_exclusive: false,
   status: "active" as "active" | "inactive",
   subscription_type: "standard" as SubscriptionType,
@@ -5470,11 +5550,27 @@ const editForm = reactive({
   reasoning_effort_mappings: [] as ReasoningEffortMappingRow[],
 });
 
+const confirmFreeBilling = () =>
+  window.confirm(t("admin.groups.freeBilling.confirm"));
+
+const setCreateBillingMode = (isFree: boolean) => {
+  if (createForm.is_free === isFree) return;
+  if (isFree && !confirmFreeBilling()) return;
+  createForm.is_free = isFree;
+};
+
+const setEditBillingMode = (isFree: boolean) => {
+  if (editForm.is_free === isFree) return;
+  if (isFree && !confirmFreeBilling()) return;
+  editForm.is_free = isFree;
+};
+
 type ImagePricingFormState = {
   platform: GroupPlatform;
   allow_image_generation: boolean;
   allow_batch_image_generation: boolean;
   rate_multiplier: number;
+  is_free: boolean;
   image_rate_independent: boolean;
   image_rate_multiplier: number;
   batch_image_discount_multiplier: number;
@@ -5491,6 +5587,7 @@ type ImagePricingFormState = {
 type VideoPricingFormState = {
   platform: GroupPlatform;
   rate_multiplier: number;
+  is_free: boolean;
   video_rate_independent: boolean;
   video_rate_multiplier: number;
   video_price_480p: number | string | null;
@@ -5549,7 +5646,9 @@ const formatVideoPricePreview = (value: number | string | null | undefined) => {
 };
 
 const buildImageFinalPricePreview = (form: ImagePricingFormState) => {
-  const imageMultiplier = form.image_rate_independent
+  const imageMultiplier = form.is_free
+    ? 0
+    : form.image_rate_independent
     ? normalizePreviewNumber(form.image_rate_multiplier, 1)
     : normalizePreviewNumber(form.rate_multiplier, 1);
   const multiplier = imageMultiplier;
@@ -5567,7 +5666,9 @@ const buildImageFinalPricePreview = (form: ImagePricingFormState) => {
 };
 
 const buildVideoFinalPricePreview = (form: VideoPricingFormState) => {
-  const multiplier = form.video_rate_independent
+  const multiplier = form.is_free
+    ? 0
+    : form.video_rate_independent
     ? normalizePreviewNumber(form.video_rate_multiplier, 1)
     : normalizePreviewNumber(form.rate_multiplier, 1);
   return videoPricingTiers.map((tier) => {
@@ -5602,11 +5703,14 @@ const DEFAULT_WEB_SEARCH_PRICE_PER_CALL = 0.01;
 const buildWebSearchFinalPricePreview = (form: {
   web_search_price_per_call: number | string | null;
   rate_multiplier: number | string | null;
+  is_free: boolean;
 }) => {
   const basePrice =
     parsePreviewPrice(form.web_search_price_per_call) ??
     DEFAULT_WEB_SEARCH_PRICE_PER_CALL;
-  const multiplier = normalizePreviewNumber(form.rate_multiplier, 1);
+  const multiplier = form.is_free
+    ? 0
+    : normalizePreviewNumber(form.rate_multiplier, 1);
   return formatImagePricePreview(basePrice * multiplier);
 };
 
@@ -5861,6 +5965,7 @@ const closeCreateModal = () => {
   createForm.description = "";
   createForm.platform = "anthropic";
   createForm.rate_multiplier = 1.0;
+  createForm.is_free = false;
   createForm.is_exclusive = false;
   createForm.subscription_type = "standard";
   createForm.daily_limit_usd = null;
@@ -6102,6 +6207,7 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.description = group.description || "";
   editForm.platform = group.platform;
   editForm.rate_multiplier = group.rate_multiplier;
+  editForm.is_free = group.is_free ?? false;
   editForm.is_exclusive = group.is_exclusive;
   editForm.status = group.status;
   editForm.subscription_type = group.subscription_type || "standard";

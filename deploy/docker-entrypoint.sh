@@ -1,9 +1,10 @@
 #!/bin/sh
 set -e
 
-# Fix data directory permissions when running as root.
-# Docker named volumes / host bind-mounts may be owned by root,
-# preventing the non-root sub2api user from writing files.
+# The image declares USER sub2api, so this branch is only reached when an
+# operator explicitly starts the container as root for volume preparation.
+# Docker named volumes / host bind-mounts may be owned by root, preventing the
+# non-root sub2api user from writing files.
 if [ "$(id -u)" = "0" ]; then
     mkdir -p /app/data
     # Use || true to avoid failure on read-only mounted files (e.g. config.yaml:ro)

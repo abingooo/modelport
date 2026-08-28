@@ -92,6 +92,7 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.InDelta(t, 0.25, got.EstimatedCost, 1e-12)
 
 		job := repo.jobs[got.ID]
+		require.Equal(t, groupID, *job.GroupID)
 		require.InDelta(t, 0.25, job.BaseUnitPrice, 1e-12)
 		require.InDelta(t, 0.5, job.GroupRateMultiplier, 1e-12)
 		require.InDelta(t, 1.25, job.AccountRateMultiplier, 1e-12)
@@ -430,6 +431,74 @@ func TestBatchImagePublicService_Submit(t *testing.T) {
 		require.NoError(t, err)
 		requireBatchImagePublicJSONHasNoInternals(t, string(body))
 	})
+}
+
+func TestBatchImagePublicService_FreeGroupSnapshotControlsSettlement(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, queue, gemini, _ := newTestBatchImagePublicService(true)
+	groupID := int64(7)
+	accountMultiplier := 1.25
+	svc.AccountRepo.(*publicBatchImageAccountRepo).accounts[1].RateMultiplier = &accountMultiplier
+	group := &Group{
+		ID:                           groupID,
+		Platform:                     PlatformGemini,
+		RateMultiplier:               2,
+		IsFree:                       true,
+		AllowImageGeneration:         true,
+		AllowBatchImageGeneration:    true,
+		ImageRateIndependent:         true,
+		ImageRateMultiplier:          3,
+		BatchImageDiscountMultiplier: 0.5,
+		BatchImageHoldMultiplier:     0.6,
+	}
+	svc.GroupRepo = &publicBatchImageGroupRepo{groups: map[int64]*Group{groupID: group}}
+	rateRepo := &publicBatchImageUserGroupRateRepo{err: errors.New("free groups must not resolve user rates")}
+	svc.UserGroupRateRepo = rateRepo
+	billing := svc.BillingRepo.(*fakeBatchImageBillingRepo)
+
+	submitted, err := svc.Submit(ctx, BatchImageOwner{UserID: 11, APIKeyID: 22, GroupID: &groupID}, validBatchImageSubmitRequest(), "")
+	require.NoError(t, err)
+	require.Zero(t, submitted.EstimatedCost)
+	require.Len(t, gemini.submits, 1)
+	require.Equal(t, []string{submitted.ID}, queue.enqueued)
+	require.Empty(t, billing.reserves)
+	require.Zero(t, rateRepo.calls)
+
+	job := repo.jobs[submitted.ID]
+	require.True(t, job.IsFreeBilling)
+	require.Zero(t, job.EstimatedCost)
+	require.NotNil(t, job.HoldAmount)
+	require.Zero(t, *job.HoldAmount)
+	require.InDelta(t, 3, job.GroupRateMultiplier, 1e-12)
+	require.InDelta(t, accountMultiplier, job.AccountRateMultiplier, 1e-12)
+	require.InDelta(t, 0.25*3*accountMultiplier*0.5, job.BillableUnitPrice, 1e-12)
+	require.Zero(t, job.HoldUnitPrice)
+
+	// A later admin edit must not change the in-flight job's submission snapshot.
+	group.IsFree = false
+	job.Status = BatchImageJobStatusSettling
+	job.SuccessCount = 2
+	job.FailCount = 0
+	usageLogs := &openAIRecordUsageLogRepoStub{inserted: true}
+	settlement := &BatchImageSettlementService{
+		Repo: repo, BillingRepo: billing, Pricing: &fakeBatchImagePricingResolver{unitPrice: 99}, UsageLogRepo: usageLogs,
+	}
+
+	result, err := settlement.Settle(ctx, job.BatchID)
+	require.NoError(t, err)
+	require.Zero(t, result.ActualCost)
+	require.Equal(t, BatchImageJobStatusCompleted, job.Status)
+	require.Empty(t, billing.captures)
+	require.NotNil(t, job.ActualCost)
+	require.Zero(t, *job.ActualCost)
+	require.NotNil(t, usageLogs.lastLog)
+	require.Equal(t, 2, usageLogs.lastLog.ImageCount)
+	require.InDelta(t, 0.5, usageLogs.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, 0.5, usageLogs.lastLog.ImageOutputCost, 1e-12)
+	require.Zero(t, usageLogs.lastLog.ActualCost)
+	require.Zero(t, usageLogs.lastLog.RateMultiplier)
+	require.NotNil(t, usageLogs.lastLog.AccountRateMultiplier)
+	require.InDelta(t, accountMultiplier, *usageLogs.lastLog.AccountRateMultiplier, 1e-12)
 }
 
 func TestBatchImagePublicService_List(t *testing.T) {
@@ -956,9 +1025,15 @@ func (r *publicBatchImageGroupRepo) GetByIDLite(_ context.Context, id int64) (*G
 
 type publicBatchImageUserGroupRateRepo struct {
 	rates map[int64]*float64
+	err   error
+	calls int
 }
 
 func (r *publicBatchImageUserGroupRateRepo) GetByUserAndGroup(_ context.Context, _ int64, groupID int64) (*float64, error) {
+	r.calls++
+	if r.err != nil {
+		return nil, r.err
+	}
 	if r != nil && r.rates != nil {
 		return r.rates[groupID], nil
 	}

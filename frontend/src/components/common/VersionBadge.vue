@@ -1,8 +1,9 @@
 <template>
-  <div class="relative">
+  <div ref="rootRef" class="relative">
     <!-- Admin: Full version badge with dropdown -->
     <template v-if="isAdmin">
       <button
+        type="button"
         @click="toggleDropdown"
         class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs transition-colors"
         :class="[
@@ -10,7 +11,10 @@
             ? 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50'
             : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-800 dark:text-dark-400 dark:hover:bg-dark-700'
         ]"
-        :title="hasUpdate ? t('version.updateAvailable') : t('version.upToDate')"
+        :title="versionTooltip"
+        aria-haspopup="true"
+        :aria-expanded="dropdownOpen"
+        aria-controls="version-details-panel"
       >
         <span v-if="currentVersion" class="font-medium">v{{ currentVersion }}</span>
         <span
@@ -30,9 +34,10 @@
       <transition name="dropdown">
         <div
           v-if="dropdownOpen"
+          id="version-details-panel"
           ref="dropdownRef"
           class="absolute left-0 z-50 mt-2 overflow-hidden whitespace-normal rounded-xl border border-gray-200 bg-white shadow-lg transition-all duration-200 dark:border-dark-700 dark:bg-dark-800"
-          :class="rollbackPanelOpen && isReleaseBuild ? 'w-80' : 'w-64'"
+          :class="rollbackPanelOpen && onlineUpdateEnabled ? 'w-80' : 'w-64'"
         >
           <!-- Header with refresh button -->
           <div
@@ -80,6 +85,9 @@
             <template v-else>
               <!-- Version display - centered and prominent -->
               <div class="mb-4 text-center">
+                <p class="mb-1 text-xs font-medium text-gray-500 dark:text-dark-400">
+                  {{ t('version.modelPortVersion') }}
+                </p>
                 <div class="inline-flex items-center gap-2">
                   <span
                     v-if="currentVersion"
@@ -110,6 +118,18 @@
                     hasUpdate
                       ? t('version.latestVersion') + ': v' + latestVersion
                       : t('version.upToDate')
+                  }}
+                </p>
+                <p
+                  v-if="upstreamVersion"
+                  data-testid="upstream-version"
+                  class="mt-2 text-xs text-gray-500 dark:text-dark-400"
+                >
+                  {{
+                    t('version.basedOnUpstream', {
+                      name: MODELPORT_BRAND.upstreamName,
+                      version: upstreamVersion
+                    })
                   }}
                 </p>
               </div>
@@ -147,6 +167,27 @@
                 >
                   {{ t('version.retry') }}
                 </button>
+              </div>
+
+              <div
+                v-else-if="updateQueued"
+                data-testid="update-queued"
+                class="flex items-center gap-3 rounded-lg border border-primary-200 bg-primary-50 p-3 dark:border-primary-800/50 dark:bg-primary-900/20"
+              >
+                <Icon
+                  name="refresh"
+                  size="sm"
+                  :stroke-width="2"
+                  class="flex-shrink-0 animate-spin text-primary-500"
+                />
+                <div class="min-w-0 flex-1">
+                  <p class="text-sm font-medium text-primary-700 dark:text-primary-300">
+                    {{ t('version.updateQueued') }}
+                  </p>
+                  <p class="text-xs text-primary-600/70 dark:text-primary-400/70">
+                    {{ t('version.containerRecreating') }}
+                  </p>
+                </div>
               </div>
 
               <!-- Priority 2: Update success - need restart -->
@@ -232,7 +273,10 @@
               </div>
 
               <!-- Priority 3: Update available for source build - show git pull hint -->
-              <div v-else-if="hasUpdate && !isReleaseBuild" class="space-y-2">
+              <div
+                v-else-if="hasUpdate && (!isReleaseBuild || !onlineUpdateEnabled)"
+                class="space-y-2"
+              >
                 <a
                   v-if="releaseInfo?.html_url && releaseInfo.html_url !== '#'"
                   :href="releaseInfo.html_url"
@@ -286,13 +330,16 @@
                     />
                   </svg>
                   <p class="text-xs text-blue-600 dark:text-blue-400">
-                    {{ t('version.sourceModeHint') }}
+                    {{ isReleaseBuild ? t('version.manualModeHint') : t('version.sourceModeHint') }}
                   </p>
                 </div>
               </div>
 
               <!-- Priority 4: Update available for release build - show update button -->
-              <div v-else-if="hasUpdate && isReleaseBuild" class="space-y-2">
+              <div
+                v-else-if="hasUpdate && isReleaseBuild && onlineUpdateEnabled"
+                class="space-y-2"
+              >
                 <!-- Update info card -->
                 <div
                   class="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20"
@@ -319,6 +366,7 @@
 
                 <!-- Update button -->
                 <button
+                  data-testid="update-now"
                   @click="handleUpdate"
                   :disabled="updating"
                   class="flex w-full items-center justify-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -377,6 +425,7 @@
                 <!-- Version rollback entry -->
                 <div class="border-t border-gray-100 pt-2 dark:border-dark-700">
                   <button
+                    data-testid="rollback-toggle"
                     @click="toggleRollbackPanel"
                     class="group flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs text-gray-400 transition-colors hover:bg-gray-50 hover:text-gray-600 dark:text-dark-500 dark:hover:bg-dark-700/50 dark:hover:text-dark-300"
                   >
@@ -395,9 +444,9 @@
 
                   <transition name="rollback">
                     <div v-if="rollbackPanelOpen" class="mt-2 space-y-2">
-                      <!-- Source build: online rollback unavailable, use git instead -->
+                      <!-- Manual/source deployments cannot use the host update queue. -->
                       <div
-                        v-if="!isReleaseBuild"
+                        v-if="!onlineUpdateEnabled"
                         class="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-2 dark:border-blue-800/50 dark:bg-blue-900/20"
                       >
                         <svg
@@ -414,7 +463,11 @@
                           />
                         </svg>
                         <p class="min-w-0 flex-1 text-xs leading-4 text-blue-600 dark:text-blue-400">
-                          {{ t('version.rollbackSourceHint') }}
+                          {{
+                            isReleaseBuild
+                              ? t('version.rollbackManualHint')
+                              : t('version.rollbackSourceHint')
+                          }}
                         </p>
                       </div>
 
@@ -476,6 +529,7 @@
                         <button
                           v-for="item in rollbackVersions"
                           :key="item.version"
+                          data-testid="rollback-version"
                           @click="selectRollbackVersion(item.version)"
                           :disabled="rollingBack"
                           class="flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left transition-all disabled:cursor-not-allowed disabled:opacity-60"
@@ -514,56 +568,9 @@
                           </span>
                         </button>
 
-                        <!-- Selected version: manual command (per deploy method) + confirm -->
+                        <!-- Selected version confirmation -->
                         <transition name="rollback">
                           <div v-if="selectedRollbackVersion" class="space-y-2">
-                            <p class="px-0.5 text-[11px] text-gray-400 dark:text-dark-500">
-                              {{ t('version.manualRollbackCommand') }}
-                            </p>
-
-                            <!-- Terminal-style block with deploy-method tabs -->
-                            <div
-                              class="overflow-hidden rounded-lg border border-gray-200 dark:border-dark-600"
-                            >
-                              <div
-                                class="flex items-center justify-between border-b border-gray-200 bg-gray-100 px-2 py-1.5 dark:border-dark-600 dark:bg-dark-700"
-                              >
-                                <div
-                                  class="flex items-center gap-0.5 rounded-md bg-gray-200/70 p-0.5 dark:bg-dark-600/70"
-                                >
-                                  <button
-                                    v-for="tab in manualTabs"
-                                    :key="tab.key"
-                                    @click="manualTab = tab.key"
-                                    class="rounded px-2 py-0.5 text-[11px] font-medium transition-colors"
-                                    :class="
-                                      manualTab === tab.key
-                                        ? 'bg-white text-gray-700 shadow-sm dark:bg-dark-800 dark:text-dark-100'
-                                        : 'text-gray-400 hover:text-gray-600 dark:text-dark-400 dark:hover:text-dark-200'
-                                    "
-                                  >
-                                    {{ tab.label }}
-                                  </button>
-                                </div>
-                                <button
-                                  @click="copyToClipboard(activeManualCommand)"
-                                  class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:text-dark-400 dark:hover:bg-dark-600 dark:hover:text-dark-200"
-                                >
-                                  <Icon
-                                    :name="copied ? 'check' : 'copy'"
-                                    size="xs"
-                                    :stroke-width="2"
-                                    :class="copied ? 'text-green-500' : ''"
-                                  />
-                                  {{ copied ? t('version.copied') : t('version.copyCommand') }}
-                                </button>
-                              </div>
-                              <code
-                                class="block select-all whitespace-pre-wrap break-all bg-gray-50 p-2.5 font-mono text-[10px] leading-relaxed text-gray-600 dark:bg-dark-900 dark:text-dark-300"
-                                >{{ activeManualCommand }}</code
-                              >
-                            </div>
-
                             <p
                               class="flex items-start gap-1.5 px-0.5 text-[11px] leading-4 text-amber-600 dark:text-amber-400"
                             >
@@ -573,7 +580,11 @@
                                 :stroke-width="2"
                                 class="mt-px flex-shrink-0"
                               />
-                              {{ t('version.rollbackWarning') }}
+                              {{
+                                updateMode === 'docker'
+                                  ? t('version.rollbackDockerWarning')
+                                  : t('version.rollbackWarning')
+                              }}
                             </p>
 
                             <p
@@ -584,6 +595,7 @@
                             </p>
 
                             <button
+                              data-testid="rollback-confirm"
                               @click="handleRollback"
                               :disabled="rollingBack"
                               class="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
@@ -631,7 +643,11 @@
     </template>
 
     <!-- Non-admin: Simple static version text -->
-    <span v-else-if="version" class="text-xs text-gray-500 dark:text-dark-400">
+    <span
+      v-else-if="version"
+      class="text-xs text-gray-500 dark:text-dark-400"
+      :title="versionTooltip"
+    >
       v{{ version }}
     </span>
   </div>
@@ -643,22 +659,20 @@ import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
   performUpdate,
+  getVersion,
   restartService,
   getRollbackVersions,
   rollback as rollbackAPI,
   type RollbackVersionInfo
 } from '@/api/admin/system'
-import { useClipboard } from '@/composables/useClipboard'
 import Icon from '@/components/icons/Icon.vue'
-
-const GITHUB_REPO = 'Wei-Shaw/sub2api'
-// Docker Hub image published by CI (tags carry no "v" prefix, e.g. weishaw/sub2api:0.1.146)
-const DOCKER_IMAGE = 'weishaw/sub2api'
+import { MODELPORT_BRAND } from '@/utils/branding'
 
 const { t } = useI18n()
 
 const props = defineProps<{
   version?: string
+  upstreamVersion?: string
 }>()
 
 const authStore = useAuthStore()
@@ -667,7 +681,11 @@ const appStore = useAppStore()
 const isAdmin = computed(() => authStore.isAdmin)
 
 const dropdownOpen = ref(false)
+const rootRef = ref<HTMLElement | null>(null)
 const dropdownRef = ref<HTMLElement | null>(null)
+let updatePollGeneration = 0
+let restartCountdownTimer: ReturnType<typeof setInterval> | null = null
+let unmounted = false
 
 // Use store's cached version state
 const loading = computed(() => appStore.versionLoading)
@@ -676,6 +694,21 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const updateMode = computed(() => appStore.updateMode)
+const onlineUpdateEnabled = computed(
+  () => updateMode.value === 'docker' || updateMode.value === 'binary'
+)
+const upstreamVersion = computed(() => props.upstreamVersion?.trim() || '')
+const versionTooltip = computed(() => {
+  const status = hasUpdate.value ? t('version.updateAvailable') : t('version.upToDate')
+  const product = currentVersion.value
+    ? `${MODELPORT_BRAND.siteName} v${currentVersion.value}`
+    : MODELPORT_BRAND.siteName
+  const upstream = upstreamVersion.value
+    ? `${MODELPORT_BRAND.upstreamName} v${upstreamVersion.value}`
+    : ''
+  return [status, product, upstream].filter(Boolean).join(' · ')
+})
 
 // Update process states (local to this component)
 const updating = ref(false)
@@ -683,6 +716,7 @@ const restarting = ref(false)
 const needRestart = ref(false)
 const updateError = ref('')
 const updateSuccess = ref(false)
+const updateQueued = ref(false)
 const restartCountdown = ref(0)
 // Distinguishes the success + restart panel between update and rollback flows
 const successKind = ref<'update' | 'rollback'>('update')
@@ -695,38 +729,6 @@ const rollbackVersionsError = ref('')
 const selectedRollbackVersion = ref('')
 const rollingBack = ref(false)
 const rollbackError = ref('')
-
-const { copied, copyToClipboard } = useClipboard()
-
-// Manual rollback methods differ by deployment: script installs use install.sh,
-// docker deployments pin the image tag instead
-const manualTab = ref<'script' | 'docker'>('script')
-
-const manualTabs = computed(() => [
-  { key: 'script' as const, label: t('version.deployScript') },
-  { key: 'docker' as const, label: t('version.deployDocker') }
-])
-
-const scriptRollbackCommand = computed(() => {
-  if (!selectedRollbackVersion.value) return ''
-  const tag = `v${selectedRollbackVersion.value}`
-  return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
-})
-
-const dockerRollbackCommand = computed(() => {
-  if (!selectedRollbackVersion.value) return ''
-  return [
-    `# ${t('version.dockerEditCompose')}`,
-    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value}`,
-    '',
-    `# ${t('version.dockerRecreate')}`,
-    'docker compose up -d'
-  ].join('\n')
-})
-
-const activeManualCommand = computed(() =>
-  manualTab.value === 'docker' ? dockerRollbackCommand.value : scriptRollbackCommand.value
-)
 
 // Only show update check for release builds (binary/docker deployment)
 const isReleaseBuild = computed(() => buildType.value === 'release')
@@ -745,6 +747,7 @@ async function refreshVersion(force = true) {
   // Reset update states when refreshing
   updateError.value = ''
   updateSuccess.value = false
+  updateQueued.value = false
   needRestart.value = false
   resetRollbackState()
 
@@ -757,14 +760,20 @@ async function handleUpdate() {
   updating.value = true
   updateError.value = ''
   updateSuccess.value = false
+  updateQueued.value = false
 
   try {
+    const targetVersion = latestVersion.value
     const result = await performUpdate()
     successKind.value = 'update'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    updateQueued.value = result.update_queued === true
     // Clear version cache to reflect update completed
     appStore.clearVersionCache()
+    if (updateQueued.value) {
+      void waitForContainerUpdate(targetVersion)
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     updateError.value = err.response?.data?.message || err.message || t('version.updateFailed')
@@ -779,16 +788,15 @@ function resetRollbackState() {
   rollbackVersionsError.value = ''
   selectedRollbackVersion.value = ''
   rollbackError.value = ''
-  manualTab.value = 'script'
 }
 
 async function toggleRollbackPanel() {
   if (!isAdmin.value) return
   rollbackPanelOpen.value = !rollbackPanelOpen.value
-  // Source builds only show a hint, no version list to fetch
+  // Manual/source builds only show a hint, with no actionable version list.
   if (
     rollbackPanelOpen.value &&
-    isReleaseBuild.value &&
+    onlineUpdateEnabled.value &&
     rollbackVersions.value.length === 0 &&
     !rollbackVersionsLoading.value
   ) {
@@ -833,19 +841,44 @@ async function handleRollback() {
   rollbackError.value = ''
 
   try {
+    const targetVersion = selectedRollbackVersion.value
     const result = await rollbackAPI(selectedRollbackVersion.value)
     successKind.value = 'rollback'
     updateSuccess.value = true
     needRestart.value = result.need_restart
+    updateQueued.value = result.update_queued === true
     rollbackPanelOpen.value = false
     // Clear version cache so the next check reflects the rolled-back version
     appStore.clearVersionCache()
+    if (updateQueued.value) {
+      void waitForContainerUpdate(targetVersion)
+    }
   } catch (error: unknown) {
     const err = error as { response?: { data?: { message?: string } }; message?: string }
     rollbackError.value = err.response?.data?.message || err.message || t('version.rollbackFailed')
   } finally {
     rollingBack.value = false
   }
+}
+
+async function waitForContainerUpdate(targetVersion: string) {
+  const generation = ++updatePollGeneration
+  await new Promise((resolve) => setTimeout(resolve, 2000))
+  for (let attempt = 0; attempt < 150; attempt++) {
+    if (unmounted || generation !== updatePollGeneration) return
+    try {
+      const current = await getVersion()
+      if (unmounted || generation !== updatePollGeneration) return
+      if (current.version === targetVersion) {
+        window.location.reload()
+        return
+      }
+    } catch {
+      // The API is briefly unavailable while the host recreates the container.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+  }
+  if (!unmounted && generation === updatePollGeneration) window.location.reload()
 }
 
 async function handleRestart() {
@@ -863,10 +896,12 @@ async function handleRestart() {
   }
 
   // Start countdown
-  const countdownInterval = setInterval(() => {
+  if (restartCountdownTimer) clearInterval(restartCountdownTimer)
+  restartCountdownTimer = setInterval(() => {
     restartCountdown.value--
     if (restartCountdown.value <= 0) {
-      clearInterval(countdownInterval)
+      if (restartCountdownTimer) clearInterval(restartCountdownTimer)
+      restartCountdownTimer = null
       // Try to check if service is back before reload
       checkServiceAndReload()
     }
@@ -903,8 +938,7 @@ async function checkServiceAndReload() {
 
 function handleClickOutside(event: MouseEvent) {
   const target = event.target as Node
-  const button = (event.target as Element).closest('button')
-  if (dropdownRef.value && !dropdownRef.value.contains(target) && !button?.contains(target)) {
+  if (dropdownOpen.value && rootRef.value && !rootRef.value.contains(target)) {
     closeDropdown()
   }
 }
@@ -918,6 +952,9 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  unmounted = true
+  updatePollGeneration++
+  if (restartCountdownTimer) clearInterval(restartCountdownTimer)
   document.removeEventListener('click', handleClickOutside)
 })
 </script>

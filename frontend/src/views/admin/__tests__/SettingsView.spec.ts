@@ -34,6 +34,9 @@ const {
   deleteProvider,
   fetchPublicSettings,
   adminSettingsFetch,
+  instructionConfig,
+  getInstructionConfig,
+  updateInstructionConfig,
   showError,
   showSuccess,
 } = vi.hoisted(() => ({
@@ -75,6 +78,38 @@ const {
   deleteProvider: vi.fn(),
   fetchPublicSettings: vi.fn(),
   adminSettingsFetch: vi.fn(),
+  instructionConfig: {
+    mode: "off",
+    effective_mode: "off",
+    risk_control_enabled: true,
+    review_criteria: "hash_mismatch",
+    confidence_threshold: 0.9,
+    ai_input_max_chars: 8000,
+    ai_global_concurrency: 4,
+    ai_queue_wait_ms: 500,
+    ai_total_timeout_ms: 5000,
+    ai_cache_ttl_seconds: 300,
+    event_retention_days: 30,
+    evidence_retention_days: 7,
+    raw_full_max_bytes: 65536,
+    allow_empty_fields: false,
+    async_retry_schedule_seconds: [10, 60, 300],
+    config_version: 4,
+    updated_at: "2026-08-29T00:00:00Z",
+    gateway_http_max_body_bytes: 1048576,
+    gateway_ws_max_body_bytes: 1048576,
+    evidence_encryption_ready: true,
+    active_scope_count: 2,
+    active_hash_count: 3,
+    enabled_ai_node_count: 1,
+    async_queue_depth: 0,
+    async_queue_capacity: 100,
+    pending_review_job_count: 0,
+    active_risk_hash_count: 0,
+    last_config_load_error: "",
+  },
+  getInstructionConfig: vi.fn(),
+  updateInstructionConfig: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }));
@@ -143,7 +178,27 @@ vi.mock("@/composables/useClipboard", () => ({
 
 vi.mock("@/utils/apiError", () => ({
   extractApiErrorMessage: () => "error",
+  extractI18nErrorMessage: () => "error",
 }));
+
+vi.mock("@/features/instruction-audit/v2Api", () => ({
+  default: {
+    getConfig: getInstructionConfig,
+    updateConfig: updateInstructionConfig,
+  },
+}));
+
+beforeEach(() => {
+  getInstructionConfig.mockReset();
+  updateInstructionConfig.mockReset();
+  getInstructionConfig.mockResolvedValue({ ...instructionConfig });
+  updateInstructionConfig.mockImplementation(async (payload) => ({
+    ...instructionConfig,
+    ...payload,
+    effective_mode: payload.mode,
+    config_version: instructionConfig.config_version + 1,
+  }));
+});
 
 vi.mock("vue-i18n", async () => {
   const actual = await vi.importActual<typeof import("vue-i18n")>("vue-i18n");
@@ -603,6 +658,16 @@ async function openUsersTab(wrapper: ReturnType<typeof mountView>) {
   await flushPromises();
 }
 
+async function openFeaturesTab(wrapper: ReturnType<typeof mountView>) {
+  const featuresTabButton = wrapper
+    .findAll("button")
+    .find((node) => node.text().includes("admin.settings.tabs.features"));
+
+  expect(featuresTabButton).toBeDefined();
+  await featuresTabButton?.trigger("click");
+  await flushPromises();
+}
+
 describe("admin SettingsView email domain quota copy", () => {
   it("documents the email domain quota and empty-whitelist behavior in both locales", () => {
     expect(zhCommon.auth.emailDomainRegistrationLimit).toContain("主流邮箱");
@@ -733,6 +798,37 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({ compact_home_enabled: true }),
     );
+  });
+
+  it("enables Instruction Audit V2 without resetting the existing audit config", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openFeaturesTab(wrapper);
+
+    const toggle = wrapper.get<HTMLInputElement>(
+      'input[aria-label="admin.settings.instructionAudit.enabled"]',
+    );
+    expect(toggle.element.checked).toBe(false);
+    await toggle.setValue(true);
+    await flushPromises();
+
+    expect(updateInstructionConfig).toHaveBeenCalledWith({
+      expected_config_version: instructionConfig.config_version,
+      mode: "enforce",
+      review_criteria: instructionConfig.review_criteria,
+      confidence_threshold: instructionConfig.confidence_threshold,
+      ai_input_max_chars: instructionConfig.ai_input_max_chars,
+      ai_global_concurrency: instructionConfig.ai_global_concurrency,
+      ai_queue_wait_ms: instructionConfig.ai_queue_wait_ms,
+      ai_total_timeout_ms: instructionConfig.ai_total_timeout_ms,
+      ai_cache_ttl_seconds: instructionConfig.ai_cache_ttl_seconds,
+      event_retention_days: instructionConfig.event_retention_days,
+      evidence_retention_days: instructionConfig.evidence_retention_days,
+      raw_full_max_bytes: instructionConfig.raw_full_max_bytes,
+      allow_empty_fields: instructionConfig.allow_empty_fields,
+      async_retry_schedule_seconds: instructionConfig.async_retry_schedule_seconds,
+    });
+    expect(showSuccess).toHaveBeenCalledWith("common.saved");
   });
 
   it("renders panel rate limit card and saves settings", async () => {

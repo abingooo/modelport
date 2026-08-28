@@ -512,6 +512,7 @@ create_app_container() {
         --label "${STACK_LABEL_KEY}=${STACK_LABEL_VALUE}" \
         --network "${NETWORK_NAME}" \
         --platform "${PLATFORM}" \
+        --user 0:0 \
         --ulimit nofile=100000:100000 \
         --publish "${BIND_HOST}:${HOST_PORT}:8080/tcp" \
         --env-file "${APP_ENV_FILE}" \

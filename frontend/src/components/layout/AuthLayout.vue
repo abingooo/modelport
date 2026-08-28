@@ -1,28 +1,9 @@
 <template>
-  <div class="relative flex min-h-screen items-center justify-center overflow-hidden p-4">
-    <!-- Background -->
+  <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-gray-50 p-4 dark:bg-dark-950">
+    <div class="pointer-events-none absolute inset-x-0 top-0 h-1 bg-primary-600 dark:bg-primary-500"></div>
     <div
-      class="absolute inset-0 bg-gradient-to-br from-gray-50 via-primary-50/30 to-gray-100 dark:from-dark-950 dark:via-dark-900 dark:to-dark-950"
+      class="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(13,110,242,0.035)_1px,transparent_1px),linear-gradient(90deg,rgba(13,110,242,0.035)_1px,transparent_1px)] bg-[size:64px_64px] dark:opacity-40"
     ></div>
-
-    <!-- Decorative Elements -->
-    <div class="pointer-events-none absolute inset-0 overflow-hidden">
-      <!-- Gradient Orbs -->
-      <div
-        class="absolute -right-40 -top-40 h-80 w-80 rounded-full bg-primary-400/20 blur-3xl"
-      ></div>
-      <div
-        class="absolute -bottom-40 -left-40 h-80 w-80 rounded-full bg-primary-500/15 blur-3xl"
-      ></div>
-      <div
-        class="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary-300/10 blur-3xl"
-      ></div>
-
-      <!-- Grid Pattern -->
-      <div
-        class="absolute inset-0 bg-[linear-gradient(rgba(20,184,166,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(20,184,166,0.03)_1px,transparent_1px)] bg-[size:64px_64px]"
-      ></div>
-    </div>
 
     <!-- Content Container -->
     <div class="relative z-10 w-full max-w-md">
@@ -31,11 +12,22 @@
         <!-- Custom Logo or Default Logo -->
         <template v-if="settingsLoaded">
           <div
-            class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl shadow-lg shadow-primary-500/30"
+            class="mb-4 inline-flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg shadow-sm"
           >
-            <img :src="siteLogo || '/logo.svg'" alt="Logo" class="h-full w-full object-contain" />
+            <BrandLogo
+              :site-name="siteName"
+              :site-logo="siteLogo"
+              image-class="h-full w-full object-contain"
+            />
           </div>
-          <h1 class="text-gradient mb-2 text-3xl font-bold">
+          <BrandLogo
+            v-if="isModelPortBrand"
+            variant="wordmark"
+            :site-name="siteName"
+            :site-logo="siteLogo"
+            image-class="mx-auto mb-3 h-10 w-auto max-w-[260px] object-contain"
+          />
+          <h1 v-else class="mb-2 [overflow-wrap:anywhere] text-3xl font-bold text-gray-900 dark:text-white">
             {{ siteName }}
           </h1>
           <p class="text-sm text-gray-500 dark:text-dark-400">
@@ -45,7 +37,7 @@
       </div>
 
       <!-- Card Container -->
-      <div class="card-glass rounded-2xl p-8 shadow-glass">
+      <div class="card-glass rounded-lg p-6 shadow-glass sm:p-8">
         <slot />
       </div>
 
@@ -65,12 +57,15 @@
 <script setup lang="ts">
 import { computed, onMounted } from 'vue'
 import { useAppStore } from '@/stores'
+import BrandLogo from '@/components/common/BrandLogo.vue'
+import { DEFAULT_SITE_NAME, usesModelPortBrand } from '@/utils/branding'
 import { sanitizeUrl } from '@/utils/url'
 
 const appStore = useAppStore()
 
-const siteName = computed(() => appStore.siteName || 'Sub2API')
+const siteName = computed(() => appStore.siteName || DEFAULT_SITE_NAME)
 const siteLogo = computed(() => sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }))
+const isModelPortBrand = computed(() => usesModelPortBrand(siteName.value, siteLogo.value))
 const siteSubtitle = computed(() => appStore.cachedPublicSettings?.site_subtitle || 'Subscription to API Conversion Platform')
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 
@@ -80,9 +75,3 @@ onMounted(() => {
   appStore.fetchPublicSettings()
 })
 </script>
-
-<style scoped>
-.text-gradient {
-  @apply bg-gradient-to-r from-primary-600 to-primary-500 bg-clip-text text-transparent;
-}
-</style>

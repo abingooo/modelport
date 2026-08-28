@@ -76,6 +76,33 @@ func (_u *BatchImageJobUpdate) ClearAPIKeyID() *BatchImageJobUpdate {
 	return _u
 }
 
+// SetGroupID sets the "group_id" field.
+func (_u *BatchImageJobUpdate) SetGroupID(v int64) *BatchImageJobUpdate {
+	_u.mutation.ResetGroupID()
+	_u.mutation.SetGroupID(v)
+	return _u
+}
+
+// SetNillableGroupID sets the "group_id" field if the given value is not nil.
+func (_u *BatchImageJobUpdate) SetNillableGroupID(v *int64) *BatchImageJobUpdate {
+	if v != nil {
+		_u.SetGroupID(*v)
+	}
+	return _u
+}
+
+// AddGroupID adds value to the "group_id" field.
+func (_u *BatchImageJobUpdate) AddGroupID(v int64) *BatchImageJobUpdate {
+	_u.mutation.AddGroupID(v)
+	return _u
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (_u *BatchImageJobUpdate) ClearGroupID() *BatchImageJobUpdate {
+	_u.mutation.ClearGroupID()
+	return _u
+}
+
 // SetAccountID sets the "account_id" field.
 func (_u *BatchImageJobUpdate) SetAccountID(v int64) *BatchImageJobUpdate {
 	_u.mutation.ResetAccountID()
@@ -415,6 +442,20 @@ func (_u *BatchImageJobUpdate) AddActualCost(v float64) *BatchImageJobUpdate {
 // ClearActualCost clears the value of the "actual_cost" field.
 func (_u *BatchImageJobUpdate) ClearActualCost() *BatchImageJobUpdate {
 	_u.mutation.ClearActualCost()
+	return _u
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (_u *BatchImageJobUpdate) SetIsFreeBilling(v bool) *BatchImageJobUpdate {
+	_u.mutation.SetIsFreeBilling(v)
+	return _u
+}
+
+// SetNillableIsFreeBilling sets the "is_free_billing" field if the given value is not nil.
+func (_u *BatchImageJobUpdate) SetNillableIsFreeBilling(v *bool) *BatchImageJobUpdate {
+	if v != nil {
+		_u.SetIsFreeBilling(*v)
+	}
 	return _u
 }
 
@@ -928,6 +969,15 @@ func (_u *BatchImageJobUpdate) sqlSave(ctx context.Context) (_node int, err erro
 	if _u.mutation.APIKeyIDCleared() {
 		_spec.ClearField(batchimagejob.FieldAPIKeyID, field.TypeInt64)
 	}
+	if value, ok := _u.mutation.GroupID(); ok {
+		_spec.SetField(batchimagejob.FieldGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedGroupID(); ok {
+		_spec.AddField(batchimagejob.FieldGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.GroupIDCleared() {
+		_spec.ClearField(batchimagejob.FieldGroupID, field.TypeInt64)
+	}
 	if value, ok := _u.mutation.AccountID(); ok {
 		_spec.SetField(batchimagejob.FieldAccountID, field.TypeInt64, value)
 	}
@@ -1026,6 +1076,9 @@ func (_u *BatchImageJobUpdate) sqlSave(ctx context.Context) (_node int, err erro
 	}
 	if _u.mutation.ActualCostCleared() {
 		_spec.ClearField(batchimagejob.FieldActualCost, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.IsFreeBilling(); ok {
+		_spec.SetField(batchimagejob.FieldIsFreeBilling, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Currency(); ok {
 		_spec.SetField(batchimagejob.FieldCurrency, field.TypeString, value)
@@ -1200,6 +1253,33 @@ func (_u *BatchImageJobUpdateOne) AddAPIKeyID(v int64) *BatchImageJobUpdateOne {
 // ClearAPIKeyID clears the value of the "api_key_id" field.
 func (_u *BatchImageJobUpdateOne) ClearAPIKeyID() *BatchImageJobUpdateOne {
 	_u.mutation.ClearAPIKeyID()
+	return _u
+}
+
+// SetGroupID sets the "group_id" field.
+func (_u *BatchImageJobUpdateOne) SetGroupID(v int64) *BatchImageJobUpdateOne {
+	_u.mutation.ResetGroupID()
+	_u.mutation.SetGroupID(v)
+	return _u
+}
+
+// SetNillableGroupID sets the "group_id" field if the given value is not nil.
+func (_u *BatchImageJobUpdateOne) SetNillableGroupID(v *int64) *BatchImageJobUpdateOne {
+	if v != nil {
+		_u.SetGroupID(*v)
+	}
+	return _u
+}
+
+// AddGroupID adds value to the "group_id" field.
+func (_u *BatchImageJobUpdateOne) AddGroupID(v int64) *BatchImageJobUpdateOne {
+	_u.mutation.AddGroupID(v)
+	return _u
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (_u *BatchImageJobUpdateOne) ClearGroupID() *BatchImageJobUpdateOne {
+	_u.mutation.ClearGroupID()
 	return _u
 }
 
@@ -1542,6 +1622,20 @@ func (_u *BatchImageJobUpdateOne) AddActualCost(v float64) *BatchImageJobUpdateO
 // ClearActualCost clears the value of the "actual_cost" field.
 func (_u *BatchImageJobUpdateOne) ClearActualCost() *BatchImageJobUpdateOne {
 	_u.mutation.ClearActualCost()
+	return _u
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (_u *BatchImageJobUpdateOne) SetIsFreeBilling(v bool) *BatchImageJobUpdateOne {
+	_u.mutation.SetIsFreeBilling(v)
+	return _u
+}
+
+// SetNillableIsFreeBilling sets the "is_free_billing" field if the given value is not nil.
+func (_u *BatchImageJobUpdateOne) SetNillableIsFreeBilling(v *bool) *BatchImageJobUpdateOne {
+	if v != nil {
+		_u.SetIsFreeBilling(*v)
+	}
 	return _u
 }
 
@@ -2085,6 +2179,15 @@ func (_u *BatchImageJobUpdateOne) sqlSave(ctx context.Context) (_node *BatchImag
 	if _u.mutation.APIKeyIDCleared() {
 		_spec.ClearField(batchimagejob.FieldAPIKeyID, field.TypeInt64)
 	}
+	if value, ok := _u.mutation.GroupID(); ok {
+		_spec.SetField(batchimagejob.FieldGroupID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedGroupID(); ok {
+		_spec.AddField(batchimagejob.FieldGroupID, field.TypeInt64, value)
+	}
+	if _u.mutation.GroupIDCleared() {
+		_spec.ClearField(batchimagejob.FieldGroupID, field.TypeInt64)
+	}
 	if value, ok := _u.mutation.AccountID(); ok {
 		_spec.SetField(batchimagejob.FieldAccountID, field.TypeInt64, value)
 	}
@@ -2183,6 +2286,9 @@ func (_u *BatchImageJobUpdateOne) sqlSave(ctx context.Context) (_node *BatchImag
 	}
 	if _u.mutation.ActualCostCleared() {
 		_spec.ClearField(batchimagejob.FieldActualCost, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.IsFreeBilling(); ok {
+		_spec.SetField(batchimagejob.FieldIsFreeBilling, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.Currency(); ok {
 		_spec.SetField(batchimagejob.FieldCurrency, field.TypeString, value)

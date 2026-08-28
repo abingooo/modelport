@@ -21,6 +21,7 @@ type Group struct {
 	Description    string
 	Platform       string
 	RateMultiplier float64
+	IsFree         bool
 	// 高峰时段倍率：peak_rate_enabled 为 true 且当前时刻处于 [PeakStart, PeakEnd) 时，
 	// token 计费倍率额外乘以 PeakRateMultiplier。详见 PeakMultiplierAt。
 	PeakRateEnabled    bool
@@ -139,6 +140,12 @@ func (g *Group) IsActive() bool {
 
 func (g *Group) IsSubscriptionType() bool {
 	return g.SubscriptionType == SubscriptionTypeSubscription
+}
+
+// IsFreeBilling reports the explicit admin-configured billing mode. A zero
+// price or multiplier alone never makes a group free.
+func (g *Group) IsFreeBilling() bool {
+	return g != nil && g.IsFree
 }
 
 func (g *Group) HasDailyLimit() bool {
@@ -377,6 +384,9 @@ func NormalizePeakRateConfig(subscriptionType string, enabled bool, start, end s
 // gateway_service.recordUsageCore 与 openai_gateway_service.RecordUsage 共用此函数，
 // 锁死"高峰因子只乘入 token 倍率、图片按次倍率不受影响"这一叠加顺序——任何调换都会被 group_peak_rate_test 覆盖。
 func computePeakAwareMultipliers(apiKey *APIKey, base float64, now time.Time) (text, image float64) {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.IsFreeBilling() {
+		return 0, 0
+	}
 	image = resolveImageRateMultiplier(apiKey, base)
 	peak := 1.0
 	if apiKey != nil && apiKey.Group != nil {

@@ -48,6 +48,20 @@ func (_c *BatchImageJobCreate) SetNillableAPIKeyID(v *int64) *BatchImageJobCreat
 	return _c
 }
 
+// SetGroupID sets the "group_id" field.
+func (_c *BatchImageJobCreate) SetGroupID(v int64) *BatchImageJobCreate {
+	_c.mutation.SetGroupID(v)
+	return _c
+}
+
+// SetNillableGroupID sets the "group_id" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableGroupID(v *int64) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetGroupID(*v)
+	}
+	return _c
+}
+
 // SetAccountID sets the "account_id" field.
 func (_c *BatchImageJobCreate) SetAccountID(v int64) *BatchImageJobCreate {
 	_c.mutation.SetAccountID(v)
@@ -258,6 +272,20 @@ func (_c *BatchImageJobCreate) SetActualCost(v float64) *BatchImageJobCreate {
 func (_c *BatchImageJobCreate) SetNillableActualCost(v *float64) *BatchImageJobCreate {
 	if v != nil {
 		_c.SetActualCost(*v)
+	}
+	return _c
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (_c *BatchImageJobCreate) SetIsFreeBilling(v bool) *BatchImageJobCreate {
+	_c.mutation.SetIsFreeBilling(v)
+	return _c
+}
+
+// SetNillableIsFreeBilling sets the "is_free_billing" field if the given value is not nil.
+func (_c *BatchImageJobCreate) SetNillableIsFreeBilling(v *bool) *BatchImageJobCreate {
+	if v != nil {
+		_c.SetIsFreeBilling(*v)
 	}
 	return _c
 }
@@ -601,6 +629,10 @@ func (_c *BatchImageJobCreate) defaults() {
 		v := batchimagejob.DefaultEstimatedCost
 		_c.mutation.SetEstimatedCost(v)
 	}
+	if _, ok := _c.mutation.IsFreeBilling(); !ok {
+		v := batchimagejob.DefaultIsFreeBilling
+		_c.mutation.SetIsFreeBilling(v)
+	}
 	if _, ok := _c.mutation.Currency(); !ok {
 		v := batchimagejob.DefaultCurrency
 		_c.mutation.SetCurrency(v)
@@ -708,6 +740,9 @@ func (_c *BatchImageJobCreate) check() error {
 	if _, ok := _c.mutation.EstimatedCost(); !ok {
 		return &ValidationError{Name: "estimated_cost", err: errors.New(`ent: missing required field "BatchImageJob.estimated_cost"`)}
 	}
+	if _, ok := _c.mutation.IsFreeBilling(); !ok {
+		return &ValidationError{Name: "is_free_billing", err: errors.New(`ent: missing required field "BatchImageJob.is_free_billing"`)}
+	}
 	if _, ok := _c.mutation.Currency(); !ok {
 		return &ValidationError{Name: "currency", err: errors.New(`ent: missing required field "BatchImageJob.currency"`)}
 	}
@@ -792,6 +827,10 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 		_spec.SetField(batchimagejob.FieldAPIKeyID, field.TypeInt64, value)
 		_node.APIKeyID = &value
 	}
+	if value, ok := _c.mutation.GroupID(); ok {
+		_spec.SetField(batchimagejob.FieldGroupID, field.TypeInt64, value)
+		_node.GroupID = &value
+	}
 	if value, ok := _c.mutation.AccountID(); ok {
 		_spec.SetField(batchimagejob.FieldAccountID, field.TypeInt64, value)
 		_node.AccountID = &value
@@ -859,6 +898,10 @@ func (_c *BatchImageJobCreate) createSpec() (*BatchImageJob, *sqlgraph.CreateSpe
 	if value, ok := _c.mutation.ActualCost(); ok {
 		_spec.SetField(batchimagejob.FieldActualCost, field.TypeFloat64, value)
 		_node.ActualCost = &value
+	}
+	if value, ok := _c.mutation.IsFreeBilling(); ok {
+		_spec.SetField(batchimagejob.FieldIsFreeBilling, field.TypeBool, value)
+		_node.IsFreeBilling = value
 	}
 	if value, ok := _c.mutation.Currency(); ok {
 		_spec.SetField(batchimagejob.FieldCurrency, field.TypeString, value)
@@ -1031,6 +1074,30 @@ func (u *BatchImageJobUpsert) AddAPIKeyID(v int64) *BatchImageJobUpsert {
 // ClearAPIKeyID clears the value of the "api_key_id" field.
 func (u *BatchImageJobUpsert) ClearAPIKeyID() *BatchImageJobUpsert {
 	u.SetNull(batchimagejob.FieldAPIKeyID)
+	return u
+}
+
+// SetGroupID sets the "group_id" field.
+func (u *BatchImageJobUpsert) SetGroupID(v int64) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldGroupID, v)
+	return u
+}
+
+// UpdateGroupID sets the "group_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateGroupID() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldGroupID)
+	return u
+}
+
+// AddGroupID adds v to the "group_id" field.
+func (u *BatchImageJobUpsert) AddGroupID(v int64) *BatchImageJobUpsert {
+	u.Add(batchimagejob.FieldGroupID, v)
+	return u
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (u *BatchImageJobUpsert) ClearGroupID() *BatchImageJobUpsert {
+	u.SetNull(batchimagejob.FieldGroupID)
 	return u
 }
 
@@ -1331,6 +1398,18 @@ func (u *BatchImageJobUpsert) AddActualCost(v float64) *BatchImageJobUpsert {
 // ClearActualCost clears the value of the "actual_cost" field.
 func (u *BatchImageJobUpsert) ClearActualCost() *BatchImageJobUpsert {
 	u.SetNull(batchimagejob.FieldActualCost)
+	return u
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (u *BatchImageJobUpsert) SetIsFreeBilling(v bool) *BatchImageJobUpsert {
+	u.Set(batchimagejob.FieldIsFreeBilling, v)
+	return u
+}
+
+// UpdateIsFreeBilling sets the "is_free_billing" field to the value that was provided on create.
+func (u *BatchImageJobUpsert) UpdateIsFreeBilling() *BatchImageJobUpsert {
+	u.SetExcluded(batchimagejob.FieldIsFreeBilling)
 	return u
 }
 
@@ -1761,6 +1840,34 @@ func (u *BatchImageJobUpsertOne) ClearAPIKeyID() *BatchImageJobUpsertOne {
 	})
 }
 
+// SetGroupID sets the "group_id" field.
+func (u *BatchImageJobUpsertOne) SetGroupID(v int64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetGroupID(v)
+	})
+}
+
+// AddGroupID adds v to the "group_id" field.
+func (u *BatchImageJobUpsertOne) AddGroupID(v int64) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddGroupID(v)
+	})
+}
+
+// UpdateGroupID sets the "group_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateGroupID() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateGroupID()
+	})
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (u *BatchImageJobUpsertOne) ClearGroupID() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearGroupID()
+	})
+}
+
 // SetAccountID sets the "account_id" field.
 func (u *BatchImageJobUpsertOne) SetAccountID(v int64) *BatchImageJobUpsertOne {
 	return u.Update(func(s *BatchImageJobUpsert) {
@@ -2108,6 +2215,20 @@ func (u *BatchImageJobUpsertOne) UpdateActualCost() *BatchImageJobUpsertOne {
 func (u *BatchImageJobUpsertOne) ClearActualCost() *BatchImageJobUpsertOne {
 	return u.Update(func(s *BatchImageJobUpsert) {
 		s.ClearActualCost()
+	})
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (u *BatchImageJobUpsertOne) SetIsFreeBilling(v bool) *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetIsFreeBilling(v)
+	})
+}
+
+// UpdateIsFreeBilling sets the "is_free_billing" field to the value that was provided on create.
+func (u *BatchImageJobUpsertOne) UpdateIsFreeBilling() *BatchImageJobUpsertOne {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateIsFreeBilling()
 	})
 }
 
@@ -2759,6 +2880,34 @@ func (u *BatchImageJobUpsertBulk) ClearAPIKeyID() *BatchImageJobUpsertBulk {
 	})
 }
 
+// SetGroupID sets the "group_id" field.
+func (u *BatchImageJobUpsertBulk) SetGroupID(v int64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetGroupID(v)
+	})
+}
+
+// AddGroupID adds v to the "group_id" field.
+func (u *BatchImageJobUpsertBulk) AddGroupID(v int64) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.AddGroupID(v)
+	})
+}
+
+// UpdateGroupID sets the "group_id" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateGroupID() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateGroupID()
+	})
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (u *BatchImageJobUpsertBulk) ClearGroupID() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.ClearGroupID()
+	})
+}
+
 // SetAccountID sets the "account_id" field.
 func (u *BatchImageJobUpsertBulk) SetAccountID(v int64) *BatchImageJobUpsertBulk {
 	return u.Update(func(s *BatchImageJobUpsert) {
@@ -3106,6 +3255,20 @@ func (u *BatchImageJobUpsertBulk) UpdateActualCost() *BatchImageJobUpsertBulk {
 func (u *BatchImageJobUpsertBulk) ClearActualCost() *BatchImageJobUpsertBulk {
 	return u.Update(func(s *BatchImageJobUpsert) {
 		s.ClearActualCost()
+	})
+}
+
+// SetIsFreeBilling sets the "is_free_billing" field.
+func (u *BatchImageJobUpsertBulk) SetIsFreeBilling(v bool) *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.SetIsFreeBilling(v)
+	})
+}
+
+// UpdateIsFreeBilling sets the "is_free_billing" field to the value that was provided on create.
+func (u *BatchImageJobUpsertBulk) UpdateIsFreeBilling() *BatchImageJobUpsertBulk {
+	return u.Update(func(s *BatchImageJobUpsert) {
+		s.UpdateIsFreeBilling()
 	})
 }
 

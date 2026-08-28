@@ -28,6 +28,11 @@ test -s backend/resources/model-pricing/model_prices_and_context_window.json || 
 
 assert_line Dockerfile.goreleaser 'COPY --chown=sub2api:sub2api backend/resources /app/resources'
 assert_line deploy/Dockerfile 'COPY --from=backend-builder --chown=sub2api:sub2api /app/backend/resources /app/resources'
+for dockerfile in Dockerfile Dockerfile.goreleaser deploy/Dockerfile backend/Dockerfile; do
+  assert_count "$dockerfile" 'USER sub2api' 1
+done
+assert_line deploy/docker-entrypoint.sh 'if [ "$(id -u)" = "0" ]; then'
+assert_line deploy/apple-container.sh '        --user 0:0 \'
 assert_count .goreleaser.yaml '      - backend/resources' 4
 assert_count .goreleaser.simple.yaml '      - backend/resources' 1
 

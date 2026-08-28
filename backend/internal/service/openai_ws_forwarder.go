@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	coderws "github.com/coder/websocket"
 	"go.uber.org/zap"
@@ -257,9 +258,17 @@ type OpenAIWSIngressHooks struct {
 	MaxReasoningEffort string
 	// ReasoningEffortMappings rewrites explicit effort values for this WS session.
 	ReasoningEffortMappings []ReasoningEffortMapping
-	TurnStarted             func(turn int, startedAt time.Time)
-	BeforeTurn              func(turn int) error
-	BeforeRequest           func(turn int, payload []byte, originalModel string) error
+	// InstructionReadLimitBytes and InstructionBodyBudget apply the same
+	// bounded ingress policy to the first and every follow-up frame.
+	InstructionReadLimitBytes int64
+	InstructionBodyBudget     *pkghttputil.RequestBodyMemoryBudget
+	AuditOversizedInstruction bool
+	// BeforeInstructionRequest receives the untouched client response.create
+	// frame before gateway normalization, policy rewrite, or model mapping.
+	BeforeInstructionRequest func(turn int, payload []byte, originalModel string) error
+	TurnStarted              func(turn int, startedAt time.Time)
+	BeforeTurn               func(turn int) error
+	BeforeRequest            func(turn int, payload []byte, originalModel string) error
 	// MapRequestModel resolves the current turn's client model to the model
 	// that must be written into the upstream response.create frame.
 	MapRequestModel func(turn int, originalModel string) (string, error)

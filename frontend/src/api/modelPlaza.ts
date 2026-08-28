@@ -65,6 +65,8 @@ export interface ModelPlazaGroup {
   rate_multiplier: number
   /** 登录且管理员为该用户配了专属倍率时返回；生效倍率 = user_rate ?? rate_multiplier。 */
   user_rate_multiplier?: number
+  /** 免费分组保留配置倍率，但展示和结算的生效倍率恒为 0。 */
+  is_free: boolean
   peak_rate_enabled: boolean
   peak_start: string
   peak_end: string

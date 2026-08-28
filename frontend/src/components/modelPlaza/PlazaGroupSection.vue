@@ -11,6 +11,7 @@
           :platform="group.platform as GroupPlatform"
           :subscription-type="(group.subscription_type || 'standard') as SubscriptionType"
           :rate-multiplier="group.rate_multiplier"
+          :is-free="group.is_free"
           :user-rate-multiplier="group.user_rate_multiplier ?? null"
           :peak-rate-enabled="group.peak_rate_enabled"
           :peak-start="group.peak_start"
@@ -58,6 +59,7 @@
         :models="group.models"
         :platform="group.platform"
         :rate-multiplier="group.rate_multiplier"
+        :is-free="group.is_free"
         :user-rate-multiplier="group.user_rate_multiplier ?? null"
         :image-rate-independent="group.image_rate_independent"
         :image-rate-multiplier="group.image_rate_multiplier"
@@ -92,6 +94,7 @@ const appStore = useAppStore()
 
 /** 高峰窗口描述(含倍率与服务器时区标注);分组未启用高峰为空串。 */
 const peakWindow = computed(() => {
+  if (props.group.is_free) return ''
   if (!hasPeakRate(props.group)) return ''
   return formatPeakRateWindow(
     props.group,

@@ -31,6 +31,8 @@ const (
 	NotificationEmailEventContentModerationViolation  = "content_moderation.violation_notice"
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
 	NotificationEmailEventCyberPolicyNotice           = "content_moderation.cyber_policy_notice"
+	NotificationEmailEventInstructionAuditUserNotice  = "instruction_audit.user_notice"
+	NotificationEmailEventInstructionAuditOpsNotice   = "instruction_audit.ops_notice"
 	NotificationEmailEventOpsAlert                    = "ops.alert"
 	NotificationEmailEventOpsScheduledReport          = "ops.scheduled_report"
 
@@ -946,49 +948,69 @@ func notificationEmailSampleVariables(locale string) map[string]string {
 		return variables
 	}
 	variables := map[string]string{
-		"site_name":           defaultSiteName,
-		"recipient_name":      "Alex",
-		"recipient_email":     "user@example.com",
-		"verification_code":   "123456",
-		"expires_in_minutes":  "15",
-		"reset_url":           "https://example.com/reset-password?token=preview",
-		"subscription_group":  "Claude Pro",
-		"subscription_days":   "30",
-		"expiry_time":         "2026-06-18 12:00",
-		"days_remaining":      "3",
-		"current_balance":     "12.34",
-		"threshold":           "20.00",
-		"recharge_url":        "https://example.com/recharge",
-		"recharge_amount":     "50.00",
-		"order_id":            "1024",
-		"unsubscribe_url":     "https://example.com/unsubscribe",
-		"account_id":          "1001",
-		"account_name":        "openai-main",
-		"platform":            "openai",
-		"quota_dimension":     "Daily quota",
-		"quota_used":          "80.00",
-		"quota_limit":         "100.00",
-		"quota_remaining":     "20.00",
-		"quota_threshold":     "20%",
-		"triggered_at":        "2026-05-20 12:00:00",
-		"group_name":          "Default group",
-		"moderation_category": "violence",
-		"moderation_score":    "0.982",
-		"violation_count":     "2",
-		"ban_threshold":       "3",
-		"rule_name":           "High error rate",
-		"severity":            "critical",
-		"alert_status":        "firing",
-		"metric_type":         "error_rate",
-		"operator":            ">=",
-		"metric_value":        "12.50",
-		"threshold_value":     "10.00",
-		"alert_description":   "Error rate exceeded threshold in the last 10 minutes.",
-		"report_name":         "Daily summary",
-		"report_type":         "daily_summary",
-		"report_start_time":   "2026-07-18T01:00:26Z",
-		"report_end_time":     "2026-07-19T01:00:26Z",
-		"report_html":         "<h2>Daily summary</h2><p>Requests: 2,374</p>",
+		"site_name":            defaultSiteName,
+		"recipient_name":       "Alex",
+		"recipient_email":      "user@example.com",
+		"verification_code":    "123456",
+		"expires_in_minutes":   "15",
+		"reset_url":            "https://example.com/reset-password?token=preview",
+		"subscription_group":   "Claude Pro",
+		"subscription_days":    "30",
+		"expiry_time":          "2026-06-18 12:00",
+		"days_remaining":       "3",
+		"current_balance":      "12.34",
+		"threshold":            "20.00",
+		"recharge_url":         "https://example.com/recharge",
+		"recharge_amount":      "50.00",
+		"order_id":             "1024",
+		"unsubscribe_url":      "https://example.com/unsubscribe",
+		"account_id":           "1001",
+		"account_name":         "openai-main",
+		"platform":             "openai",
+		"quota_dimension":      "Daily quota",
+		"quota_used":           "80.00",
+		"quota_limit":          "100.00",
+		"quota_remaining":      "20.00",
+		"quota_threshold":      "20%",
+		"triggered_at":         "2026-05-20 12:00:00",
+		"event_id":             "4096",
+		"request_id":           "req_01JMODELPORT",
+		"user_id":              "1001",
+		"user_email":           "user@example.com",
+		"api_key_id":           "2048",
+		"group_id":             "12",
+		"client_type":          "codex_cli",
+		"model":                "gpt-5.6-sol",
+		"admin_qq":             "2145236436",
+		"initial_reason":       "hash_mismatch",
+		"final_reason":         "hash_mismatch",
+		"final_outcome":        "blocked",
+		"policy_action":        "block",
+		"config_version":       "7",
+		"instructions_present": "true",
+		"instructions_result":  "mismatch",
+		"instructions_sha256":  "0123456789abcdef",
+		"input1_present":       "false",
+		"input1_result":        "not_checked",
+		"input1_sha256":        "",
+		"group_name":           "Default group",
+		"moderation_category":  "violence",
+		"moderation_score":     "0.982",
+		"violation_count":      "2",
+		"ban_threshold":        "3",
+		"rule_name":            "High error rate",
+		"severity":             "critical",
+		"alert_status":         "firing",
+		"metric_type":          "error_rate",
+		"operator":             ">=",
+		"metric_value":         "12.50",
+		"threshold_value":      "10.00",
+		"alert_description":    "Error rate exceeded threshold in the last 10 minutes.",
+		"report_name":          "Daily summary",
+		"report_type":          "daily_summary",
+		"report_start_time":    "2026-07-18T01:00:26Z",
+		"report_end_time":      "2026-07-19T01:00:26Z",
+		"report_html":          "<h2>Daily summary</h2><p>Requests: 2,374</p>",
 	}
 	addNotificationEmailOpsSummarySampleVariables(variables)
 	return variables
@@ -1032,6 +1054,8 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventContentModerationViolation,
 	NotificationEmailEventContentModerationDisabled,
 	NotificationEmailEventCyberPolicyNotice,
+	NotificationEmailEventInstructionAuditUserNotice,
+	NotificationEmailEventInstructionAuditOpsNotice,
 	NotificationEmailEventOpsAlert,
 	NotificationEmailEventOpsScheduledReport,
 }
@@ -1128,6 +1152,26 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
 			"triggered_at", "model", "group_name", "upstream_message"),
+	},
+	NotificationEmailEventInstructionAuditUserNotice: {
+		Event:       NotificationEmailEventInstructionAuditUserNotice,
+		Label:       "Instruction audit user notice",
+		Description: "Sent to a user when instruction audit rejects a request.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"event_id", "request_id", "triggered_at", "model", "group_name", "final_reason", "admin_qq"),
+	},
+	NotificationEmailEventInstructionAuditOpsNotice: {
+		Event:       NotificationEmailEventInstructionAuditOpsNotice,
+		Label:       "Instruction audit operations notice",
+		Description: "Sent to operations recipients when instruction audit records an actionable event.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"event_id", "request_id", "triggered_at", "user_id", "user_email", "api_key_id", "group_id", "group_name",
+			"client_type", "model", "initial_reason", "final_reason", "final_outcome", "policy_action", "config_version",
+			"instructions_present", "instructions_result", "instructions_sha256", "input1_present", "input1_result", "input1_sha256"),
 	},
 	NotificationEmailEventOpsAlert: {
 		Event:       NotificationEmailEventOpsAlert,
@@ -1404,6 +1448,64 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 <p>如认为系误判，可调整请求措辞后重试，或申请获得授权的安全访问权限。</p>`),
 		},
 	},
+	NotificationEmailEventInstructionAuditUserNotice: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Request rejected by instruction audit",
+			HTML: notificationEmailCard("#2563eb", "Instruction audit notice", `
+<p>Hello {{recipient_name}},</p>
+<p>Your request was rejected by the instruction audit policy.</p>
+<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+  <tr><td style="width:128px;">Event ID</td><td style="overflow-wrap:anywhere;">{{event_id}}</td></tr>
+  <tr><td>Request ID</td><td style="overflow-wrap:anywhere;">{{request_id}}</td></tr>
+  <tr><td>Time</td><td>{{triggered_at}}</td></tr><tr><td>Reason</td><td>{{final_reason}}</td></tr>
+  <tr><td>Model</td><td>{{model}}</td></tr><tr><td>Group</td><td>{{group_name}}</td></tr>
+</table>
+<p>If this was not your request, rotate the affected API key. For false positives, contact the site administrator (QQ {{admin_qq}}).</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 请求已被指令审核拒绝",
+			HTML: notificationEmailCard("#2563eb", "指令审核提醒", `
+<p>{{recipient_name}}，您好：</p>
+<p>您的请求已被指令审核策略拒绝。</p>
+<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+  <tr><td style="width:128px;">事件编号</td><td style="overflow-wrap:anywhere;">{{event_id}}</td></tr>
+  <tr><td>请求 ID</td><td style="overflow-wrap:anywhere;">{{request_id}}</td></tr>
+  <tr><td>时间</td><td>{{triggered_at}}</td></tr><tr><td>原因</td><td>{{final_reason}}</td></tr>
+  <tr><td>模型</td><td>{{model}}</td></tr><tr><td>分组</td><td>{{group_name}}</td></tr>
+</table>
+<p>如非本人操作，请及时更换相关 API 密钥；如有误判，请联系本站管理员 QQ {{admin_qq}}。</p>`),
+		},
+	},
+	NotificationEmailEventInstructionAuditOpsNotice: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] Instruction audit event {{event_id}}",
+			HTML: notificationEmailCard("#2563eb", "Instruction audit event", `
+<p>Instruction audit recorded an actionable request.</p>
+<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+  <tr><td style="width:128px;">Event / Request</td><td style="overflow-wrap:anywhere;">{{event_id}} / {{request_id}}</td></tr>
+  <tr><td>Outcome</td><td>{{final_outcome}} ({{policy_action}})</td></tr>
+  <tr><td>Reason</td><td>{{initial_reason}} / {{final_reason}}</td></tr>
+  <tr><td>User</td><td style="overflow-wrap:anywhere;">{{user_email}} (#{{user_id}})</td></tr>
+  <tr><td>API key / Group</td><td>#{{api_key_id}} / {{group_name}} (#{{group_id}})</td></tr>
+  <tr><td>Client / Model</td><td>{{client_type}} / {{model}}</td></tr>
+  <tr><td>Config</td><td>{{config_version}}</td></tr>
+</table>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] 指令审核事件 {{event_id}}",
+			HTML: notificationEmailCard("#2563eb", "指令审核事件", `
+<p>指令审核记录了一次需要关注的请求。</p>
+<table style="width:100%;border-collapse:collapse;table-layout:fixed;">
+  <tr><td style="width:128px;">事件 / 请求</td><td style="overflow-wrap:anywhere;">{{event_id}} / {{request_id}}</td></tr>
+  <tr><td>结果</td><td>{{final_outcome}}（{{policy_action}}）</td></tr>
+  <tr><td>原因</td><td>{{initial_reason}} / {{final_reason}}</td></tr>
+  <tr><td>用户</td><td style="overflow-wrap:anywhere;">{{user_email}}（#{{user_id}}）</td></tr>
+  <tr><td>API 密钥 / 分组</td><td>#{{api_key_id}} / {{group_name}}（#{{group_id}}）</td></tr>
+  <tr><td>客户端 / 模型</td><td>{{client_type}} / {{model}}</td></tr>
+  <tr><td>配置版本</td><td>{{config_version}}</td></tr>
+</table>`),
+		},
+	},
 	NotificationEmailEventOpsAlert: {
 		notificationEmailDefaultLocale: {
 			Subject: "[Ops Alert][{{severity}}] {{rule_name}}",
@@ -1638,8 +1740,9 @@ func notificationEmailCard(accent, title, content string) string {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
     body { margin: 0; padding: 24px; background: #f4f4f5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #18181b; }
-    .container { max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.10); }
-    .header { background: ` + accent + `; color: #ffffff; padding: 28px 32px; }
+    .container { max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 8px 30px rgba(15, 23, 42, 0.10); }
+    .header { background: #075bd8; color: #ffffff; padding: 28px 32px; }
+    .brand { margin: 0 0 8px; font-size: 13px; font-weight: 700; line-height: 1.2; opacity: 0.86; }
     .header h1 { margin: 0; font-size: 24px; line-height: 1.25; }
     .content { padding: 32px; font-size: 15px; line-height: 1.7; }
     .button { display: inline-block; margin-top: 12px; padding: 11px 18px; border-radius: 8px; background: ` + accent + `; color: #ffffff; text-decoration: none; font-weight: 600; }
@@ -1649,7 +1752,7 @@ func notificationEmailCard(accent, title, content string) string {
 </head>
 <body>
   <div class="container">
-    <div class="header"><h1>` + title + `</h1></div>
+    <div class="header"><p class="brand">{{site_name}}</p><h1>` + title + `</h1></div>
     <div class="content">` + content + `</div>
     <div class="footer">This email was sent by {{site_name}}. Please do not reply directly.</div>
   </div>

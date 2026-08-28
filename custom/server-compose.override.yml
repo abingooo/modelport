@@ -1,0 +1,10 @@
+services:
+  sub2api:
+    image: ${MODELPORT_IMAGE:?Set MODELPORT_IMAGE to a pinned ModelPort image reference}
+    # The image defaults to UID/GID 1000:1000. Ensure MODELPORT_DATA_DIR is
+    # writable by that account before the first start (see release notes).
+    volumes:
+      - ${MODELPORT_DATA_DIR:-./data}:/app/data
+    environment:
+      - MODELPORT_UPDATE_MODE=${MODELPORT_UPDATE_MODE:-manual}
+      - MODELPORT_UPDATE_REQUEST_FILE=${MODELPORT_UPDATE_REQUEST_FILE:-/app/data/update-request}

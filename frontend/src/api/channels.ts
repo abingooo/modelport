@@ -14,6 +14,8 @@ export interface UserAvailableGroup {
   subscription_type: string
   /** 分组默认倍率。用户专属倍率（若有）通过 /groups/rates 获取后在前端 join。 */
   rate_multiplier: number
+  /** 免费分组保留配置倍率，但用户侧生效倍率恒为 0。 */
+  is_free: boolean
   peak_rate_enabled: boolean
   peak_start: string
   peak_end: string

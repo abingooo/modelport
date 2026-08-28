@@ -5,10 +5,17 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 )
 
 type LegacyEngine interface {
 	Check(ctx context.Context, req Request) (*LegacyDecision, error)
+}
+
+type InstructionRequestBodyProvider interface {
+	RequestBodyMemoryBudget() *pkghttputil.RequestBodyMemoryBudget
+	RequestBodyReadLimit() int64
 }
 
 type PromptEngine interface {
@@ -18,17 +25,49 @@ type PromptEngine interface {
 }
 
 type Coordinator struct {
-	legacy LegacyEngine
-	prompt PromptEngine
+	legacy      LegacyEngine
+	prompt      PromptEngine
+	instruction InstructionEngine
 }
 
 func NewCoordinator(legacy LegacyEngine, prompt PromptEngine) *Coordinator {
 	return &Coordinator{legacy: legacy, prompt: prompt}
 }
 
+func NewCoordinatorWithInstruction(legacy LegacyEngine, prompt PromptEngine, instruction InstructionEngine) *Coordinator {
+	return &Coordinator{legacy: legacy, prompt: prompt, instruction: instruction}
+}
+
+func (c *Coordinator) InstructionRequestBodyBudget() *pkghttputil.RequestBodyMemoryBudget {
+	if c == nil || c.instruction == nil {
+		return nil
+	}
+	provider, ok := c.instruction.(InstructionRequestBodyProvider)
+	if !ok {
+		return nil
+	}
+	return provider.RequestBodyMemoryBudget()
+}
+
+func (c *Coordinator) InstructionRequestBodyReadLimit() int64 {
+	if c == nil || c.instruction == nil {
+		return 0
+	}
+	provider, ok := c.instruction.(InstructionRequestBodyProvider)
+	if !ok {
+		return 0
+	}
+	return provider.RequestBodyReadLimit()
+}
+
 func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 	if c == nil {
 		return allowDecision(nil, nil)
+	}
+	if !req.InstructionAuditCompleted {
+		if decision := c.CheckInstruction(ctx, req); decision != nil {
+			return *decision
+		}
 	}
 	mode := ModeOff
 	if c.prompt != nil {
@@ -46,6 +85,33 @@ func (c *Coordinator) Check(ctx context.Context, req Request) Decision {
 	default:
 		legacy, _ := c.checkLegacy(ctx, req)
 		return prioritize(legacy, nil)
+	}
+}
+
+func (c *Coordinator) CheckInstruction(ctx context.Context, req Request) *Decision {
+	if c == nil || c.instruction == nil {
+		return nil
+	}
+	instruction := c.instruction.EvaluateInstruction(ctx, req)
+	if instruction == nil || !instruction.Applicable || instruction.Allow {
+		return nil
+	}
+	status := instruction.HTTPStatus
+	if status < 400 || status > 599 {
+		status = http.StatusForbidden
+	}
+	errorCode := instruction.ErrorCode
+	if errorCode == "" {
+		errorCode = InstructionErrorCodeRejected
+	}
+	clientMessage := instruction.ClientMessage
+	if clientMessage == "" {
+		clientMessage = InstructionClientMessage
+	}
+	return &Decision{
+		Kind: DecisionBlock, HTTPStatus: status,
+		ErrorCode: errorCode, ClientMessage: clientMessage,
+		Instruction: instruction, AllowNextStage: false,
 	}
 }
 

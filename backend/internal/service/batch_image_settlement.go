@@ -55,12 +55,14 @@ func (r *BatchImageModelPricingResolver) BatchImageUnitPrice(ctx context.Context
 }
 
 type BatchImageSettlementService struct {
-	Repo         BatchImageRepository
-	BillingRepo  UsageBillingRepository
-	UsageLogRepo UsageLogRepository
-	Pricing      BatchImagePricingResolver
-	AuthCache    APIKeyAuthCacheInvalidator
-	Config       *config.Config
+	Repo           BatchImageRepository
+	BillingRepo    UsageBillingRepository
+	UsageLogRepo   UsageLogRepository
+	Pricing        BatchImagePricingResolver
+	ChannelService *ChannelService
+	BillingService *BillingService
+	AuthCache      APIKeyAuthCacheInvalidator
+	Config         *config.Config
 }
 
 type BatchImageSettlementResult struct {
@@ -74,12 +76,15 @@ type BatchImageSettlementResult struct {
 }
 
 func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string) (*BatchImageSettlementResult, error) {
-	if s == nil || s.Repo == nil || s.BillingRepo == nil || s.Pricing == nil {
+	if s == nil || s.Repo == nil || s.Pricing == nil {
 		return nil, ErrBatchImageSettlementBillingFailed.WithCause(errors.New("batch image settlement service is not configured"))
 	}
 	job, err := s.Repo.GetBatchImageJobByBatchID(ctx, batchID)
 	if err != nil {
 		return nil, err
+	}
+	if !job.IsFreeBilling && s.BillingRepo == nil {
+		return nil, ErrBatchImageSettlementBillingFailed.WithCause(errors.New("batch image settlement billing repository is not configured"))
 	}
 
 	manifestHash := BuildBatchImageSettlementManifestHash(job)
@@ -126,7 +131,11 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	}
 
 	unitPrice, err := s.settlementUnitPrice(ctx, job)
-	if err == nil && unitPrice < 0 {
+	rawUnitPrice := unitPrice
+	if job.PricingSnapshotVersion >= 1 {
+		rawUnitPrice = job.BaseUnitPrice
+	}
+	if err == nil && (unitPrice < 0 || rawUnitPrice < 0) {
 		err = ErrBatchImageSettlementPricingMissing
 	}
 	if err != nil {
@@ -135,13 +144,18 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 		}
 		return nil, err
 	}
-	actualCost := float64(job.SuccessCount) * unitPrice
+	wouldBillCost := float64(job.SuccessCount) * unitPrice
+	rawTotalCost := float64(job.SuccessCount) * rawUnitPrice
+	actualCost := wouldBillCost
+	if job.IsFreeBilling {
+		actualCost = 0
+	}
 	result.ActualCost = actualCost
 	holdAmount := job.EstimatedCost
 	if job.HoldAmount != nil {
 		holdAmount = *job.HoldAmount
 	}
-	if actualCost-holdAmount > batchImageCostEpsilon {
+	if !job.IsFreeBilling && actualCost-holdAmount > batchImageCostEpsilon {
 		msg := fmt.Sprintf("actual cost %.10f exceeds held amount %.10f", actualCost, holdAmount)
 		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_COST_EXCEEDS_HOLD", msg); failErr != nil {
 			return nil, failErr
@@ -149,12 +163,14 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 		return nil, ErrBatchImageSettlementCostExceedsHold
 	}
 
-	if err := captureBatchImageBalanceHold(ctx, s.BillingRepo, job, actualCost, manifestHash); err != nil {
-		msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
-		if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_BILLING_FAILED", msg); failErr != nil {
-			return nil, failErr
+	if !job.IsFreeBilling {
+		if err := captureBatchImageBalanceHold(ctx, s.BillingRepo, job, actualCost, manifestHash); err != nil {
+			msg := truncateBatchImageMessage(err.Error(), batchImageMaxErrorMessageLength)
+			if failErr := s.recordSettlementFailure(ctx, job, "SETTLEMENT_BILLING_FAILED", msg); failErr != nil {
+				return nil, failErr
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 	s.invalidateAuthCache(ctx, job.UserID)
 
@@ -177,7 +193,7 @@ func (s *BatchImageSettlementService) Settle(ctx context.Context, batchID string
 	}); err != nil {
 		return nil, err
 	}
-	s.recordUsageLog(ctx, job, actualCost, result.RequestID, now)
+	s.recordUsageLog(ctx, job, actualCost, rawTotalCost, result.RequestID, now)
 
 	return result, nil
 }
@@ -249,12 +265,16 @@ func (s *BatchImageSettlementService) failExhaustedSettlement(ctx context.Contex
 	return ErrBatchImageSettlementBillingFailed
 }
 
-func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost float64, requestID string, createdAt time.Time) {
+func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *BatchImageJob, actualCost, rawTotalCost float64, requestID string, createdAt time.Time) {
 	if s == nil || s.UsageLogRepo == nil || job == nil || job.APIKeyID == nil || job.AccountID == nil {
 		return
 	}
 	billingMode := string(BillingModeImage)
 	accountRateMultiplier := job.AccountRateMultiplier
+	rateMultiplier := job.GroupRateMultiplier * job.BatchDiscountMultiplier
+	if job.IsFreeBilling {
+		rateMultiplier = 0
+	}
 	inboundEndpoint := "/v1/images/batches"
 	upstreamEndpoint := "vertex:batchPredictionJobs"
 	imageSize := "1K"
@@ -262,16 +282,17 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		UserID:                job.UserID,
 		APIKeyID:              *job.APIKeyID,
 		AccountID:             *job.AccountID,
+		GroupID:               cloneInt64Pointer(job.GroupID),
 		RequestID:             strings.TrimSpace(requestID),
 		Model:                 job.Model,
 		RequestedModel:        job.Model,
 		InboundEndpoint:       &inboundEndpoint,
 		UpstreamEndpoint:      &upstreamEndpoint,
 		ImageCount:            job.SuccessCount,
-		ImageOutputCost:       actualCost,
-		TotalCost:             actualCost,
+		ImageOutputCost:       rawTotalCost,
+		TotalCost:             rawTotalCost,
 		ActualCost:            actualCost,
-		RateMultiplier:        job.GroupRateMultiplier * job.BatchDiscountMultiplier,
+		RateMultiplier:        rateMultiplier,
 		AccountRateMultiplier: &accountRateMultiplier,
 		BillingType:           BillingTypeBalance,
 		RequestType:           RequestTypeSync,
@@ -279,6 +300,21 @@ func (s *BatchImageSettlementService) recordUsageLog(ctx context.Context, job *B
 		ImageSize:             &imageSize,
 		SessionID:             job.SessionID,
 		CreatedAt:             createdAt,
+	}
+	// Account statistics are expressed in the raw (account-multiplier-free)
+	// unit.  Persisting this default makes the SQL aggregation apply the
+	// account multiplier exactly once; channel rules may replace the value.
+	defaultAccountStatsCost := rawTotalCost
+	usageLog.AccountStatsCost = &defaultAccountStatsCost
+	if job.GroupID != nil && *job.GroupID > 0 {
+		applyAccountStatsCost(
+			ctx, usageLog, s.ChannelService, s.BillingService,
+			*job.AccountID, *job.GroupID, job.Model, job.Model,
+			UsageTokens{}, rawTotalCost,
+		)
+		if usageLog.AccountStatsCost == nil {
+			usageLog.AccountStatsCost = &defaultAccountStatsCost
+		}
 	}
 	writeUsageLogBestEffort(ctx, s.UsageLogRepo, usageLog, "service.batch_image_settlement")
 }

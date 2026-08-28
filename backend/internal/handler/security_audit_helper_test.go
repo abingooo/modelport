@@ -25,6 +25,37 @@ func TestCachesSecurityAuditCompletionSkipsWebSocketStages(t *testing.T) {
 	require.False(t, isSecurityAuditWebSocketStage("http"))
 }
 
+func TestRunSecurityAuditExcludesOnlyHTTPCompactFromInstructionAudit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	prompt := &turnCountingEngine{mode: securityaudit.ModeAsync}
+	instruction := &capturingInstructionEngine{}
+	coordinator := securityaudit.NewCoordinatorWithInstruction(nil, prompt, instruction)
+	payload := []byte(`{"model":"gpt-test","input":"benign"}`)
+	subject := middleware2.AuthSubject{UserID: 7, Concurrency: 1}
+
+	recorder := httptest.NewRecorder()
+	httpContext, _ := gin.CreateTestContext(recorder)
+	httpContext.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	decision := runSecurityAudit(httpContext, nil, coordinator, nil, nil, subject,
+		"openai_responses", "gpt-test", payload, "http")
+	require.NotNil(t, decision)
+	require.True(t, decision.AllowNextStage)
+	require.Equal(t, int64(1), instruction.calls.Load())
+	require.True(t, instruction.lastRequest.InstructionAuditExcluded)
+	require.Equal(t, int64(1), prompt.enqueues.Load(), "Prompt Audit must still run for compact requests")
+
+	wsContext, _ := gin.CreateTestContext(httptest.NewRecorder())
+	wsContext.Request = httptest.NewRequest(http.MethodGet, "/v1/responses/compact", nil)
+	wsContext.Set(securityAuditWSTurnContextKey, 1)
+	decision = runSecurityAudit(wsContext, nil, coordinator, nil, nil, subject,
+		"openai_responses", "gpt-test", payload, "first_turn")
+	require.NotNil(t, decision)
+	require.True(t, decision.AllowNextStage)
+	require.Equal(t, int64(2), instruction.calls.Load())
+	require.False(t, instruction.lastRequest.InstructionAuditExcluded)
+	require.Equal(t, int64(2), prompt.enqueues.Load())
+}
+
 func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := &turnCountingEngine{mode: securityaudit.ModeAsync}
@@ -166,6 +197,17 @@ type turnCountingEngine struct {
 	enqueues  atomic.Int64
 	evaluates atomic.Int64
 	decisions []*securityaudit.PromptDecision
+}
+
+type capturingInstructionEngine struct {
+	calls       atomic.Int64
+	lastRequest securityaudit.Request
+}
+
+func (e *capturingInstructionEngine) EvaluateInstruction(_ context.Context, request securityaudit.Request) *securityaudit.InstructionDecision {
+	e.calls.Add(1)
+	e.lastRequest = request
+	return &securityaudit.InstructionDecision{Allow: true}
 }
 
 func (e *turnCountingEngine) EffectiveMode() securityaudit.Mode { return e.mode }

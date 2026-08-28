@@ -86,6 +86,29 @@ docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
 # http://localhost:8080
 ```
 
+#### Application data ownership
+
+The application image runs as the unprivileged `sub2api` account (UID/GID
+`1000:1000`). Docker named volumes inherit the image directory ownership on
+first creation. A bind-mounted `./data` directory must already be writable by
+that account before the application starts. On a host where the deployment
+script runs as root, prepare it once with:
+
+```bash
+mkdir -p data
+chown -R 1000:1000 data
+```
+
+Keep the existing `data/` ownership when upgrading; it contains the update
+request file and application configuration. The container entrypoint still
+supports an explicit root override for a one-time ownership repair:
+
+```bash
+docker compose -f docker-compose.local.yml run --rm --user 0:0 sub2api true
+```
+
+After that repair, start the service with its normal non-root image user.
+
 ### Method 2: Manual Deployment
 
 If you prefer manual control:

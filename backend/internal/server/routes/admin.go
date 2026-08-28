@@ -43,6 +43,9 @@ func RegisterAdminRoutes(
 		// 分组管理
 		registerGroupRoutes(admin, h)
 
+		// 抽奖活动管理
+		registerLotteryRoutes(admin, h)
+
 		// 账号管理
 		registerAccountRoutes(admin, h, stepUpAuth)
 
@@ -125,11 +128,93 @@ func RegisterAdminRoutes(
 		// 独立提示词输入审计
 		registerPromptAuditRoutes(admin, h)
 
+		// 指令模板审核
+		registerInstructionAuditRoutes(admin, h)
+
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+	}
+}
+
+func registerLotteryRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	lottery := admin.Group("/lottery")
+	{
+		lottery.GET("", h.Admin.Lottery.List)
+		lottery.POST("", h.Admin.Lottery.Create)
+		lottery.GET("/:id", h.Admin.Lottery.Get)
+		lottery.PUT("/:id", h.Admin.Lottery.Update)
+		lottery.PUT("/:id/status", h.Admin.Lottery.SetStatus)
+		lottery.DELETE("/:id", h.Admin.Lottery.Delete)
+		lottery.GET("/:id/entries", h.Admin.Lottery.Entries)
+		lottery.POST("/:id/draw", h.Admin.Lottery.Draw)
+	}
+}
+
+func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	instructionAudit := admin.Group("/instruction-audit")
+	{
+		instructionAudit.GET("/overview", h.Admin.InstructionAudit.GetOverview)
+		instructionAudit.GET("/config", h.Admin.InstructionAudit.GetConfig)
+		instructionAudit.PUT("/config", h.Admin.InstructionAudit.UpdateConfig)
+
+		instructionAudit.GET("/events", h.Admin.InstructionAudit.ListEvents)
+		instructionAudit.GET("/statistics", h.Admin.InstructionAudit.GetStatistics)
+		instructionAudit.POST("/events/batch-delete", h.Admin.InstructionAudit.BatchDeleteEvents)
+		instructionAudit.GET("/events/:id", h.Admin.InstructionAudit.GetEvent)
+		instructionAudit.DELETE("/events/:id", h.Admin.InstructionAudit.DeleteEvent)
+		instructionAudit.GET("/events/:id/evidence", h.Admin.InstructionAudit.RevealEventEvidence)
+		instructionAudit.POST("/events/:id/evidence-access", h.Admin.InstructionAudit.RecordEventEvidenceCopy)
+		instructionAudit.POST("/events/:id/trust", h.Admin.InstructionAudit.TrustEvent)
+
+		instructionAudit.GET("/hashes", h.Admin.InstructionAudit.ListHashes)
+		instructionAudit.GET("/hashes/:id", h.Admin.InstructionAudit.GetHash)
+		instructionAudit.POST("/hashes", h.Admin.InstructionAudit.CreateHash)
+		instructionAudit.PUT("/hashes/:id", h.Admin.InstructionAudit.UpdateHash)
+		instructionAudit.DELETE("/hashes/:id", h.Admin.InstructionAudit.DeleteHash)
+		instructionAudit.GET("/hashes/:id/raw", h.Admin.InstructionAudit.RevealHashRaw)
+		instructionAudit.POST("/hashes/:id/raw-access", h.Admin.InstructionAudit.RecordHashRawCopy)
+
+		instructionAudit.GET("/risk-hashes", h.Admin.InstructionAudit.ListRiskHashes)
+		instructionAudit.POST("/risk-hashes", h.Admin.InstructionAudit.CreateRiskHash)
+		instructionAudit.GET("/risk-hashes/:id", h.Admin.InstructionAudit.GetRiskHash)
+		instructionAudit.PUT("/risk-hashes/:id", h.Admin.InstructionAudit.UpdateRiskHash)
+		instructionAudit.DELETE("/risk-hashes/:id", h.Admin.InstructionAudit.DeleteRiskHash)
+		instructionAudit.GET("/risk-hashes/:id/raw", h.Admin.InstructionAudit.RevealRiskHashRaw)
+		instructionAudit.POST("/risk-hashes/:id/raw-access", h.Admin.InstructionAudit.RecordRiskHashRawCopy)
+
+		instructionAudit.GET("/review-jobs", h.Admin.InstructionAudit.ListReviewJobs)
+		instructionAudit.GET("/review-jobs/:id", h.Admin.InstructionAudit.GetReviewJob)
+		instructionAudit.POST("/review-jobs/:id/retry", h.Admin.InstructionAudit.RetryReviewJob)
+		instructionAudit.GET("/review-jobs/:id/raw", h.Admin.InstructionAudit.RevealReviewJobRaw)
+		instructionAudit.POST("/review-jobs/:id/raw-access", h.Admin.InstructionAudit.RecordReviewJobRawCopy)
+
+		instructionAudit.GET("/scopes", h.Admin.InstructionAudit.ListScopes)
+		instructionAudit.POST("/scopes", h.Admin.InstructionAudit.SaveScope)
+		instructionAudit.POST("/scopes/batch", h.Admin.InstructionAudit.SaveScopeSet)
+		instructionAudit.DELETE("/scopes/group/:id", h.Admin.InstructionAudit.DeleteScopeSet)
+		instructionAudit.PUT("/scopes/:id", h.Admin.InstructionAudit.SaveScope)
+		instructionAudit.DELETE("/scopes/:id", h.Admin.InstructionAudit.DeleteScope)
+		instructionAudit.GET("/groups", h.Admin.InstructionAudit.ListGroups)
+
+		instructionAudit.GET("/client-profiles", h.Admin.InstructionAudit.ListClientProfiles)
+		instructionAudit.POST("/client-profiles", h.Admin.InstructionAudit.SaveClientProfile)
+		instructionAudit.PUT("/client-profiles/:id", h.Admin.InstructionAudit.SaveClientProfile)
+		instructionAudit.PUT("/client-profiles/:id/prompt-audit", h.Admin.InstructionAudit.UpdateClientProfilePromptAudit)
+		instructionAudit.DELETE("/client-profiles/:id", h.Admin.InstructionAudit.DeleteClientProfile)
+
+		instructionAudit.GET("/user-allowlist", h.Admin.InstructionAudit.ListUserAllowlist)
+		instructionAudit.POST("/user-allowlist", h.Admin.InstructionAudit.SaveUserAllowlist)
+		instructionAudit.DELETE("/user-allowlist/:id", h.Admin.InstructionAudit.DeleteUserAllowlist)
+		instructionAudit.GET("/users", h.Admin.InstructionAudit.ListUsers)
+
+		instructionAudit.GET("/ai-nodes", h.Admin.InstructionAudit.ListAINodes)
+		instructionAudit.POST("/ai-nodes", h.Admin.InstructionAudit.SaveAINode)
+		instructionAudit.PUT("/ai-nodes/:id", h.Admin.InstructionAudit.SaveAINode)
+		instructionAudit.DELETE("/ai-nodes/:id", h.Admin.InstructionAudit.DeleteAINode)
+		instructionAudit.POST("/ai-nodes/:id/test", h.Admin.InstructionAudit.TestAINode)
 	}
 }
 

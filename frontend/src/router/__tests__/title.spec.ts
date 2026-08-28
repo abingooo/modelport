@@ -11,8 +11,8 @@ describe('resolveDocumentTitle', () => {
   })
 
   it('站点名为空时，回退默认站点名', () => {
-    expect(resolveDocumentTitle('Dashboard', '')).toBe('Dashboard - Sub2API')
-    expect(resolveDocumentTitle(undefined, '   ')).toBe('Sub2API')
+    expect(resolveDocumentTitle('Dashboard', '')).toBe('Dashboard - ModelPort')
+    expect(resolveDocumentTitle(undefined, '   ')).toBe('ModelPort')
   })
 
   it('站点名变更时仅影响后续路由标题计算', () => {
@@ -25,6 +25,12 @@ describe('resolveDocumentTitle', () => {
 })
 
 describe('resolveRouteDocumentTitle', () => {
+  it('ModelPort 首页使用产品标题', () => {
+    const route = { name: 'Home', params: {}, meta: { title: 'Home' } }
+
+    expect(resolveRouteDocumentTitle(route, 'ModelPort')).toBe('模型港 ModelPort - 统一模型网关')
+  })
+
   it('自定义页面菜单加载后，使用菜单名称作为标题', () => {
     const route = {
       name: 'CustomPage',

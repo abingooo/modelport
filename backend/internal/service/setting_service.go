@@ -123,6 +123,7 @@ type SettingService struct {
 	cfg                         *config.Config
 	onUpdate                    func() // Callback when settings are updated (for cache invalidation)
 	version                     string // Application version
+	upstreamVersion             string // Immutable upstream Sub2API baseline
 	webSearchManagerBuilder     WebSearchManagerBuilder
 	antigravityUAVersionCache   atomic.Value // *cachedAntigravityUserAgentVersion
 	antigravityUAVersionSF      singleflight.Group
@@ -426,6 +427,11 @@ func (s *SettingService) notifyChannelMonitorRuntimeListeners() {
 // SetVersion sets the application version for injection into public settings
 func (s *SettingService) SetVersion(version string) {
 	s.version = version
+}
+
+// SetUpstreamVersion sets the immutable Sub2API baseline for public settings injection.
+func (s *SettingService) SetUpstreamVersion(version string) {
+	s.upstreamVersion = strings.TrimSpace(version)
 }
 
 // getStringOrDefault 获取字符串值或默认值

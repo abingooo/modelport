@@ -5,12 +5,14 @@ import (
 	"errors"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	coderws "github.com/coder/websocket"
 )
 
 type openAIWSClientReadResult struct {
 	messageType coderws.MessageType
 	payload     []byte
+	lease       *pkghttputil.RequestBodyMemoryLease
 	err         error
 }
 
@@ -23,7 +25,7 @@ func ReadOpenAIWSClientMessage(
 	timeoutStatus coderws.StatusCode,
 	timeoutReason string,
 ) (coderws.MessageType, []byte, error) {
-	return readOpenAIWSClientMessageWithTimeoutStart(
+	messageType, payload, lease, err := readOpenAIWSClientMessageWithTimeoutStartAndBudget(
 		controlCtx,
 		conn,
 		timeout,
@@ -31,13 +33,31 @@ func ReadOpenAIWSClientMessage(
 		timeoutReason,
 		nil,
 		nil,
+		0,
+		nil,
+	)
+	lease.Release()
+	return messageType, payload, err
+}
+
+func ReadOpenAIWSClientMessageWithBudget(
+	controlCtx context.Context,
+	conn *coderws.Conn,
+	timeout time.Duration,
+	timeoutStatus coderws.StatusCode,
+	timeoutReason string,
+	readLimitBytes int64,
+	budget *pkghttputil.RequestBodyMemoryBudget,
+) (coderws.MessageType, []byte, *pkghttputil.RequestBodyMemoryLease, error) {
+	return readOpenAIWSClientMessageWithTimeoutStartAndBudget(
+		controlCtx, conn, timeout, timeoutStatus, timeoutReason, nil, nil, readLimitBytes, budget,
 	)
 }
 
-// readOpenAIWSClientMessageWithTimeoutStart supports readers whose timeout
-// starts after a state transition, such as a completed passthrough turn. When
-// timeoutActive is nil, a positive timeout starts immediately.
-func readOpenAIWSClientMessageWithTimeoutStart(
+// readOpenAIWSClientMessageWithTimeoutStartAndBudget supports readers whose
+// timeout starts after a state transition, such as a completed passthrough
+// turn. When timeoutActive is nil, a positive timeout starts immediately.
+func readOpenAIWSClientMessageWithTimeoutStartAndBudget(
 	controlCtx context.Context,
 	conn *coderws.Conn,
 	timeout time.Duration,
@@ -45,18 +65,24 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 	timeoutReason string,
 	timeoutStart <-chan struct{},
 	timeoutActive func() bool,
-) (coderws.MessageType, []byte, error) {
+	readLimitBytes int64,
+	budget *pkghttputil.RequestBodyMemoryBudget,
+) (coderws.MessageType, []byte, *pkghttputil.RequestBodyMemoryLease, error) {
 	if conn == nil {
-		return 0, nil, errors.New("openai websocket client connection is nil")
+		return 0, nil, nil, errors.New("openai websocket client connection is nil")
 	}
 	if controlCtx == nil {
 		controlCtx = context.Background()
 	}
+	readCtx, cancelRead := context.WithCancel(controlCtx)
+	defer cancelRead()
 
 	readDone := make(chan openAIWSClientReadResult, 1)
 	go func() {
-		messageType, payload, err := conn.Read(context.Background())
-		readDone <- openAIWSClientReadResult{messageType: messageType, payload: payload, err: err}
+		messageType, payload, lease, err := ReadOpenAIWSClientFrameWithBudget(
+			readCtx, conn, readLimitBytes, budget,
+		)
+		readDone <- openAIWSClientReadResult{messageType: messageType, payload: payload, lease: lease, err: err}
 	}()
 
 	var timer *time.Timer
@@ -87,17 +113,19 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 		}
 	}()
 
-	closeAndJoin := func(status coderws.StatusCode, reason string, cause error) (coderws.MessageType, []byte, error) {
+	closeAndJoin := func(status coderws.StatusCode, reason string, cause error) (coderws.MessageType, []byte, *pkghttputil.RequestBodyMemoryLease, error) {
+		cancelRead()
 		_ = conn.Close(status, reason)
 		_ = conn.CloseNow()
-		<-readDone
-		return 0, nil, NewOpenAIWSClientCloseError(status, reason, cause)
+		result := <-readDone
+		result.lease.Release()
+		return 0, nil, nil, NewOpenAIWSClientCloseError(status, reason, cause)
 	}
 
 	for {
 		select {
 		case result := <-readDone:
-			return result.messageType, result.payload, result.err
+			return result.messageType, result.payload, result.lease, result.err
 		case <-timeoutStart:
 			startTimeout()
 		case <-timeoutCh:

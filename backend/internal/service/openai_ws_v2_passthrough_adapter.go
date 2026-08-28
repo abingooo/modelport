@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -25,6 +26,10 @@ type openAIWSClientFrameConn struct {
 	interTurnIdleTimeout time.Duration
 	interTurnStarted     chan struct{}
 	waitingForNextTurn   atomic.Bool
+	readLimitBytes       int64
+	bodyBudget           *pkghttputil.RequestBodyMemoryBudget
+	leaseMu              sync.Mutex
+	pendingBodyLease     *pkghttputil.RequestBodyMemoryLease
 	// The relay observes upstream payloads, while clients must keep seeing the
 	// model identifier they supplied for the current turn.
 	restoreResponseModel func([]byte) []byte
@@ -41,9 +46,10 @@ type openAIWSClientFrameConn struct {
 //     stops reading from the client.
 //   - _, _, err: a transport error other than block.
 type openAIWSPolicyEnforcingFrameConn struct {
-	inner   openaiwsv2.FrameConn
-	filter  func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error)
-	onBlock func(blocked *OpenAIFastBlockedError)
+	inner          openaiwsv2.FrameConn
+	filter         func(msgType coderws.MessageType, payload []byte) ([]byte, *OpenAIFastBlockedError, error)
+	onBlock        func(blocked *OpenAIFastBlockedError)
+	auditOversized func(msgType coderws.MessageType, payload []byte) error
 }
 
 var _ openaiwsv2.FrameConn = (*openAIWSPolicyEnforcingFrameConn)(nil)
@@ -53,7 +59,19 @@ func (c *openAIWSPolicyEnforcingFrameConn) ReadFrame(ctx context.Context) (coder
 		return coderws.MessageText, nil, errOpenAIWSConnClosed
 	}
 	msgType, payload, err := c.inner.ReadFrame(ctx)
+	if leaseProvider, ok := c.inner.(interface {
+		takeInstructionBodyLease() *pkghttputil.RequestBodyMemoryLease
+	}); ok {
+		lease := leaseProvider.takeInstructionBodyLease()
+		defer lease.Release()
+	}
 	if err != nil {
+		if _, oversized := extractOpenAIWSMaxBytesError(err); !oversized || c.auditOversized == nil || len(payload) == 0 {
+			return msgType, payload, err
+		}
+		if auditErr := c.auditOversized(msgType, payload); auditErr != nil {
+			return msgType, payload, auditErr
+		}
 		return msgType, payload, err
 	}
 	if c.filter == nil {
@@ -595,7 +613,7 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 	if c.controlCtx != nil {
 		controlCtx = c.controlCtx
 	}
-	msgType, payload, err := readOpenAIWSClientMessageWithTimeoutStart(
+	msgType, payload, lease, err := readOpenAIWSClientMessageWithTimeoutStartAndBudget(
 		controlCtx,
 		c.conn,
 		c.interTurnIdleTimeout,
@@ -603,8 +621,26 @@ func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.Messag
 		"websocket idle timeout",
 		c.interTurnStarted,
 		func() bool { return c.waitingForNextTurn.Load() },
+		c.readLimitBytes,
+		c.bodyBudget,
 	)
+	c.leaseMu.Lock()
+	previousLease := c.pendingBodyLease
+	c.pendingBodyLease = lease
+	c.leaseMu.Unlock()
+	previousLease.Release()
 	return msgType, payload, err
+}
+
+func (c *openAIWSClientFrameConn) takeInstructionBodyLease() *pkghttputil.RequestBodyMemoryLease {
+	if c == nil {
+		return nil
+	}
+	c.leaseMu.Lock()
+	lease := c.pendingBodyLease
+	c.pendingBodyLease = nil
+	c.leaseMu.Unlock()
+	return lease
 }
 
 func (c *openAIWSClientFrameConn) markTurnStarted() {
@@ -947,6 +983,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		controlCtx:           ctx,
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
 		interTurnStarted:     make(chan struct{}, 1),
+		readLimitBytes:       hooksInstructionReadLimit(hooks),
+		bodyBudget:           hooksInstructionBodyBudget(hooks),
 		restoreResponseModel: func(payload []byte) []byte {
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			if !openAIWSEventMayContainModel(eventType) {
@@ -958,6 +996,21 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		restoreToolNames: func(payload []byte) []byte {
 			return restoreCodexToolNamesFromContext(c, payload)
 		},
+	}
+	auditInstructionFrame := func(msgType coderws.MessageType, payload []byte) error {
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary ||
+			!openAIWSInstructionCandidateFrame(payload) || hooks == nil || hooks.BeforeInstructionRequest == nil {
+			return nil
+		}
+		turnNo := int(completedTurns.Load()) + 1
+		if turnNo < 2 {
+			turnNo = 2
+		}
+		requestModelForAudit := usageMeta.requestModelForFrame(payload)
+		if requestModelForAudit == "" {
+			requestModelForAudit = capturedSessionModel
+		}
+		return hooks.BeforeInstructionRequest(turnNo, payload, requestModelForAudit)
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
 		inner: clientFrameConn,
@@ -971,6 +1024,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
+			turnNo := int(completedTurns.Load()) + 1
+			if turnNo < 2 {
+				turnNo = 2
+			}
+			if err := auditInstructionFrame(msgType, payload); err != nil {
+				return payload, nil, err
+			}
 			responseCreateAt := time.Time{}
 			acceptedTurn := false
 			if isResponseCreate {
@@ -1025,10 +1085,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						payload = capped
 					}
 				}
-			}
-			turnNo := int(completedTurns.Load()) + 1
-			if turnNo < 2 {
-				turnNo = 2
 			}
 			requestModelForThisFrame := ""
 			if isResponseCreate {
@@ -1115,6 +1171,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			_ = clientConn.Write(writeCtx, coderws.MessageText, eventBytes)
 			cancel()
 		},
+	}
+	if hooks != nil && hooks.AuditOversizedInstruction {
+		policyClientConn.auditOversized = auditInstructionFrame
 	}
 	upstreamFirstMessageSent := false
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())

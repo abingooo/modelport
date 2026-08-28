@@ -95,6 +95,7 @@ type BatchImagePublicService struct {
 }
 
 type BatchImagePricingSnapshot struct {
+	IsFreeBilling           bool
 	BaseUnitPrice           float64
 	GroupRateMultiplier     float64
 	AccountRateMultiplier   float64
@@ -254,6 +255,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		return nil, err
 	}
 	apiKeyID := owner.APIKeyID
+	groupID := cloneInt64Pointer(owner.GroupID)
 	accountID := account.ID
 	holdID := BatchImageHoldRequestID(batchID)
 	holdAmount := pricingSnapshot.HoldAmount
@@ -261,6 +263,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		BatchID:                 batchID,
 		UserID:                  owner.UserID,
 		APIKeyID:                &apiKeyID,
+		GroupID:                 groupID,
 		AccountID:               &accountID,
 		Provider:                provider.Name(),
 		Model:                   normalized.Model,
@@ -270,6 +273,7 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 		ItemCount:               len(normalized.Items),
 		EstimatedCost:           pricingSnapshot.EstimatedCost,
 		HoldAmount:              &holdAmount,
+		IsFreeBilling:           pricingSnapshot.IsFreeBilling,
 		BaseUnitPrice:           pricingSnapshot.BaseUnitPrice,
 		GroupRateMultiplier:     pricingSnapshot.GroupRateMultiplier,
 		AccountRateMultiplier:   pricingSnapshot.AccountRateMultiplier,
@@ -287,14 +291,16 @@ func (s *BatchImagePublicService) Submit(ctx context.Context, owner BatchImageOw
 	if err != nil {
 		return nil, err
 	}
-	if err := reserveBatchImageBalanceHold(ctx, s.BillingRepo, job, requestHash); err != nil {
-		code := "BILLING_HOLD_FAILED"
-		if errors.Is(err, ErrBatchImageInsufficientBalance) {
-			code = "INSUFFICIENT_BALANCE"
+	if !job.IsFreeBilling {
+		if err := reserveBatchImageBalanceHold(ctx, s.BillingRepo, job, requestHash); err != nil {
+			code := "BILLING_HOLD_FAILED"
+			if errors.Is(err, ErrBatchImageInsufficientBalance) {
+				code = "INSUFFICIENT_BALANCE"
+			}
+			_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, code, sanitizeBatchImagePublicMessage(err.Error()), true)
+			s.hidePreUpstreamSubmitFailure(ctx, owner, job)
+			return nil, err
 		}
-		_ = s.Repo.RecordBatchImageJobSubmitFailure(ctx, job.BatchID, code, sanitizeBatchImagePublicMessage(err.Error()), true)
-		s.hidePreUpstreamSubmitFailure(ctx, owner, job)
-		return nil, err
 	}
 	s.invalidateAuthCache(ctx, owner.UserID)
 	if err := s.createPendingItems(ctx, job.BatchID, requestHash, normalized.Items); err != nil {
@@ -998,6 +1004,7 @@ func (s *BatchImagePublicService) ensureGroupAllowsBatchImage(ctx context.Contex
 
 func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, owner BatchImageOwner, req BatchImageSubmitRequest, provider string, account *Account) (*BatchImagePricingSnapshot, error) {
 	unit := -1.0
+	isFreeBilling := false
 	groupMultiplier := 1.0
 	discountMultiplier := defaultBatchImageDiscountMultiplier
 	holdMultiplier := defaultBatchImageHoldMultiplier
@@ -1012,12 +1019,13 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		if !group.AllowBatchImageGeneration {
 			return nil, ErrBatchImageGroupDisabled
 		}
+		isFreeBilling = group.IsFreeBilling()
 		groupDefaultMultiplier := group.RateMultiplier
 		if groupDefaultMultiplier < 0 {
 			groupDefaultMultiplier = 0
 		}
 		effectiveGroupMultiplier := groupDefaultMultiplier
-		if s.UserGroupRateRepo != nil {
+		if !isFreeBilling && s.UserGroupRateRepo != nil {
 			userRate, rateErr := s.UserGroupRateRepo.GetByUserAndGroup(ctx, owner.UserID, group.ID)
 			if rateErr != nil {
 				return nil, ErrBatchImageSettlementPricingMissing
@@ -1074,7 +1082,15 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 	standardUnitPrice := unit * groupMultiplier * accountMultiplier
 	billableUnitPrice := standardUnitPrice * discountMultiplier
 	holdUnitPrice := standardUnitPrice * holdMultiplier
+	estimatedCost := billableUnitPrice * float64(len(req.Items))
+	holdAmount := holdUnitPrice * float64(len(req.Items))
+	if isFreeBilling {
+		estimatedCost = 0
+		holdAmount = 0
+		holdUnitPrice = 0
+	}
 	return &BatchImagePricingSnapshot{
+		IsFreeBilling:           isFreeBilling,
 		BaseUnitPrice:           unit,
 		GroupRateMultiplier:     groupMultiplier,
 		AccountRateMultiplier:   accountMultiplier,
@@ -1082,8 +1098,8 @@ func (s *BatchImagePublicService) resolvePricingSnapshot(ctx context.Context, ow
 		HoldMultiplier:          holdMultiplier,
 		BillableUnitPrice:       billableUnitPrice,
 		HoldUnitPrice:           holdUnitPrice,
-		EstimatedCost:           billableUnitPrice * float64(len(req.Items)),
-		HoldAmount:              holdUnitPrice * float64(len(req.Items)),
+		EstimatedCost:           estimatedCost,
+		HoldAmount:              holdAmount,
 	}, nil
 }
 

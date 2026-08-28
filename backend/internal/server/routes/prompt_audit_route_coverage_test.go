@@ -93,7 +93,7 @@ func TestResponsesWebSocketHasFirstAndSubsequentTurnPromptGates(t *testing.T) {
 	require.GreaterOrEqual(t, strings.Count(string(routeSource), `.GET("/responses"`), 2)
 	handlerSource, err := os.ReadFile(filepath.Join("..", "..", "handler", "openai_gateway_handler.go"))
 	require.NoError(t, err)
-	require.Contains(t, string(handlerSource), `checkSecurityAuditStage`)
+	require.Contains(t, string(handlerSource), `checkSecurityAuditAfterInstruction`)
 	require.Contains(t, string(handlerSource), `"first_turn"`)
 	require.Contains(t, string(handlerSource), `"subsequent_turn"`)
 	wsStart := strings.Index(string(handlerSource), `func (h *OpenAIGatewayHandler) ResponsesWebSocket`)

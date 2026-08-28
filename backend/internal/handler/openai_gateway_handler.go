@@ -328,10 +328,28 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	// Read request body
-	body, err := readLenientJSONRequestBodyWithPrealloc(c.Request, h.cfg)
+	// Read request body while retaining the untouched decoded bytes for
+	// instruction audit. Prompt Audit continues to receive the normalized body.
+	body, instructionAuditBody, bodyLease, err := readLenientJSONRequestBodyWithAuditSourceBudgetAndLimit(
+		c.Request,
+		instructionRequestBodyReadLimit(h.securityAuditCoordinator, gatewayMaxBodySize(h.cfg)),
+		instructionRequestBodyBudget(h.securityAuditCoordinator),
+	)
+	defer bodyLease.Release()
 	if err != nil {
 		if maxErr, ok := extractMaxBytesError(err); ok {
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+				decision := h.checkInstructionAudit(
+					c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+					preAuditModel, instructionAuditBody, service.IsOpenAIResponsesCompactPath(c), "http",
+				)
+				bodyLease.Release()
+				if decision != nil && !decision.AllowNextStage {
+					h.openAISecurityAuditError(c, decision)
+					return
+				}
+			}
 			h.errorResponse(c, http.StatusRequestEntityTooLarge, "invalid_request_error", buildBodyTooLargeMessage(maxErr.Limit))
 			return
 		}
@@ -344,6 +362,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return
 	}
+	preAuditModel := strings.TrimSpace(gjson.GetBytes(instructionAuditBody, "model").String())
+	if decision := h.checkInstructionAudit(
+		c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+		preAuditModel, instructionAuditBody, service.IsOpenAIResponsesCompactPath(c), "http",
+	); decision != nil && !decision.AllowNextStage {
+		bodyLease.Release()
+		h.openAISecurityAuditError(c, decision)
+		return
+	}
+	bodyLease.Release()
 
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
@@ -437,7 +465,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
-	if decision := h.checkSecurityAudit(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body); decision != nil && !decision.AllowNextStage {
+	if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, body, "http"); decision != nil && !decision.AllowNextStage {
 		h.openAISecurityAuditError(c, decision)
 		return
 	}
@@ -1840,14 +1868,40 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	wsConn.SetReadLimit(service.ResolveOpenAIWSClientReadLimitBytes(h.cfg))
 
 	firstMessageTimeout := service.ResolveOpenAIWSClientFirstMessageTimeout(h.cfg)
-	msgType, firstMessage, err := service.ReadOpenAIWSClientMessage(
+	clientReadLimit := instructionRequestBodyReadLimit(
+		h.securityAuditCoordinator, service.ResolveOpenAIWSClientReadLimitBytes(h.cfg),
+	)
+	msgType, firstMessage, firstMessageLease, err := service.ReadOpenAIWSClientMessageWithBudget(
 		ctx,
 		wsConn,
 		firstMessageTimeout,
 		coderws.StatusPolicyViolation,
 		"missing first response.create message",
+		clientReadLimit,
+		instructionRequestBodyBudget(h.securityAuditCoordinator),
 	)
+	defer firstMessageLease.Release()
 	if err != nil {
+		if _, oversized := extractMaxBytesError(err); oversized && len(firstMessage) > 0 {
+			var decision *securityaudit.Decision
+			if instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator) {
+				c.Set(securityAuditWSTurnContextKey, 1)
+				preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
+				decision = h.checkInstructionAudit(
+					c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+					preAuditModel, firstMessage, false, "first_turn",
+				)
+			}
+			firstMessageLease.Release()
+			if decision != nil && !decision.AllowNextStage {
+				writeSecurityAuditWSError(ctx, wsConn, decision)
+				closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
+				return
+			}
+			closeOpenAIClientWS(wsConn, coderws.StatusMessageTooBig, "websocket request exceeds the configured size limit")
+			return
+		}
+		firstMessageLease.Release()
 		if errors.Is(context.Cause(ctx), service.ErrOpenAIWSIngressLeaseLost) {
 			reqLog.Warn("openai.websocket_ingress_lease_lost_before_first_message", zap.Error(err))
 			closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect")
@@ -1866,18 +1920,33 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 	firstTurnStartedAt := time.Now()
 	if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+		firstMessageLease.Release()
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "unsupported websocket message type")
 		return
 	}
+	c.Set(securityAuditWSTurnContextKey, 1)
+	preAuditModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
+	if decision := h.checkInstructionAudit(
+		c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+		preAuditModel, firstMessage, false, "first_turn",
+	); decision != nil && !decision.AllowNextStage {
+		firstMessageLease.Release()
+		writeSecurityAuditWSError(ctx, wsConn, decision)
+		closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
+		return
+	}
 	if !gjson.ValidBytes(firstMessage) {
+		firstMessageLease.Release()
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
 	reqModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
 	if reqModel == "" {
+		firstMessageLease.Release()
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is required in first response.create payload")
 		return
 	}
+	firstMessageLease.Release()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	ctx = c.Request.Context()
 	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite {
@@ -1904,7 +1973,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	setOpsRequestContext(c, reqModel, true)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeWSV2))
 
-	if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, "first_turn"); decision != nil && !decision.AllowNextStage {
+	if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, reqModel, firstMessage, "first_turn"); decision != nil && !decision.AllowNextStage {
 		writeSecurityAuditWSError(ctx, wsConn, decision)
 		closeOpenAIClientWS(wsConn, securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision))
 		return
@@ -2264,16 +2333,39 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// passthrough 没有 BeforeTurn 时，AfterTurn 回退到 TurnStarted 的所属 turn 时刻。
 		var turnPricing openAIWSTurnPricing
 		hooks := &service.OpenAIWSIngressHooks{
-			ClientLifecycleContext:  clientLifecycleCtx,
-			InitialRequestModel:     reqModel,
-			InitialTurnStartedAt:    firstTurnStartedAt,
-			MaxReasoningEffort:      maxReasoningEffort,
-			ReasoningEffortMappings: reasoningEffortMappings,
-			TurnStarted:             recordTurnStart,
+			ClientLifecycleContext:    clientLifecycleCtx,
+			InitialRequestModel:       reqModel,
+			InitialTurnStartedAt:      firstTurnStartedAt,
+			MaxReasoningEffort:        maxReasoningEffort,
+			ReasoningEffortMappings:   reasoningEffortMappings,
+			InstructionReadLimitBytes: clientReadLimit,
+			InstructionBodyBudget:     instructionRequestBodyBudget(h.securityAuditCoordinator),
+			AuditOversizedInstruction: instructionAuditHasIndependentReadLimit(h.securityAuditCoordinator),
+			TurnStarted:               recordTurnStart,
+			BeforeInstructionRequest: func(turn int, payload []byte, originalModel string) error {
+				c.Set(securityAuditWSTurnContextKey, turn)
+				setCyberTurnBody(turn, payload)
+				model := strings.TrimSpace(originalModel)
+				if model == "" {
+					model = strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+				}
+				if model == "" {
+					model = reqModel
+				}
+				if decision := h.checkInstructionAudit(
+					c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses,
+					model, payload, false, "subsequent_turn",
+				); decision != nil && !decision.AllowNextStage {
+					writeSecurityAuditWSError(ctx, wsConn, decision)
+					return service.NewOpenAIWSClientCloseError(
+						securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil,
+					)
+				}
+				return nil
+			},
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
 				c.Set(securityAuditWSTurnContextKey, turn)
 				service.BeginOpsStreamTurn(c, turn)
-				setCyberTurnBody(turn, payload)
 				if turn == 1 {
 					return nil
 				}
@@ -2287,7 +2379,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				if model == "" {
 					model = reqModel
 				}
-				if decision := h.checkSecurityAuditStage(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
+				if decision := h.checkSecurityAuditAfterInstruction(c, reqLog, apiKey, subject, service.ContentModerationProtocolOpenAIResponses, model, payload, "subsequent_turn"); decision != nil && !decision.AllowNextStage {
 					writeSecurityAuditWSError(ctx, wsConn, decision)
 					return service.NewOpenAIWSClientCloseError(securityAuditWSCloseStatus(decision), securityAuditWSCloseReason(decision), nil)
 				}

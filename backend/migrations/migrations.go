@@ -32,3 +32,11 @@ import "embed"
 //
 //go:embed *.sql
 var FS embed.FS
+
+// LegacyFS contains byte-for-byte archives of migrations released by
+// ModelPort before the upstream v0.1.183 rebuild. Files below
+// modelport_legacy are audit inputs only: ApplyMigrations deliberately reads
+// only the top-level FS glob and will never execute them.
+//
+//go:embed modelport_legacy/**
+var LegacyFS embed.FS

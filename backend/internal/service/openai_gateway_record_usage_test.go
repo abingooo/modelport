@@ -343,6 +343,46 @@ func TestOpenAIGatewayServiceRecordUsage_ZeroUsageStillWritesUsageLog(t *testing
 	require.Zero(t, billingRepo.lastCmd.AccountQuotaCost)
 }
 
+func TestOpenAIGatewayServiceRecordUsage_FreeGroupKeepsRawAndAccountCost(t *testing.T) {
+	groupID := int64(44)
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
+	rateRepo := &openAIUserGroupRateRepoStub{err: errors.New("free groups must not resolve user rates")}
+	svc := newOpenAIRecordUsageServiceWithBillingRepoForTest(
+		usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{}, rateRepo,
+	)
+
+	err := svc.RecordUsage(context.Background(), &OpenAIRecordUsageInput{
+		Result: &OpenAIForwardResult{
+			RequestID: "resp_free_group",
+			Usage:     OpenAIUsage{InputTokens: 1200, OutputTokens: 300},
+			Model:     "gpt-5.1", Duration: time.Second,
+		},
+		APIKey: &APIKey{
+			ID: 1003, GroupID: &groupID, Quota: 1,
+			Group: &Group{ID: groupID, RateMultiplier: 2, IsFree: true},
+		},
+		User: &User{ID: 2003},
+		Account: &Account{
+			ID: 3003, Type: AccountTypeAPIKey,
+			Extra: map[string]any{"quota_limit": 100.0},
+		},
+		APIKeyService: &openAIRecordUsageAPIKeyQuotaStub{},
+	})
+
+	require.NoError(t, err)
+	require.Zero(t, rateRepo.calls)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Greater(t, usageRepo.lastLog.TotalCost, 0.0)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
+	require.Zero(t, usageRepo.lastLog.RateMultiplier)
+	require.NotNil(t, billingRepo.lastCmd)
+	require.Zero(t, billingRepo.lastCmd.BalanceCost)
+	require.Zero(t, billingRepo.lastCmd.APIKeyQuotaCost)
+	require.Zero(t, billingRepo.lastCmd.APIKeyRateLimitCost)
+	require.InDelta(t, usageRepo.lastLog.TotalCost, billingRepo.lastCmd.AccountQuotaCost, 1e-12)
+}
+
 func TestOpenAIGatewayServiceRecordUsage_MissingPricingRecordsZeroCostUsageLog(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}

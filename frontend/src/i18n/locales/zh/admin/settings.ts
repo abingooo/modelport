@@ -2,6 +2,13 @@ export default {
     settings: {
       title: '系统设置',
       description: '管理注册、邮箱验证、默认值和 SMTP 设置',
+      instructionAudit: {
+        title: '指令审核',
+        description: '对已配置下游分组中的请求执行指令审核。',
+        configure: '管理规则',
+        enabled: '启用指令审核',
+        summary: '有效哈希 {hashes} 条，审核分组 {groups} 个',
+      },
       tabs: {
         general: '通用设置',
         agreement: '登录条款',
@@ -591,7 +598,7 @@ export default {
           '禁用用户注册、公开页面和自助服务功能。仅管理员可以登录和管理平台。',
         siteName: '站点名称',
         siteNameHint: '显示在邮件和页面标题中',
-        siteNamePlaceholder: 'Sub2API',
+        siteNamePlaceholder: 'ModelPort',
         siteSubtitle: '站点副标题',
         siteSubtitleHint: '显示在登录和注册页面',
         siteSubtitlePlaceholder: '订阅转 API 转换平台',

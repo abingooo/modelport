@@ -30,6 +30,16 @@ type fakePromptEngine struct {
 	evaluates atomic.Int64
 }
 
+type fakeInstructionEngine struct {
+	decision *InstructionDecision
+	calls    atomic.Int64
+}
+
+func (f *fakeInstructionEngine) EvaluateInstruction(context.Context, Request) *InstructionDecision {
+	f.calls.Add(1)
+	return f.decision
+}
+
 func (f *fakePromptEngine) EffectiveMode() Mode { return f.mode }
 func (f *fakePromptEngine) Enqueue(context.Context, Request) error {
 	f.enqueues.Add(1)
@@ -173,4 +183,67 @@ func TestCoordinatorAsyncEnqueueFailuresNeverChangeResponseOrDownstreamDispatch(
 		require.Equal(t, int64(1), prompt.enqueues.Load())
 		require.Zero(t, prompt.evaluates.Load())
 	}
+}
+
+func TestCoordinatorKeepsPromptAuditPrimaryAcrossProtocols(t *testing.T) {
+	protocols := []struct {
+		name     string
+		protocol string
+		stage    string
+	}{
+		{name: "chat", protocol: "openai_chat_completions", stage: "http"},
+		{name: "responses", protocol: "openai_responses", stage: "http"},
+		{name: "messages", protocol: "anthropic_messages", stage: "http"},
+		{name: "sse", protocol: "openai_responses", stage: "http"},
+		{name: "websocket", protocol: "responses_websocket", stage: "subsequent_turn"},
+	}
+	for _, test := range protocols {
+		t.Run(test.name, func(t *testing.T) {
+			instruction := &fakeInstructionEngine{decision: &InstructionDecision{Applicable: true, Allow: true}}
+			prompt := &fakePromptEngine{mode: ModeBlocking, decision: &PromptDecision{Kind: DecisionAllow, AllowNextStage: true}}
+			legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+
+			decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), Request{
+				Protocol: test.protocol, Stage: test.stage, Body: []byte(`{"input":"test"}`),
+			})
+
+			require.True(t, decision.AllowNextStage)
+			require.Equal(t, int64(1), instruction.calls.Load())
+			require.Equal(t, int64(1), prompt.evaluates.Load())
+			require.Equal(t, int64(1), legacy.calls.Load())
+		})
+	}
+}
+
+func TestCoordinatorCompletedInstructionDoesNotDisablePromptAudit(t *testing.T) {
+	instruction := &fakeInstructionEngine{decision: &InstructionDecision{Applicable: true, Allow: true}}
+	prompt := &fakePromptEngine{mode: ModeBlocking, decision: &PromptDecision{Kind: DecisionAllow, AllowNextStage: true}}
+	legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+
+	decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), Request{
+		Protocol: "openai_responses", InstructionAuditCompleted: true,
+	})
+
+	require.True(t, decision.AllowNextStage)
+	require.Zero(t, instruction.calls.Load())
+	require.Equal(t, int64(1), prompt.evaluates.Load())
+	require.Equal(t, int64(1), legacy.calls.Load())
+}
+
+func TestCoordinatorInstructionBlockStopsDownstreamAuditors(t *testing.T) {
+	instructionDecision := &InstructionDecision{
+		Applicable: true, Allow: false, HTTPStatus: http.StatusForbidden,
+		ErrorCode: InstructionErrorCodeRejected, ClientMessage: InstructionClientMessage,
+	}
+	instruction := &fakeInstructionEngine{decision: instructionDecision}
+	prompt := &fakePromptEngine{mode: ModeBlocking, decision: &PromptDecision{Kind: DecisionAllow, AllowNextStage: true}}
+	legacy := &fakeLegacyEngine{decision: &LegacyDecision{Allowed: true}}
+
+	decision := NewCoordinatorWithInstruction(legacy, prompt, instruction).Check(context.Background(), Request{})
+
+	require.False(t, decision.AllowNextStage)
+	require.Same(t, instructionDecision, decision.Instruction)
+	require.Equal(t, int64(1), instruction.calls.Load())
+	require.Zero(t, prompt.evaluates.Load())
+	require.Zero(t, legacy.calls.Load())
 }

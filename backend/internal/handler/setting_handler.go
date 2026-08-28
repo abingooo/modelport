@@ -18,13 +18,25 @@ type SettingHandler struct {
 	settingService           *service.SettingService
 	notificationEmailService *service.NotificationEmailService
 	version                  string
+	upstreamVersion          string
 }
 
 // NewSettingHandler 创建公开设置处理器
 func NewSettingHandler(settingService *service.SettingService, version string) *SettingHandler {
+	if settingService != nil {
+		settingService.SetVersion(version)
+	}
 	return &SettingHandler{
 		settingService: settingService,
 		version:        version,
+	}
+}
+
+// SetUpstreamVersion attaches the immutable Sub2API baseline for this build.
+func (h *SettingHandler) SetUpstreamVersion(version string) {
+	h.upstreamVersion = strings.TrimSpace(version)
+	if h.settingService != nil {
+		h.settingService.SetUpstreamVersion(h.upstreamVersion)
 	}
 }
 
@@ -96,6 +108,7 @@ func (h *SettingHandler) GetPublicSettings(c *gin.Context) {
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
 		Version:                             h.version,
+		UpstreamVersion:                     h.upstreamVersion,
 		ServerTimezone:                      timezone.Name(),
 		ServerUTCOffset:                     timezone.UTCOffset(),
 		BalanceLowNotifyEnabled:             settings.BalanceLowNotifyEnabled,

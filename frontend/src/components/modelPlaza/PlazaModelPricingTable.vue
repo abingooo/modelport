@@ -303,6 +303,8 @@ const props = defineProps<{
   platform?: string
   /** 分组默认倍率。 */
   rateMultiplier: number
+  /** 免费分组保留配置倍率，但所有用户实付展示为 0。 */
+  isFree?: boolean
   /** 用户专属倍率;与默认不同,实付价按此计算并划线展示原倍率。 */
   userRateMultiplier?: number | null
   /** 生图独立倍率:true 时图片计费模型的实付倍率取 imageRateMultiplier,不取分组/专属倍率。 */
@@ -344,9 +346,9 @@ const sortedModels = computed(() => {
   })
 })
 
-const effectiveRate = computed(() => props.userRateMultiplier ?? props.rateMultiplier)
+const effectiveRate = computed(() => props.isFree ? 0 : (props.userRateMultiplier ?? props.rateMultiplier))
 const hasCustomRate = computed(
-  () => props.userRateMultiplier != null && props.userRateMultiplier !== props.rateMultiplier
+  () => !props.isFree && props.userRateMultiplier != null && props.userRateMultiplier !== props.rateMultiplier
 )
 
 function billingMode(m: PlazaModel): BillingMode {
@@ -395,7 +397,7 @@ function paidPerMillion(value: number | null | undefined, period: PlazaTimePrici
 
 /** 图片计费模型且分组开启生图独立倍率:实付倍率取独立倍率,与计费口径一致。 */
 function usesIndependentImageRate(m: PlazaModel): boolean {
-  return billingMode(m) === BILLING_MODE_IMAGE && props.imageRateIndependent === true
+  return !props.isFree && billingMode(m) === BILLING_MODE_IMAGE && props.imageRateIndependent === true
 }
 
 /** 按次/按图片行的生效倍率。 */

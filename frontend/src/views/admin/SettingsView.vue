@@ -7243,6 +7243,40 @@
               <Toggle v-model="form.risk_control_enabled" />
             </div>
 
+            <div class="border-t border-gray-100 pt-5 dark:border-dark-700">
+              <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <p class="font-medium text-gray-900 dark:text-white">
+                      {{ t('admin.settings.instructionAudit.enabled') }}
+                    </p>
+                    <router-link
+                      to="/admin/instruction-audit"
+                      class="text-xs font-medium text-primary-600 hover:underline dark:text-primary-400"
+                    >
+                      {{ t('admin.settings.instructionAudit.configure') }}
+                    </router-link>
+                  </div>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t('admin.settings.instructionAudit.description') }}
+                  </p>
+                  <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                    {{ t('admin.settings.instructionAudit.summary', {
+                      hashes: instructionAuditOverview?.active_hash_count ?? 0,
+                      groups: instructionAuditOverview?.active_scope_count ?? 0,
+                    }) }}
+                  </p>
+                </div>
+                <Toggle
+                  :model-value="Boolean(instructionAuditOverview && instructionAuditOverview.mode !== 'off')"
+                  :disabled="instructionAuditSaving || instructionAuditLoading || !instructionAuditOverview"
+                  :aria-label="t('admin.settings.instructionAudit.enabled')"
+                  class="disabled:cursor-not-allowed disabled:opacity-50"
+                  @update:model-value="requestInstructionAuditEnabled"
+                />
+              </div>
+            </div>
+
             <div class="flex items-center justify-between">
               <div>
                 <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -7744,7 +7778,7 @@
                       v-model="form.payment_product_name_prefix"
                       type="text"
                       class="input"
-                      placeholder="Sub2API"
+                      :placeholder="DEFAULT_SITE_NAME"
                     />
                   </div>
                   <div>
@@ -7766,7 +7800,7 @@
                       class="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-600 dark:border-dark-600 dark:bg-dark-800 dark:text-gray-300"
                     >
                       {{
-                        (form.payment_product_name_prefix || "Sub2API") +
+                        (form.payment_product_name_prefix || DEFAULT_SITE_NAME) +
                         " 100 " +
                         (form.payment_product_name_suffix || "CNY")
                       }}
@@ -8797,9 +8831,12 @@ import {
 import TotpStepUpDialog from "@/components/auth/TotpStepUpDialog.vue";
 import { affiliatesAPI, type AffiliateAdminEntry, type SimpleUser as AffiliateSimpleUser } from "@/api/admin/affiliates";
 import { extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiError";
+import { DEFAULT_SITE_NAME } from "@/utils/branding";
 import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { normalizeVisibleMethod } from "@/components/payment/paymentFlow";
+import instructionAuditV2API from "@/features/instruction-audit/v2Api";
+import type { InstructionV2Config } from "@/features/instruction-audit/v2Types";
 import {
   isRegistrationEmailSuffixDomainValid,
   normalizeRegistrationEmailSuffixDomain,
@@ -8819,6 +8856,9 @@ const appStore = useAppStore();
 const settingsStepUp = useStepUp();
 const adminSettingsStore = useAdminSettingsStore();
 const isZhLocale = computed(() => locale.value.startsWith("zh"));
+const instructionAuditOverview = ref<InstructionV2Config | null>(null);
+const instructionAuditLoading = ref(false);
+const instructionAuditSaving = ref(false);
 
 function localText(zh: string, en: string): string {
   return isZhLocale.value ? zh : en;
@@ -9532,7 +9572,7 @@ const form = reactive<SettingsForm>({
   default_subscriptions: [],
   force_email_on_third_party_signup: false,
   default_user_rpm_limit: 0,
-  site_name: "Sub2API",
+  site_name: "ModelPort",
   site_logo: "",
   site_subtitle: "Subscription to API Conversion Platform",
   api_base_url: "",
@@ -10905,6 +10945,62 @@ async function loadSettings() {
     );
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadInstructionAuditOverview() {
+  instructionAuditLoading.value = true;
+  try {
+    instructionAuditOverview.value = await instructionAuditV2API.getConfig();
+  } catch (err: unknown) {
+    appStore.showError(
+      extractI18nErrorMessage(
+        err,
+        t,
+        "admin.instructionAudit.errors",
+        t("common.error"),
+      ),
+    );
+  } finally {
+    instructionAuditLoading.value = false;
+  }
+}
+
+async function requestInstructionAuditEnabled(enabled: boolean) {
+  const current = instructionAuditOverview.value;
+  if (!current || instructionAuditSaving.value) return;
+
+  instructionAuditSaving.value = true;
+  try {
+    instructionAuditOverview.value = await instructionAuditV2API.updateConfig({
+      expected_config_version: current.config_version,
+      mode: enabled ? "enforce" : "off",
+      review_criteria: current.review_criteria,
+      confidence_threshold: current.confidence_threshold,
+      ai_input_max_chars: current.ai_input_max_chars,
+      ai_global_concurrency: current.ai_global_concurrency,
+      ai_queue_wait_ms: current.ai_queue_wait_ms,
+      ai_total_timeout_ms: current.ai_total_timeout_ms,
+      ai_cache_ttl_seconds: current.ai_cache_ttl_seconds,
+      event_retention_days: current.event_retention_days,
+      evidence_retention_days: current.evidence_retention_days,
+      raw_full_max_bytes: current.raw_full_max_bytes,
+      allow_empty_fields: current.allow_empty_fields,
+      async_retry_schedule_seconds: current.async_retry_schedule_seconds,
+    });
+    appStore.showSuccess(t("common.saved"));
+  } catch (err: unknown) {
+    appStore.showError(
+      extractI18nErrorMessage(
+        err,
+        t,
+        "admin.instructionAudit.errors",
+        t("common.error"),
+      ),
+    );
+    await loadInstructionAuditOverview();
+  } finally {
+    instructionAuditSaving.value = false;
   }
 }
 
@@ -12515,6 +12611,7 @@ async function handleDeleteProvider() {
 
 onMounted(() => {
   loadSettings();
+  loadInstructionAuditOverview();
   loadSubscriptionGroups();
   loadAdminApiKey();
   loadUpstreamBillingProbeSettings();

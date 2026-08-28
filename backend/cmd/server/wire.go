@@ -25,10 +25,11 @@ import (
 )
 
 type Application struct {
-	Server        *http.Server
-	PromptAudit   *securityaudit.PromptService
-	PluginManager *service.PluginManager
-	Cleanup       func()
+	Server           *http.Server
+	PromptAudit      *securityaudit.PromptService
+	InstructionAudit *securityaudit.InstructionV2Service
+	PluginManager    *service.PluginManager
+	Cleanup          func()
 }
 
 func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
@@ -58,7 +59,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "PromptAudit", "PluginManager", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PromptAudit", "InstructionAudit", "PluginManager", "Cleanup"),
 	)
 	return nil, nil
 }
@@ -127,6 +128,8 @@ func provideCleanup(
 	auditLog *service.AuditLogService,
 	openAIAutoReset *service.OpenAIQuotaAutoResetService,
 	promptAudit *securityaudit.PromptService,
+	instructionAudit *securityaudit.InstructionV2Service,
+	lottery *service.LotteryService,
 	pluginManager *service.PluginManager,
 ) func() {
 	return func() {
@@ -179,6 +182,18 @@ func provideCleanup(
 			{"PromptAuditService", func() error {
 				if promptAudit != nil {
 					return promptAudit.Shutdown(ctx)
+				}
+				return nil
+			}},
+			{"InstructionAuditService", func() error {
+				if instructionAudit != nil {
+					return instructionAudit.Shutdown(ctx)
+				}
+				return nil
+			}},
+			{"LotteryService", func() error {
+				if lottery != nil {
+					lottery.Stop()
 				}
 				return nil
 			}},

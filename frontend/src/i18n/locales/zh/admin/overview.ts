@@ -773,6 +773,14 @@ export default {
     groups: {
       title: '分组管理',
       description: '管理 API 密钥分组和费率配置',
+      freeBilling: {
+        title: '计费模式',
+        standard: '标准计费',
+        free: '免费',
+        badge: '免费',
+        hint: '免费模式下用户实扣、订阅用量和金额配额均为 0；倍率与价格配置仍会保留。',
+        confirm: '确认启用免费模式？该分组的请求仍会记录真实用量与成本，但不会扣除用户余额或订阅额度。'
+      },
       searchGroups: '搜索分组...',
       createGroup: '创建分组',
       editGroup: '编辑分组',

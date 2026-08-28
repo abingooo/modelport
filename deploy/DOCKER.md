@@ -13,6 +13,18 @@ docker run -d \
   weishaw/sub2api:latest
 ```
 
+The image defaults to the unprivileged `sub2api` user (UID/GID `1000:1000`).
+Named volumes are initialized with the image's writable data directory. For a
+host bind mount, prepare the directory before the first start:
+
+```bash
+mkdir -p data
+chown -R 1000:1000 data
+```
+
+An operator may explicitly run the image as root for a one-time ownership
+repair; normal application containers should use the image default user.
+
 ## Docker Compose
 
 ```yaml

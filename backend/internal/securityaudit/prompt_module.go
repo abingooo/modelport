@@ -3,6 +3,13 @@ package securityaudit
 import "github.com/google/wire"
 
 var ProviderSet = wire.NewSet(
+	NewInstructionRepository,
+	NewInstructionEvidenceCipher,
+	ProvideInstructionService,
+	NewInstructionV2Repository,
+	ProvideInstructionV2Service,
+	wire.Bind(new(InstructionEngine), new(*InstructionV2Service)),
+	NewInstructionV2AdminHandler,
 	NewPostgreSQLRepository,
 	wire.Bind(new(JobRepository), new(*PostgreSQLRepository)),
 	wire.Bind(new(EventRepository), new(*PostgreSQLRepository)),
@@ -18,6 +25,6 @@ var ProviderSet = wire.NewSet(
 	wire.Bind(new(PromptEngine), new(*PromptService)),
 	wire.Bind(new(PromptAdminService), new(*PromptService)),
 	NewLegacyModerationAdapter,
-	NewCoordinator,
+	NewCoordinatorWithInstruction,
 	NewPromptAdminHandler,
 )

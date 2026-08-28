@@ -5,11 +5,13 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +22,7 @@ import (
 )
 
 const redisImageTag = "redis:8.4-alpine"
+const externalRedisAddressEnv = "SUB2API_TEST_REDIS_ADDR"
 
 func TestRateLimiterSetsTTLAndDoesNotRefresh(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -91,6 +94,10 @@ func performRequest(router *gin.Engine) *httptest.ResponseRecorder {
 
 func startRedis(t *testing.T, ctx context.Context) *redis.Client {
 	t.Helper()
+	if address := strings.TrimSpace(os.Getenv(externalRedisAddressEnv)); address != "" {
+		requireLoopbackRedisAddress(t, address)
+		return openRateLimiterTestRedis(t, ctx, address)
+	}
 	ensureDockerAvailable(t)
 
 	redisContainer, err := tcredis.Run(ctx, redisImageTag)
@@ -104,10 +111,12 @@ func startRedis(t *testing.T, ctx context.Context) *redis.Client {
 	redisPort, err := redisContainer.MappedPort(ctx, "6379/tcp")
 	require.NoError(t, err)
 
-	rdb := redis.NewClient(&redis.Options{
-		Addr: fmt.Sprintf("%s:%d", redisHost, redisPort.Int()),
-		DB:   0,
-	})
+	return openRateLimiterTestRedis(t, ctx, fmt.Sprintf("%s:%d", redisHost, redisPort.Int()))
+}
+
+func openRateLimiterTestRedis(t *testing.T, ctx context.Context, address string) *redis.Client {
+	t.Helper()
+	rdb := redis.NewClient(&redis.Options{Addr: address, DB: 0})
 	require.NoError(t, rdb.Ping(ctx).Err())
 
 	t.Cleanup(func() {
@@ -115,6 +124,16 @@ func startRedis(t *testing.T, ctx context.Context) *redis.Client {
 	})
 
 	return rdb
+}
+
+func requireLoopbackRedisAddress(t *testing.T, address string) {
+	t.Helper()
+	host, port, err := net.SplitHostPort(address)
+	require.NoError(t, err, externalRedisAddressEnv+" must be a host:port address")
+	require.NotEmpty(t, port)
+	ip := net.ParseIP(host)
+	require.True(t, strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback()),
+		externalRedisAddressEnv+" must use a loopback host")
 }
 
 func ensureDockerAvailable(t *testing.T) {

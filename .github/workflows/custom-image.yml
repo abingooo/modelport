@@ -1,0 +1,587 @@
+name: ModelPort Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Four-part ModelPort version (for example, 0.1.183.1)'
+        required: true
+        type: string
+      expected_sha:
+        description: 'Exact 40-character production commit to release'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: modelport-release
+  cancel-in-progress: false
+
+env:
+  RELEASE_IMAGE: ghcr.io/abingooo/modelport
+  EXPECTED_REPOSITORY: abingooo/modelport
+  UPSTREAM_SHA: e8cb019fabf8b55199436229044cbf9aa7a82564
+  LEGACY_MODELPORT_TAG: custom-v0.1.176.2
+  LEGACY_MODELPORT_SHA: b6cb4d0c8b47d7561631ab61418e1b6fdeb379bc
+  NODE_IMAGE: node:24-alpine@sha256:e67514e5d0f6c46656005e1b693b2ec9d52e80b641307de684d4a015ba7a4eaf
+  GOLANG_IMAGE: golang:1.27.0-alpine@sha256:4c9fe60190a2a3350ddc51de80d0224b8a6698d12bdfc999fee45ea9d6c46dbc
+  ALPINE_IMAGE: alpine:3.21@sha256:48b0309ca019d89d40f670aa1bc06e426dc0931948452e8491e3d65087abc07d
+  POSTGRES_IMAGE: postgres:18-alpine@sha256:d3e1620b530c944afa6e887d22eb899824da68e19c52024bf98f5220c88a65b2
+  REDIS_IMAGE: redis:8-alpine@sha256:becdda6c7f4b3fb42e42fd7f120bbf5c54c4caaaf16f26da24e4563d2c1f0576
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Checkout production commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate immutable release inputs
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION}"
+          tag="custom-v${version}"
+          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
+          test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_REF}" = "refs/heads/production"
+          test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          git fetch --no-tags origin production
+          git fetch --force --no-tags origin \
+            "refs/tags/${LEGACY_MODELPORT_TAG}:refs/tags/${LEGACY_MODELPORT_TAG}"
+          test "${GITHUB_SHA}" = "$(git rev-parse origin/production)"
+          git merge-base --is-ancestor "${UPSTREAM_SHA}" "${GITHUB_SHA}"
+          test "$(git rev-parse "${LEGACY_MODELPORT_TAG}^{commit}")" = "${LEGACY_MODELPORT_SHA}"
+          git cat-file -e "${LEGACY_MODELPORT_SHA}^{commit}"
+          test "$(tr -d '[:space:]' < custom/VERSION)" = "${version}"
+          test "$(tr -d '[:space:]' < backend/cmd/server/VERSION)" = "${version}"
+          test "$(tr -d '[:space:]' < backend/cmd/server/UPSTREAM_VERSION)" = "0.1.183"
+          test -s "docs/releases/${version}.md"
+          git diff --check "${UPSTREAM_SHA}" "${GITHUB_SHA}"
+          if ! gh api "repos/${GITHUB_REPOSITORY}/immutable-releases" >/dev/null; then
+            echo "GitHub Immutable Releases must be enabled before publishing ModelPort" >&2
+            exit 1
+          fi
+          /bin/sh custom/release/assert-github-slots-absent \
+            origin "${tag}" "${GITHUB_REPOSITORY}"
+          {
+            echo "version=${version}"
+            echo "tag=${tag}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Scan repository for committed secrets
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          format: table
+          exit-code: '1'
+
+      - name: Scan Dockerfiles for high-risk configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify Go toolchain
+        run: go version | grep -q 'go1.27.0'
+
+      - name: Backend unit and integration tests
+        working-directory: backend
+        run: |
+          make test-unit
+          make test-integration
+
+      - name: Critical race tests
+        working-directory: backend
+        run: go test -race ./internal/service ./internal/repository ./internal/securityaudit -run 'Lottery|Instruction|Free|APIKey' -count=1
+
+      - name: Backend static analysis
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
+        with:
+          version: v2.13
+          args: --timeout=30m
+          working-directory: backend
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 9
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '20'
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend tests and production build
+        working-directory: frontend
+        run: |
+          pnpm run lint:check
+          pnpm run typecheck
+          pnpm run test:run
+          pnpm run build
+
+      - name: Deployment and updater tests
+        run: |
+          /bin/sh deploy/tests/docker-compose-security-test.sh
+          /bin/sh deploy/tests/docker-compose-gateway-env-test.sh
+          /bin/sh deploy/tests/docker-runtime-resources-test.sh
+          /bin/sh deploy/tests/modelport-compose-contract-test.sh
+          /bin/sh deploy/tests/modelport-release-contract-test.sh
+          /bin/sh custom/update/test-modelport-docker-updater.sh
+
+  image:
+    name: Build, verify, and publish immutable image
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+      image: ${{ env.RELEASE_IMAGE }}
+      version: ${{ needs.quality.outputs.version }}
+      tag: ${{ needs.quality.outputs.tag }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Resolve reproducible image metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          created="$(git show -s --format=%cI "${GITHUB_SHA}")"
+          test -n "${created}"
+          printf 'created=%s\n' "${created}" >> "${GITHUB_OUTPUT}"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Build release candidate locally
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          build-args: |
+            VERSION=${{ needs.quality.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.metadata.outputs.created }}
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            GOLANG_IMAGE=${{ env.GOLANG_IMAGE }}
+            ALPINE_IMAGE=${{ env.ALPINE_IMAGE }}
+            POSTGRES_IMAGE=${{ env.POSTGRES_IMAGE }}
+          tags: modelport-release-candidate:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.quality.outputs.tag }}
+            org.opencontainers.image.created=${{ steps.metadata.outputs.created }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Inspect local release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          candidate="modelport-release-candidate:${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{.Architecture}}' "${candidate}")" = amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${candidate}")" = "${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${candidate}")" = "${{ needs.quality.outputs.tag }}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${candidate}")" = "https://github.com/${GITHUB_REPOSITORY}"
+          test "$(docker image inspect --format '{{.Config.User}}' "${candidate}")" = sub2api
+
+      - name: Scan local image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: modelport-release-candidate:${{ github.sha }}
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+      - name: Generate SBOM from verified image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        with:
+          image: modelport-release-candidate:${{ github.sha }}
+          format: spdx-json
+          output-file: modelport-sbom.spdx.json
+          upload-artifact: false
+
+      - name: Smoke test disposable PostgreSQL and Redis deployment
+        shell: bash
+        env:
+          VERSION: ${{ needs.quality.outputs.version }}
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker rm -f modelport-smoke modelport-smoke-postgres modelport-smoke-redis >/dev/null 2>&1 || true
+            docker network rm modelport-smoke >/dev/null 2>&1 || true
+            docker volume rm modelport-smoke-data >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          docker network create modelport-smoke
+          docker volume create modelport-smoke-data
+          docker run -d --name modelport-smoke-postgres --network modelport-smoke \
+            -e POSTGRES_USER=modelport -e POSTGRES_PASSWORD=modelport-smoke-password \
+            -e POSTGRES_DB=modelport "${POSTGRES_IMAGE}"
+          docker run -d --name modelport-smoke-redis --network modelport-smoke "${REDIS_IMAGE}"
+          until docker exec modelport-smoke-postgres pg_isready -U modelport -d modelport >/dev/null 2>&1; do sleep 1; done
+          smoke_jwt_secret="$(openssl rand -hex 32)"
+          smoke_totp_key="$(openssl rand -hex 32)"
+          docker run -d --name modelport-smoke --network modelport-smoke -p 18080:8080 \
+            -v modelport-smoke-data:/app/data \
+            -e AUTO_SETUP=true -e SERVER_HOST=0.0.0.0 -e SERVER_PORT=8080 \
+            -e DATABASE_HOST=modelport-smoke-postgres -e DATABASE_PORT=5432 \
+            -e DATABASE_USER=modelport -e DATABASE_PASSWORD=modelport-smoke-password \
+            -e DATABASE_DBNAME=modelport -e DATABASE_SSLMODE=disable \
+            -e REDIS_HOST=modelport-smoke-redis -e REDIS_PORT=6379 \
+            -e ADMIN_EMAIL=release-smoke@example.invalid -e ADMIN_PASSWORD=release-smoke-password \
+            -e JWT_SECRET="${smoke_jwt_secret}" \
+            -e TOTP_ENCRYPTION_KEY="${smoke_totp_key}" \
+            "modelport-release-candidate:${GITHUB_SHA}"
+          test "$(docker exec modelport-smoke id -u)" = 1000
+          healthy=false
+          for _ in $(seq 1 90); do
+            if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:18080/health >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+          if [ "${healthy}" != true ]; then
+            docker logs modelport-smoke
+            exit 1
+          fi
+          curl --fail --silent --show-error http://127.0.0.1:18080/api/v1/settings/public \
+            | jq -e --arg version "${VERSION}" '.data.version == $version and .data.upstream_version == "0.1.183"'
+
+      - name: Log in to GHCR after verification
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable version and commit tags
+        id: publish
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.quality.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version_ref="${RELEASE_IMAGE}:${RELEASE_TAG}"
+          commit_ref="${RELEASE_IMAGE}:sha-${GITHUB_SHA}"
+          /bin/sh custom/release/assert-image-tags-absent \
+            "${version_ref}" "${commit_ref}"
+          candidate="modelport-release-candidate:${GITHUB_SHA}"
+          docker tag "${candidate}" "${version_ref}"
+          docker tag "${candidate}" "${commit_ref}"
+          docker push "${version_ref}"
+          docker push "${commit_ref}"
+          version_digest="$(docker buildx imagetools inspect "${version_ref}" --format '{{json .Manifest}}' | jq -r '.digest')"
+          commit_digest="$(docker buildx imagetools inspect "${commit_ref}" --format '{{json .Manifest}}' | jq -r '.digest')"
+          [[ "${version_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "${commit_digest}" = "${version_digest}"
+          echo "digest=${version_digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.RELEASE_IMAGE }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          push-to-registry: true
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@4651f806c01d8637787e274ac3bdf724ef169f34 # v3
+        with:
+          subject-name: ${{ env.RELEASE_IMAGE }}
+          subject-digest: ${{ steps.publish.outputs.digest }}
+          sbom-path: modelport-sbom.spdx.json
+          push-to-registry: true
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign and verify exact image digest
+        shell: bash
+        env:
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${RELEASE_IMAGE}@${DIGEST}"
+          cosign verify \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/custom-image.yml@refs/heads/production" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${RELEASE_IMAGE}@${DIGEST}"
+
+      - name: Record immutable metadata
+        shell: bash
+        env:
+          VERSION: ${{ needs.quality.outputs.version }}
+          RELEASE_TAG: ${{ needs.quality.outputs.tag }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          set -euo pipefail
+          printf '%s\n' "${DIGEST}" > manifest-digest.txt
+          printf '%s\n' "${GITHUB_SHA}" > release-revision.txt
+          jq -n \
+            --arg version "${VERSION}" \
+            --arg tag "${RELEASE_TAG}" \
+            --arg image "${RELEASE_IMAGE}" \
+            --arg digest "${DIGEST}" \
+            --arg revision "${GITHUB_SHA}" \
+            --arg upstream "${UPSTREAM_SHA}" \
+            --arg node_image "${NODE_IMAGE}" \
+            --arg golang_image "${GOLANG_IMAGE}" \
+            --arg alpine_image "${ALPINE_IMAGE}" \
+            --arg postgres_image "${POSTGRES_IMAGE}" \
+            --arg redis_image "${REDIS_IMAGE}" \
+            '{version:$version,tag:$tag,image:$image,digest:$digest,revision:$revision,
+              upstream_revision:$upstream,platforms:["linux/amd64"],
+              base_images:{node:$node_image,golang:$golang_image,alpine:$alpine_image,
+                postgres:$postgres_image,redis:$redis_image}}' \
+            > release-metadata.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: modelport-release-assets
+          path: |
+            manifest-digest.txt
+            release-revision.txt
+            release-metadata.json
+            modelport-sbom.spdx.json
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish Git tag and GitHub Release
+    needs: [quality, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    outputs:
+      url: ${{ steps.github-release.outputs.url }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: modelport-release-assets
+          path: release-assets
+
+      - name: Assemble and verify all release assets
+        shell: bash
+        env:
+          VERSION: ${{ needs.quality.outputs.version }}
+          RELEASE_TAG: ${{ needs.quality.outputs.tag }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          install -m 0755 custom/update/modelport-docker-updater release-assets/modelport-docker-updater
+          install -m 0644 custom/update/modelport-update.service release-assets/modelport-update.service
+          install -m 0644 custom/update/modelport-update.path release-assets/modelport-update.path
+          install -m 0644 custom/server-compose.override.yml release-assets/modelport-compose.override.yml
+          cd release-assets
+          grep -Eq '^sha256:[0-9a-f]{64}$' manifest-digest.txt
+          test "$(cat manifest-digest.txt)" = "${DIGEST}"
+          grep -Eq '^[0-9a-f]{40}$' release-revision.txt
+          test "$(cat release-revision.txt)" = "${GITHUB_SHA}"
+          jq -e \
+            --arg version "${VERSION}" \
+            --arg tag "${RELEASE_TAG}" \
+            --arg image "${RELEASE_IMAGE}" \
+            --arg digest "${DIGEST}" \
+            --arg revision "${GITHUB_SHA}" \
+            --arg upstream "${UPSTREAM_SHA}" \
+            --arg node_image "${NODE_IMAGE}" \
+            --arg golang_image "${GOLANG_IMAGE}" \
+            --arg alpine_image "${ALPINE_IMAGE}" \
+            --arg postgres_image "${POSTGRES_IMAGE}" \
+            --arg redis_image "${REDIS_IMAGE}" \
+            '.version == $version and .tag == $tag and .image == $image and
+             .digest == $digest and .revision == $revision and
+             .upstream_revision == $upstream and .platforms == ["linux/amd64"] and
+             .base_images == {node:$node_image,golang:$golang_image,alpine:$alpine_image,
+               postgres:$postgres_image,redis:$redis_image}' \
+            release-metadata.json
+          sha256sum \
+            manifest-digest.txt \
+            release-revision.txt \
+            release-metadata.json \
+            modelport-sbom.spdx.json \
+            modelport-docker-updater \
+            modelport-update.service \
+            modelport-update.path \
+            modelport-compose.override.yml \
+            > release-assets.sha256
+          sha256sum --check release-assets.sha256
+
+      - name: Revalidate immutable Git tag and Release slots
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.quality.outputs.tag }}
+        run: |
+          set -euo pipefail
+          /bin/sh custom/release/assert-github-slots-absent \
+            origin "${RELEASE_TAG}" "${GITHUB_REPOSITORY}"
+
+      - name: Publish immutable release
+        id: github-release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ${{ needs.quality.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ModelPort ${{ needs.quality.outputs.version }}
+          body_path: docs/releases/${{ needs.quality.outputs.version }}.md
+          draft: false
+          prerelease: false
+          make_latest: false
+          overwrite_files: false
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/manifest-digest.txt
+            release-assets/release-revision.txt
+            release-assets/release-metadata.json
+            release-assets/release-assets.sha256
+            release-assets/modelport-sbom.spdx.json
+            release-assets/modelport-docker-updater
+            release-assets/modelport-update.service
+            release-assets/modelport-update.path
+            release-assets/modelport-compose.override.yml
+
+  verify-release:
+    name: Verify public release without production access
+    needs: [quality, image, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Verify anonymous assets, tags, digest, and signature
+        shell: bash
+        env:
+          VERSION: ${{ needs.quality.outputs.version }}
+          RELEASE_TAG: ${{ needs.quality.outputs.tag }}
+          DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          release_json="$(curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}")"
+          test "$(jq -r '.tag_name' <<< "${release_json}")" = "${RELEASE_TAG}"
+          test "$(jq -r '.draft' <<< "${release_json}")" = false
+          test "$(jq -r '.prerelease' <<< "${release_json}")" = false
+          test "$(jq -r '.immutable' <<< "${release_json}")" = true
+          test "$(jq -r '.target_commitish' <<< "${release_json}")" = "${GITHUB_SHA}"
+          tag_json="$(curl --fail --silent --show-error --location \
+            --proto '=https' --proto-redir '=https' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}")"
+          test "$(jq -r '.object.type' <<< "${tag_json}")" = commit
+          test "$(jq -r '.object.sha' <<< "${tag_json}")" = "${GITHUB_SHA}"
+          base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}"
+          mkdir release-assets
+          for asset in \
+            manifest-digest.txt release-revision.txt release-metadata.json release-assets.sha256 \
+            modelport-sbom.spdx.json modelport-docker-updater \
+            modelport-update.service modelport-update.path \
+            modelport-compose.override.yml; do
+            test "$(jq --arg asset "${asset}" '[.assets[] | select(.name == $asset)] | length' \
+              <<< "${release_json}")" = 1
+            curl --fail --silent --show-error --location \
+              --proto '=https' --proto-redir '=https' \
+              "${base}/${asset}" --output "release-assets/${asset}"
+          done
+          cd release-assets
+          sha256sum --check release-assets.sha256
+          grep -Eq '^sha256:[0-9a-f]{64}$' manifest-digest.txt
+          test "$(cat manifest-digest.txt)" = "${DIGEST}"
+          grep -Eq '^[0-9a-f]{40}$' release-revision.txt
+          test "$(cat release-revision.txt)" = "${GITHUB_SHA}"
+          jq -e \
+            --arg version "${VERSION}" \
+            --arg tag "${RELEASE_TAG}" \
+            --arg image "${RELEASE_IMAGE}" \
+            --arg digest "${DIGEST}" \
+            --arg revision "${GITHUB_SHA}" \
+            --arg upstream "${UPSTREAM_SHA}" \
+            --arg node_image "${NODE_IMAGE}" \
+            --arg golang_image "${GOLANG_IMAGE}" \
+            --arg alpine_image "${ALPINE_IMAGE}" \
+            --arg postgres_image "${POSTGRES_IMAGE}" \
+            --arg redis_image "${REDIS_IMAGE}" \
+            '.version == $version and .tag == $tag and .image == $image and
+             .digest == $digest and .revision == $revision and
+             .upstream_revision == $upstream and .platforms == ["linux/amd64"] and
+             .base_images == {node:$node_image,golang:$golang_image,alpine:$alpine_image,
+               postgres:$postgres_image,redis:$redis_image}' \
+            release-metadata.json
+          cd ..
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          for ref in "${RELEASE_IMAGE}:${RELEASE_TAG}" "${RELEASE_IMAGE}:sha-${GITHUB_SHA}"; do
+            resolved="$(docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' | jq -r '.digest')"
+            test "${resolved}" = "${DIGEST}"
+          done
+          docker pull "${RELEASE_IMAGE}@${DIGEST}"
+          test "$(docker image inspect --format '{{.Architecture}}' "${RELEASE_IMAGE}@${DIGEST}")" = amd64
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${RELEASE_IMAGE}@${DIGEST}")" = "${GITHUB_SHA}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${RELEASE_IMAGE}@${DIGEST}")" = "${RELEASE_TAG}"
+          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${RELEASE_IMAGE}@${DIGEST}")" = "https://github.com/${GITHUB_REPOSITORY}"
+          cosign verify \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/custom-image.yml@refs/heads/production" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${RELEASE_IMAGE}@${DIGEST}"

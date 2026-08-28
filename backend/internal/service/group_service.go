@@ -64,6 +64,7 @@ type CreateGroupRequest struct {
 	Name                 string   `json:"name"`
 	Description          string   `json:"description"`
 	RateMultiplier       float64  `json:"rate_multiplier"`
+	IsFree               bool     `json:"is_free"`
 	IsExclusive          bool     `json:"is_exclusive"`
 	AllowImageGeneration bool     `json:"allow_image_generation"`
 	ImageRateIndependent bool     `json:"image_rate_independent"`
@@ -75,6 +76,7 @@ type UpdateGroupRequest struct {
 	Name                 *string  `json:"name"`
 	Description          *string  `json:"description"`
 	RateMultiplier       *float64 `json:"rate_multiplier"`
+	IsFree               *bool    `json:"is_free"`
 	IsExclusive          *bool    `json:"is_exclusive"`
 	Status               *string  `json:"status"`
 	AllowImageGeneration *bool    `json:"allow_image_generation"`
@@ -120,6 +122,7 @@ func (s *GroupService) Create(ctx context.Context, req CreateGroupRequest) (*Gro
 		Description:          req.Description,
 		Platform:             PlatformAnthropic,
 		RateMultiplier:       req.RateMultiplier,
+		IsFree:               req.IsFree,
 		IsExclusive:          req.IsExclusive,
 		Status:               StatusActive,
 		SubscriptionType:     SubscriptionTypeStandard,
@@ -189,6 +192,9 @@ func (s *GroupService) Update(ctx context.Context, id int64, req UpdateGroupRequ
 	if req.RateMultiplier != nil {
 		group.RateMultiplier = *req.RateMultiplier
 	}
+	if req.IsFree != nil {
+		group.IsFree = *req.IsFree
+	}
 
 	if req.IsExclusive != nil {
 		group.IsExclusive = *req.IsExclusive
@@ -255,6 +261,7 @@ func (s *GroupService) GetStats(ctx context.Context, id int64) (map[string]any, 
 		"id":              group.ID,
 		"name":            group.Name,
 		"rate_multiplier": group.RateMultiplier,
+		"is_free":         group.IsFree,
 		"is_exclusive":    group.IsExclusive,
 		"status":          group.Status,
 		"account_count":   accountCount,

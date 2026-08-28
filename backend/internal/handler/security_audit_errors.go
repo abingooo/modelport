@@ -18,6 +18,10 @@ func (h *OpenAIGatewayHandler) openAISecurityAuditError(c *gin.Context, decision
 	if decision == nil {
 		return
 	}
+	if isInstructionAuditDecision(decision) {
+		writeInstructionAuditHTTPError(c, decision)
+		return
+	}
 	if decision.Legacy != nil && decision.Legacy.Blocked {
 		h.errorResponse(c, securityAuditStatus(decision), securityAuditErrorCode(decision), securityAuditMessage(decision))
 		return
@@ -35,6 +39,10 @@ func (h *GatewayHandler) openAISecurityAuditError(c *gin.Context, decision *secu
 	if decision == nil {
 		return
 	}
+	if isInstructionAuditDecision(decision) {
+		writeInstructionAuditHTTPError(c, decision)
+		return
+	}
 	if decision.Legacy != nil && decision.Legacy.Blocked {
 		h.chatCompletionsErrorResponse(c, securityAuditStatus(decision), securityAuditErrorCode(decision), securityAuditMessage(decision))
 		return
@@ -50,6 +58,10 @@ func (h *GatewayHandler) openAISecurityAuditError(c *gin.Context, decision *secu
 
 func (h *GatewayHandler) responsesSecurityAuditError(c *gin.Context, decision *securityaudit.Decision) {
 	if decision == nil {
+		return
+	}
+	if isInstructionAuditDecision(decision) {
+		writeInstructionAuditHTTPError(c, decision)
 		return
 	}
 	if decision.Legacy != nil && decision.Legacy.Blocked {
@@ -126,13 +138,35 @@ func writeSecurityAuditWSError(ctx context.Context, conn *coderws.Conn, decision
 	if conn == nil || decision == nil {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if decision.Legacy != nil && decision.Legacy.Blocked {
 		legacy := decision.Legacy
 		writeContentModerationWSError(ctx, conn, (legacyContentModerationDecision{legacy}).toService())
 		return
 	}
-	if ctx == nil {
-		ctx = context.Background()
+	if isInstructionAuditDecision(decision) {
+		errorType := securityAuditErrorCode(decision)
+		if errorType == "" {
+			errorType = securityaudit.InstructionErrorCodeRejected
+		}
+		message := securityAuditMessage(decision)
+		if message == "" {
+			message = securityaudit.InstructionClientMessage
+		}
+		payload, err := json.Marshal(gin.H{
+			"event_id": "evt_security_policy_rejected",
+			"type":     "error",
+			"error":    gin.H{"type": errorType, "message": message},
+		})
+		if err != nil {
+			return
+		}
+		writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		_ = conn.Write(writeCtx, coderws.MessageText, payload)
+		return
 	}
 	payload, err := json.Marshal(gin.H{
 		"event_id": "evt_prompt_guard_rejected", "type": "error",
@@ -144,6 +178,26 @@ func writeSecurityAuditWSError(ctx context.Context, conn *coderws.Conn, decision
 	writeCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	_ = conn.Write(writeCtx, coderws.MessageText, payload)
+}
+
+func isInstructionAuditDecision(decision *securityaudit.Decision) bool {
+	return decision != nil && decision.Instruction != nil
+}
+
+func writeInstructionAuditHTTPError(c *gin.Context, decision *securityaudit.Decision) {
+	status := securityAuditStatus(decision)
+	errorType := securityAuditErrorCode(decision)
+	if errorType == "" {
+		errorType = securityaudit.InstructionErrorCodeRejected
+	}
+	message := securityAuditMessage(decision)
+	if message == "" {
+		message = securityaudit.InstructionClientMessage
+	}
+	c.JSON(status, gin.H{"error": gin.H{
+		"type":    errorType,
+		"message": message,
+	}})
 }
 
 type legacyContentModerationDecision struct{ value *securityaudit.LegacyDecision }
@@ -160,6 +214,9 @@ func securityAuditWSCloseStatus(decision *securityaudit.Decision) coderws.Status
 		return coderws.StatusInternalError
 	}
 	if decision.Legacy != nil && decision.Legacy.Blocked {
+		return coderws.StatusPolicyViolation
+	}
+	if isInstructionAuditDecision(decision) && securityAuditStatus(decision) == http.StatusBadRequest {
 		return coderws.StatusPolicyViolation
 	}
 	if decision.Kind == securityaudit.DecisionBlock {

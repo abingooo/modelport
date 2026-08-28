@@ -776,6 +776,14 @@ export default {
     groups: {
       title: 'Group Management',
       description: 'Manage API key groups and rate multipliers',
+      freeBilling: {
+        title: 'Billing Mode',
+        standard: 'Standard Billing',
+        free: 'Free',
+        badge: 'Free',
+        hint: 'Free mode charges zero to the user and subscription while retaining configured rates and prices.',
+        confirm: 'Enable free mode? Requests will still record real usage and cost, but will not deduct user balance or subscription usage.'
+      },
       searchGroups: 'Search groups...',
       createGroup: 'Create Group',
       editGroup: 'Edit Group',

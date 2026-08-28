@@ -50,6 +50,40 @@ func TestBatchImageRepository_CreateJobAndDuplicates(t *testing.T) {
 	require.True(t, errors.Is(err, service.ErrBatchImageJobExists))
 }
 
+func TestBatchImageRepository_FreeBillingSnapshotRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	tx := testTx(t)
+	repo := newBatchImageRepositoryWithSQL(tx)
+	batchID := batchImageTestID(t, "free-snapshot")
+	groupID := int64(7)
+
+	_, err := repo.CreateBatchImageJob(ctx, service.CreateBatchImageJobParams{
+		BatchID:       batchID,
+		UserID:        1001,
+		GroupID:       &groupID,
+		Provider:      service.BatchImageProviderGeminiAPI,
+		Model:         "gemini-2.5-flash-image",
+		ItemCount:     1,
+		EstimatedCost: 0,
+		IsFreeBilling: true,
+	})
+	require.NoError(t, err)
+
+	job, err := repo.GetBatchImageJobByBatchID(ctx, batchID)
+	require.NoError(t, err)
+	require.True(t, job.IsFreeBilling, "submission-time free-billing decision must survive persistence")
+	require.Equal(t, groupID, *job.GroupID, "submission-time group must survive persistence")
+	require.Equal(t, 0.0, job.EstimatedCost)
+
+	var persisted bool
+	var persistedGroupID int64
+	require.NoError(t, tx.QueryRowContext(ctx,
+		`SELECT is_free_billing, group_id FROM batch_image_jobs WHERE batch_id = $1`, batchID,
+	).Scan(&persisted, &persistedGroupID))
+	require.True(t, persisted)
+	require.Equal(t, groupID, persistedGroupID)
+}
+
 func TestBatchImageRepository_InvalidProvider(t *testing.T) {
 	tx := testTx(t)
 	repo := newBatchImageRepositoryWithSQL(tx)

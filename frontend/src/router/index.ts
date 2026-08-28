@@ -241,6 +241,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/lottery',
+    name: 'Lottery',
+    component: () => import('@/views/user/LotteryView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: false,
+      title: 'Lucky Draw',
+      titleKey: 'lottery.title',
+      descriptionKey: 'lottery.description'
+    }
+  },
+  {
     path: '/redeem',
     name: 'Redeem',
     component: () => import('@/views/user/RedeemView.vue'),
@@ -620,6 +632,31 @@ const routes: RouteRecordRaw[] = [
       titleKey: 'admin.promptAudit.title',
       descriptionKey: 'admin.promptAudit.description',
       requiresRiskControl: true
+    }
+  },
+  {
+    path: '/admin/instruction-audit',
+    name: 'AdminInstructionAudit',
+    component: () => import('@/features/instruction-audit/InstructionAuditView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Instruction Audit',
+      titleKey: 'admin.instructionAudit.title',
+      descriptionKey: 'admin.instructionAudit.v2.description',
+      requiresRiskControl: true
+    }
+  },
+  {
+    path: '/admin/lottery',
+    name: 'AdminLottery',
+    component: () => import('@/views/admin/LotteryView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Lottery Management',
+      titleKey: 'lottery.admin.title',
+      descriptionKey: 'lottery.admin.description'
     }
   },
   {

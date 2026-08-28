@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/securityaudit"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -15,12 +16,44 @@ import (
 const securityAuditCompletedContextKey = "sub2api.security_audit.completed"
 const securityAuditWSTurnContextKey = "sub2api.security_audit.ws_turn"
 const securityAuditWSDedupeContextKey = "sub2api.security_audit.ws_dedupe"
+const instructionAuditCompletedContextKey = "modelport.instruction_audit.completed"
+const instructionAuditWSDedupeContextKey = "modelport.instruction_audit.ws_dedupe"
 
 type securityAuditWSDedupeEntry struct {
 	stage    string
 	turn     int
 	bodyHash [sha256.Size]byte
 	decision securityaudit.Decision
+}
+
+type instructionAuditWSDedupeEntry struct {
+	stage       string
+	turn        int
+	bodyHash    [sha256.Size]byte
+	decision    securityaudit.Decision
+	hasDecision bool
+}
+
+func instructionRequestBodyBudget(coordinator *securityaudit.Coordinator) *pkghttputil.RequestBodyMemoryBudget {
+	if coordinator == nil {
+		return nil
+	}
+	return coordinator.InstructionRequestBodyBudget()
+}
+
+func instructionRequestBodyReadLimit(coordinator *securityaudit.Coordinator, gatewayLimit int64) int64 {
+	if coordinator == nil {
+		return gatewayLimit
+	}
+	auditLimit := coordinator.InstructionRequestBodyReadLimit()
+	if auditLimit > 0 && (gatewayLimit <= 0 || auditLimit < gatewayLimit) {
+		return auditLimit
+	}
+	return gatewayLimit
+}
+
+func instructionAuditHasIndependentReadLimit(coordinator *securityaudit.Coordinator) bool {
+	return coordinator != nil && coordinator.InstructionRequestBodyReadLimit() > 0
 }
 
 // cachesSecurityAuditCompletion reports whether a successful audit may be
@@ -51,6 +84,20 @@ func (h *GatewayHandler) checkSecurityAudit(c *gin.Context, reqLog *zap.Logger, 
 	return runSecurityAudit(c, reqLog, h.securityAuditCoordinator, h.contentModerationService, apiKey, subject, protocol, model, body, "http")
 }
 
+func (h *GatewayHandler) checkInstructionAudit(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, excluded bool, stage string) *securityaudit.Decision {
+	if h == nil {
+		return nil
+	}
+	return runInstructionAudit(c, reqLog, h.securityAuditCoordinator, apiKey, subject, protocol, model, body, excluded, stage)
+}
+
+func (h *GatewayHandler) checkSecurityAuditAfterInstruction(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, stage string) *securityaudit.Decision {
+	if h == nil {
+		return nil
+	}
+	return runSecurityAuditWithInstructionPayload(c, reqLog, h.securityAuditCoordinator, h.contentModerationService, apiKey, subject, protocol, model, body, body, false, stage, true)
+}
+
 func (h *OpenAIGatewayHandler) checkSecurityAudit(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte) *securityaudit.Decision {
 	if h == nil {
 		return nil
@@ -58,16 +105,30 @@ func (h *OpenAIGatewayHandler) checkSecurityAudit(c *gin.Context, reqLog *zap.Lo
 	return runSecurityAudit(c, reqLog, h.securityAuditCoordinator, h.contentModerationService, apiKey, subject, protocol, model, body, "http")
 }
 
-func (h *OpenAIGatewayHandler) checkSecurityAuditStage(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, stage string) *securityaudit.Decision {
+func (h *OpenAIGatewayHandler) checkInstructionAudit(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, excluded bool, stage string) *securityaudit.Decision {
 	if h == nil {
 		return nil
 	}
-	return runSecurityAudit(c, reqLog, h.securityAuditCoordinator, h.contentModerationService, apiKey, subject, protocol, model, body, stage)
+	return runInstructionAudit(c, reqLog, h.securityAuditCoordinator, apiKey, subject, protocol, model, body, excluded, stage)
+}
+
+func (h *OpenAIGatewayHandler) checkSecurityAuditAfterInstruction(c *gin.Context, reqLog *zap.Logger, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, stage string) *securityaudit.Decision {
+	if h == nil {
+		return nil
+	}
+	return runSecurityAuditWithInstructionPayload(c, reqLog, h.securityAuditCoordinator, h.contentModerationService, apiKey, subject, protocol, model, body, body, false, stage, true)
 }
 
 func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securityaudit.Coordinator, legacy *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, stage string) *securityaudit.Decision {
+	return runSecurityAuditWithInstructionPayload(c, reqLog, coordinator, legacy, apiKey, subject, protocol, model, body, body, false, stage, false)
+}
+
+func runSecurityAuditWithInstructionPayload(c *gin.Context, reqLog *zap.Logger, coordinator *securityaudit.Coordinator, legacy *service.ContentModerationService, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body, instructionBody []byte, instructionExcluded bool, stage string, instructionCompleted bool) *securityaudit.Decision {
 	if c == nil || c.Request == nil {
 		return nil
+	}
+	if decision := rejectReservedSecurityAuditPurpose(c); decision != nil {
+		return decision
 	}
 	cacheCompletion := cachesSecurityAuditCompletion(stage)
 	if cacheCompletion {
@@ -95,6 +156,9 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 		return &decision
 	}
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
+	request.InstructionBody = instructionBody
+	request.InstructionAuditExcluded = request.InstructionAuditExcluded || instructionExcluded
+	request.InstructionAuditCompleted = instructionCompleted
 	if isSecurityAuditWebSocketStage(request.Stage) {
 		if turnNo, ok := securityAuditWSTurn(c); ok {
 			bodyHash := sha256.Sum256(body)
@@ -124,6 +188,99 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 	}
 	logSecurityAuditDone(reqLog, request, decision, false)
 	return &decision
+}
+
+func runInstructionAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securityaudit.Coordinator, apiKey *service.APIKey, subject middleware2.AuthSubject, protocol, model string, body []byte, excluded bool, stage string) *securityaudit.Decision {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	if decision := rejectReservedSecurityAuditPurpose(c); decision != nil {
+		return decision
+	}
+	if coordinator == nil {
+		return nil
+	}
+	webSocketStage := isSecurityAuditWebSocketStage(stage)
+	if !webSocketStage {
+		if completed, exists := c.Get(instructionAuditCompletedContextKey); exists && completed == true {
+			return nil
+		}
+	}
+	bodyHash := sha256.Sum256(body)
+	turnNo, hasTurn := securityAuditWSTurn(c)
+	if webSocketStage && hasTurn {
+		if cached, exists := c.Get(instructionAuditWSDedupeContextKey); exists {
+			if entry, ok := cached.(instructionAuditWSDedupeEntry); ok &&
+				entry.stage == strings.TrimSpace(stage) && entry.turn == turnNo && entry.bodyHash == bodyHash {
+				if !entry.hasDecision {
+					return nil
+				}
+				decision := entry.decision
+				return &decision
+			}
+		}
+	}
+
+	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
+	request.InstructionBody = body
+	request.InstructionAuditExcluded = request.InstructionAuditExcluded || excluded
+	if originalModel, ok := service.RequestedPublicModelFromContext(c.Request.Context()); ok {
+		request.Model = originalModel
+		request.InstructionModelOverride = true
+	}
+	if reqLog != nil {
+		reqLog.Info("instruction_audit.gateway_check_start",
+			zap.String("request_id", request.RequestID), zap.Int64("user_id", request.UserID),
+			zap.Int64("api_key_id", request.APIKeyID), zap.String("model", request.Model),
+			zap.String("stage", request.Stage), zap.Bool("excluded", excluded), zap.Int("body_bytes", len(body)))
+	}
+	decision := coordinator.CheckInstruction(c.Request.Context(), request)
+	if webSocketStage && hasTurn {
+		entry := instructionAuditWSDedupeEntry{stage: request.Stage, turn: turnNo, bodyHash: bodyHash}
+		if decision != nil {
+			entry.decision = *decision
+			entry.hasDecision = true
+		}
+		c.Set(instructionAuditWSDedupeContextKey, entry)
+	} else if !webSocketStage {
+		c.Set(instructionAuditCompletedContextKey, true)
+	}
+	if reqLog != nil {
+		blocked := decision != nil && !decision.AllowNextStage
+		fields := []zap.Field{
+			zap.String("request_id", request.RequestID), zap.String("stage", request.Stage), zap.Bool("blocked", blocked),
+		}
+		if blocked && decision.Instruction != nil {
+			fields = append(fields,
+				zap.Int64("event_id", decision.Instruction.EventID),
+				zap.String("reason", decision.Instruction.Reason),
+			)
+		}
+		if blocked {
+			reqLog.Warn("instruction_audit.gateway_check_done", fields...)
+		} else {
+			reqLog.Info("instruction_audit.gateway_check_done", fields...)
+		}
+	}
+	return decision
+}
+
+func rejectReservedSecurityAuditPurpose(c *gin.Context) *securityaudit.Decision {
+	if c == nil || !securityaudit.IsReservedInstructionAuditPurpose(c.GetHeader("X-ModelPort-Internal-Purpose")) {
+		return nil
+	}
+	return &securityaudit.Decision{
+		Kind: securityaudit.DecisionBlock, HTTPStatus: http.StatusForbidden,
+		ErrorCode:     securityaudit.InstructionErrorCodeRejected,
+		ClientMessage: securityaudit.InstructionClientMessage,
+		Instruction: &securityaudit.InstructionDecision{
+			Applicable: true, Allow: false, Reason: "reserved_internal_marker",
+			InitialReason: "reserved_internal_marker", FinalReason: "reserved_internal_marker",
+			FinalOutcome: securityaudit.InstructionOutcomeBlocked,
+			PolicyAction: securityaudit.InstructionPolicyActionBlock,
+		},
+		AllowNextStage: false,
+	}
 }
 
 func logSecurityAuditStart(reqLog *zap.Logger, request securityaudit.Request, bodyBytes int, cached bool) {
@@ -164,6 +321,8 @@ func buildSecurityAuditRequest(c *gin.Context, apiKey *service.APIKey, subject m
 		APIKeyID: legacy.APIKeyID, APIKeyName: legacy.APIKeyName, GroupID: cloneSecurityAuditGroupID(legacy.GroupID),
 		GroupName: legacy.GroupName, Provider: legacy.Provider, Endpoint: legacy.Endpoint,
 		Protocol: legacy.Protocol, Model: legacy.Model, Body: body, Stage: strings.TrimSpace(stage),
+		InstructionBody: body, UserAgent: c.Request.UserAgent(),
+		TrustedInternalClient: securityaudit.IsTrustedInternalInstructionClient(c.Request.Context()),
 	}
 	if apiKey != nil && apiKey.User != nil {
 		request.Username = apiKey.User.Username
@@ -174,6 +333,8 @@ func buildSecurityAuditRequest(c *gin.Context, apiKey *service.APIKey, subject m
 	if request.Stage == "" {
 		request.Stage = "http"
 	}
+	request.InstructionAuditExcluded = request.Protocol == service.ContentModerationProtocolOpenAIResponses &&
+		request.Stage == "http" && service.IsOpenAIResponsesCompactPath(c)
 	return request
 }
 

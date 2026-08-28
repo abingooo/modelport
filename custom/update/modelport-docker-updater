@@ -1,0 +1,294 @@
+#!/bin/sh
+set -eu
+umask 077
+
+deploy_dir="${MODELPORT_DEPLOY_DIR:-/opt/modelport}"
+request_file="${MODELPORT_UPDATE_REQUEST_FILE:-${deploy_dir}/data/update-request}"
+env_file="${MODELPORT_ENV_FILE:-${deploy_dir}/.env}"
+compose_file="${MODELPORT_COMPOSE_FILE:-${deploy_dir}/docker-compose.yml}"
+compose_override_file="${MODELPORT_COMPOSE_OVERRIDE_FILE:-}"
+health_url="${MODELPORT_HEALTH_URL:-http://127.0.0.1:8080/health}"
+settings_url="${MODELPORT_SETTINGS_URL:-http://127.0.0.1:8080/api/v1/settings/public}"
+image_repository="ghcr.io/abingooo/modelport"
+release_repository="abingooo/modelport"
+release_source="https://github.com/abingooo/modelport"
+release_workflow_identity="https://github.com/abingooo/modelport/.github/workflows/custom-image.yml@refs/heads/production"
+release_oidc_issuer="https://token.actions.githubusercontent.com"
+service_name="${MODELPORT_SERVICE_NAME:-sub2api}"
+image_env_key="${MODELPORT_IMAGE_ENV_KEY:-MODELPORT_IMAGE}"
+
+compose() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+  else
+    docker-compose "$@"
+  fi
+}
+
+compose_deploy() {
+  if [ -n "${compose_override_file}" ]; then
+    compose --env-file "${env_file}" -f "${compose_file}" -f "${compose_override_file}" "$@"
+  else
+    compose --env-file "${env_file}" -f "${compose_file}" "$@"
+  fi
+}
+
+single_container_id() {
+  mp_container_ids="$(compose_deploy ps -q "${service_name}")" || return 1
+  mp_container_count="$(printf '%s\n' "${mp_container_ids}" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+  if [ "${mp_container_count}" != 1 ]; then
+    echo "Expected exactly one Compose container for ${service_name}, found ${mp_container_count}" >&2
+    return 1
+  fi
+  printf '%s\n' "${mp_container_ids}" | sed -n '1p'
+}
+
+wait_for_health() {
+  mp_attempt=0
+  while [ "${mp_attempt}" -lt 60 ]; do
+    if curl --fail --silent --show-error --max-time 3 "${health_url}" >/dev/null 2>&1; then
+      return 0
+    fi
+    mp_attempt=$((mp_attempt + 1))
+    sleep 2
+  done
+  return 1
+}
+
+reported_version() {
+  mp_settings_json="$(curl --fail --silent --show-error --max-time 5 "${settings_url}")" || return 1
+  printf '%s' "${mp_settings_json}" | jq -er '.data.version | select(type == "string")'
+}
+
+write_env_image() {
+  mp_source_env="$1"
+  mp_destination_env="$2"
+  mp_image="$3"
+  awk -v key="${image_env_key}" -v image="${mp_image}" '
+    BEGIN { found = 0 }
+    index($0, key "=") == 1 { print key "=" image; found = 1; next }
+    { print }
+    END { if (!found) print key "=" image }
+  ' "${mp_source_env}" > "${mp_destination_env}"
+}
+
+[ -f "${request_file}" ] || exit 0
+[ -f "${env_file}" ] || { echo "ModelPort env file not found: ${env_file}" >&2; exit 1; }
+[ -f "${compose_file}" ] || { echo "ModelPort compose file not found: ${compose_file}" >&2; exit 1; }
+[ -z "${compose_override_file}" ] || [ -f "${compose_override_file}" ] || {
+  echo "ModelPort compose override not found: ${compose_override_file}" >&2
+  exit 1
+}
+command -v jq >/dev/null 2>&1 || { echo 'jq is required by the ModelPort updater' >&2; exit 1; }
+command -v cosign >/dev/null 2>&1 || { echo 'cosign is required by the ModelPort updater' >&2; exit 1; }
+printf '%s\n' "${image_env_key}" | grep -Eq '^[A-Z][A-Z0-9_]*$' || {
+  echo "Invalid ModelPort image environment key" >&2
+  exit 1
+}
+
+mkdir -p "${deploy_dir}/run"
+exec 9>"${deploy_dir}/run/update.lock"
+flock -n 9 || exit 0
+
+processing_file="${request_file}.processing"
+failed_file="${request_file}.failed"
+env_backup=''
+env_backup_valid=false
+temporary_env=''
+previous_image=''
+previous_image_id=''
+previous_pinned_image=''
+previous_version=''
+[ ! -e "${processing_file}" ] || {
+  echo "A ModelPort update request is already being processed" >&2
+  exit 1
+}
+mv "${request_file}" "${processing_file}"
+
+rollback() {
+  status="${1:-1}"
+  [ "${status}" -ne 0 ] || status=1
+  trap - HUP INT TERM EXIT
+  set +e
+  [ -z "${temporary_env}" ] || rm -f "${temporary_env}"
+  rollback_ok=true
+  if [ "${env_backup_valid}" = true ] && [ -n "${env_backup}" ] && [ -f "${env_backup}" ]; then
+    echo "ModelPort update failed; restoring the previous image" >&2
+    if ! mv "${env_backup}" "${env_file}"; then
+      rollback_ok=false
+    elif ! compose_deploy up -d --no-deps "${service_name}"; then
+      rollback_ok=false
+    elif ! wait_for_health; then
+      echo 'Previous ModelPort image did not become healthy during rollback' >&2
+      rollback_ok=false
+    elif ! rollback_container_id="$(single_container_id)"; then
+      rollback_ok=false
+    else
+      rollback_running="$(docker inspect --format '{{.State.Running}}' "${rollback_container_id}")"
+      rollback_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${rollback_container_id}")"
+      rollback_image_id="$(docker inspect --format '{{.Image}}' "${rollback_container_id}")"
+      rollback_version="$(reported_version)"
+      [ "${rollback_running}" = true ] || rollback_ok=false
+      case "${rollback_health}" in healthy|none) ;; *) rollback_ok=false ;; esac
+      [ -n "${previous_image_id}" ] && [ "${rollback_image_id}" = "${previous_image_id}" ] || rollback_ok=false
+      [ -n "${previous_version}" ] && [ "${rollback_version}" = "${previous_version}" ] || rollback_ok=false
+    fi
+    if [ "${rollback_ok}" != true ]; then
+      echo 'AUTOMATIC MODELPORT ROLLBACK FAILED; operator intervention is required' >&2
+      status=1
+    fi
+  elif [ -n "${env_backup}" ]; then
+    rm -f "${env_backup}"
+  fi
+  mv "${processing_file}" "${failed_file}" 2>/dev/null || true
+  exit "${status}"
+}
+trap 'rollback 129' HUP
+trap 'rollback 130' INT
+trap 'rollback 143' TERM
+trap 'rollback "$?"' EXIT
+
+version="$(sed -n '1p' "${processing_file}")"
+line_count="$(wc -l < "${processing_file}" | tr -d ' ')"
+if [ "${line_count}" != "1" ]; then
+  echo "Invalid ModelPort update request" >&2
+  exit 1
+fi
+
+if ! printf '%s\n' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+  echo "Rejected ModelPort version: ${version}" >&2
+  exit 1
+fi
+release_tag="custom-v${version}"
+image_tag="${release_tag}"
+
+tagged_image="${image_repository}:${image_tag}"
+digest_url="https://github.com/${release_repository}/releases/download/${release_tag}/manifest-digest.txt"
+revision_url="https://github.com/${release_repository}/releases/download/${release_tag}/release-revision.txt"
+release_api_url="https://api.github.com/repos/${release_repository}/releases/tags/${release_tag}"
+tag_api_url="https://api.github.com/repos/${release_repository}/git/ref/tags/${release_tag}"
+expected_digest="$(curl --fail --silent --show-error --location --max-time 30 \
+  --proto '=https' --proto-redir '=https' "${digest_url}")"
+expected_digest="$(printf '%s' "${expected_digest}" | tr -d '\r\n')"
+printf '%s\n' "${expected_digest}" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+  echo "Release digest is missing or invalid for ${release_tag}" >&2
+  exit 1
+}
+expected_revision="$(curl --fail --silent --show-error --location --max-time 30 \
+  --proto '=https' --proto-redir '=https' "${revision_url}")"
+expected_revision="$(printf '%s' "${expected_revision}" | tr -d '\r\n')"
+printf '%s\n' "${expected_revision}" | grep -Eq '^[0-9a-f]{40}$' || {
+  echo "Release revision is missing or invalid for ${release_tag}" >&2
+  exit 1
+}
+release_json="$(curl --fail --silent --show-error --location --max-time 30 \
+  --proto '=https' --proto-redir '=https' "${release_api_url}")"
+printf '%s' "${release_json}" | jq -e \
+  --arg tag "${release_tag}" --arg revision "${expected_revision}" \
+  '.tag_name == $tag and .target_commitish == $revision and .draft == false and .immutable == true' \
+  >/dev/null || { echo "Release ${release_tag} is not immutable or does not match its revision" >&2; exit 1; }
+tag_json="$(curl --fail --silent --show-error --location --max-time 30 \
+  --proto '=https' --proto-redir '=https' "${tag_api_url}")"
+printf '%s' "${tag_json}" | jq -e --arg revision "${expected_revision}" \
+  '.object.type == "commit" and .object.sha == $revision' >/dev/null || {
+  echo "Git tag ${release_tag} does not point to ${expected_revision}" >&2
+  exit 1
+}
+
+docker pull "${tagged_image}"
+resolved_image="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${tagged_image}" \
+  | awk -v prefix="${image_repository}@" 'index($0, prefix) == 1 { print; exit }')"
+[ -n "${resolved_image}" ] || { echo "Pulled image has no trusted repository digest" >&2; exit 1; }
+resolved_digest="${resolved_image#*@}"
+[ "${resolved_digest}" = "${expected_digest}" ] || {
+  echo "Image digest mismatch for ${release_tag}" >&2
+  exit 1
+}
+
+image="${image_repository}@${expected_digest}"
+label_version="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' "${image}")"
+label_revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${image}")"
+label_source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "${image}")"
+[ "${label_version}" = "${release_tag}" ] || { echo "Image version label mismatch" >&2; exit 1; }
+[ "${label_revision}" = "${expected_revision}" ] || { echo "Image revision label mismatch" >&2; exit 1; }
+[ "${label_source}" = "${release_source}" ] || { echo "Image source label mismatch" >&2; exit 1; }
+cosign verify \
+  --certificate-identity "${release_workflow_identity}" \
+  --certificate-oidc-issuer "${release_oidc_issuer}" \
+  "${image}" >/dev/null || { echo "Image signature verification failed for ${release_tag}" >&2; exit 1; }
+
+previous_image="$(awk -v key="${image_env_key}" '
+  index($0, key "=") == 1 { value = substr($0, length(key) + 2); count += 1 }
+  END { if (count == 1 && value != "") print value; else exit 1 }
+' "${env_file}")" || { echo "Existing ${image_env_key} is missing or ambiguous" >&2; exit 1; }
+previous_image_id="$(docker image inspect --format '{{.Id}}' "${previous_image}")"
+previous_container_id="$(single_container_id)"
+previous_running="$(docker inspect --format '{{.State.Running}}' "${previous_container_id}")"
+previous_running_image_id="$(docker inspect --format '{{.Image}}' "${previous_container_id}")"
+[ "${previous_running}" = true ] || { echo 'Existing ModelPort container is not running' >&2; exit 1; }
+[ -n "${previous_image_id}" ] && [ "${previous_running_image_id}" = "${previous_image_id}" ] || {
+  echo "Existing Compose container does not use ${image_env_key}" >&2
+  exit 1
+}
+previous_resolved_image="$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "${previous_running_image_id}" \
+  | awk -v prefix="${image_repository}@" 'index($0, prefix) == 1 { print; exit }')"
+[ -n "${previous_resolved_image}" ] || {
+  echo 'Existing ModelPort container has no trusted repository digest for rollback' >&2
+  exit 1
+}
+previous_resolved_digest="${previous_resolved_image#*@}"
+printf '%s\n' "${previous_resolved_digest}" | grep -Eq '^sha256:[0-9a-f]{64}$' || {
+  echo 'Existing ModelPort rollback digest is invalid' >&2
+  exit 1
+}
+previous_pinned_image="${image_repository}@${previous_resolved_digest}"
+previous_version="$(reported_version)"
+printf '%s\n' "${previous_version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || {
+  echo 'Existing ModelPort version is missing or invalid' >&2
+  exit 1
+}
+
+env_backup="$(mktemp "${deploy_dir}/run/env.before-update.XXXXXX")"
+if ! write_env_image "${env_file}" "${env_backup}" "${previous_pinned_image}"; then
+  rm -f "${env_backup}"
+  env_backup=''
+  echo 'Unable to create a complete ModelPort environment backup' >&2
+  exit 1
+fi
+env_backup_valid=true
+temporary_env="$(mktemp "${env_file}.tmp.XXXXXX")"
+write_env_image "${env_file}" "${temporary_env}" "${image}"
+mv "${temporary_env}" "${env_file}"
+temporary_env=''
+
+compose_deploy pull "${service_name}"
+compose_deploy up -d --no-deps "${service_name}"
+
+wait_for_health || { echo "Updated container did not become healthy" >&2; exit 1; }
+
+container_id="$(single_container_id)"
+
+container_running="$(docker inspect --format '{{.State.Running}}' "${container_id}")"
+[ "${container_running}" = true ] || { echo "Updated container is not running" >&2; exit 1; }
+container_health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "${container_id}")"
+case "${container_health}" in
+  healthy|none) ;;
+  *) echo "Updated container health is ${container_health}" >&2; exit 1 ;;
+esac
+
+expected_image_id="$(docker image inspect --format '{{.Id}}' "${image}")"
+running_image_id="$(docker inspect --format '{{.Image}}' "${container_id}")"
+[ -n "${expected_image_id}" ] && [ "${running_image_id}" = "${expected_image_id}" ] || {
+  echo "Running container image does not match ${expected_digest}" >&2
+  exit 1
+}
+
+running_version="$(reported_version)"
+[ "${running_version}" = "${version}" ] || {
+  echo "Running ModelPort version ${running_version} does not match ${version}" >&2
+  exit 1
+}
+
+rm -f "${processing_file}" "${env_backup}" "${failed_file}"
+trap - HUP INT TERM EXIT
+echo "ModelPort updated to ${version} at ${expected_digest}"

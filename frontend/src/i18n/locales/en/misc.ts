@@ -20,6 +20,8 @@ export default {
   // Version Badge
   version: {
     currentVersion: 'Current Version',
+    modelPortVersion: 'ModelPort Version',
+    basedOnUpstream: 'Based on {name} v{version}',
     latestVersion: 'Latest Version',
     upToDate: "You're running the latest version.",
     updateAvailable: 'A new version is available!',
@@ -31,9 +33,13 @@ export default {
     refresh: 'Refresh',
     sourceMode: 'Source Build',
     sourceModeHint: 'Source build, use git pull to update',
+    manualModeHint:
+      'Online updates are disabled for this deployment. Use the verified ModelPort release assets.',
     updateNow: 'Update Now',
     updating: 'Updating...',
     updateComplete: 'Update Complete',
+    updateQueued: 'Update queued',
+    containerRecreating: 'Verifying the release digest and recreating the container',
     updateFailed: 'Update Failed',
     restartRequired: 'Please restart the service to apply the update',
     restartNow: 'Restart Now',
@@ -53,6 +59,10 @@ export default {
     noRollbackVersions: 'No versions available for rollback',
     loadVersionsFailed: 'Failed to load versions',
     rollbackSourceHint: 'Online rollback is not available for source builds',
+    rollbackManualHint:
+      'Online rollback is disabled for this deployment. Use the release metadata and its pinned image digest.',
+    rollbackDockerWarning:
+      'Rollback queues the selected release for host-side digest verification and container recreation. Database migrations are not reversed.',
     deployScript: 'Script',
     deployDocker: 'Docker',
     dockerEditCompose: 'Edit the image tag in docker-compose.yml',

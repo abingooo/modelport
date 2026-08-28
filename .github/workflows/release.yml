@@ -28,6 +28,7 @@ permissions:
 jobs:
   # Update VERSION file with tag version
   update-version:
+    if: ${{ github.repository == 'Wei-Shaw/sub2api' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -52,6 +53,7 @@ jobs:
           retention-days: 1
 
   build-frontend:
+    if: ${{ github.repository == 'Wei-Shaw/sub2api' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -85,6 +87,7 @@ jobs:
           retention-days: 1
 
   release:
+    if: ${{ github.repository == 'Wei-Shaw/sub2api' }}
     needs: [update-version, build-frontend]
     runs-on: ubuntu-latest
     steps:
@@ -149,9 +152,9 @@ jobs:
         id: tag_message
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
+            TAG_NAME="${{ github.event.inputs.tag }}"
           else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
           fi
           echo "Processing tag: $TAG_NAME"
 
@@ -164,13 +167,15 @@ jobs:
           echo "$TAG_MESSAGE" | head -10
 
           # 使用 EOF 分隔符处理多行内容
-          echo "message<<EOF" >> $GITHUB_OUTPUT
-          echo "$TAG_MESSAGE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "message<<EOF"
+            echo "$TAG_MESSAGE"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Set lowercase owner for GHCR
         id: lowercase
-        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -214,9 +219,9 @@ jobs:
           fi
 
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
+            TAG_NAME="${{ github.event.inputs.tag }}"
           else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
           fi
           VERSION=${TAG_NAME#v}
           REPO="${{ github.repository }}"
@@ -224,6 +229,8 @@ jobs:
 
           # 获取 tag message 内容并转义 Markdown 特殊字符
           TAG_MESSAGE='${{ steps.tag_message.outputs.message }}'
+          # sed performs a multi-character Markdown escape.
+          # shellcheck disable=SC2001
           TAG_MESSAGE=$(echo "$TAG_MESSAGE" | sed 's/\([_*`\[]\)/\\\1/g')
 
           # 限制消息长度（Telegram 消息限制 4096 字符，预留空间给头尾固定内容）
@@ -274,7 +281,7 @@ jobs:
 
   sync-version-file:
     needs: [release]
-    if: ${{ needs.release.result == 'success' }}
+    if: ${{ github.repository == 'Wei-Shaw/sub2api' && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch

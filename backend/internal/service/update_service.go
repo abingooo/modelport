@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -28,9 +29,17 @@ var (
 )
 
 const (
-	updateCacheKey = "update_check_cache"
-	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	updateCacheTTL          = 1200 // 20 minutes
+	modelPortGitHubRepo     = "abingooo/modelport"
+	modelPortUpdateModeEnv  = "MODELPORT_UPDATE_MODE"
+	modelPortRequestFileEnv = "MODELPORT_UPDATE_REQUEST_FILE"
+	updateModeManual        = "manual"
+	updateModeBinary        = "binary"
+	updateModeDocker        = "docker"
+	updateChannelStable     = "stable"
+	updateChannelDevelop    = "develop"
+	dockerManifestAssetName = "manifest-digest.txt"
+	dockerRevisionAssetName = "release-revision.txt"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -42,7 +51,12 @@ const (
 	// Rollback: expose at most the 3 most recent versions older than current
 	maxRollbackVersions = 3
 	// Fetch a few extra releases so filtering (current/newer/prerelease) still leaves enough candidates
-	rollbackFetchPageSize = 15
+	rollbackFetchPageSize = 50
+)
+
+var (
+	modelPortStableVersionPattern  = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\.(\d+)$`)
+	modelPortDevelopVersionPattern = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)\.(\d+)-dev\.(\d+)$`)
 )
 
 // UpdateCache defines cache operations for update service
@@ -65,15 +79,31 @@ type UpdateService struct {
 	githubClient   GitHubReleaseClient
 	currentVersion string
 	buildType      string // "source" for manual builds, "release" for CI builds
+	updateChannel  string
+	updateMode     string
+	updateRequest  string
 }
 
 // NewUpdateService creates a new UpdateService
 func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, version, buildType string) *UpdateService {
+	updateMode := strings.ToLower(strings.TrimSpace(os.Getenv(modelPortUpdateModeEnv)))
+	requestFile := strings.TrimSpace(os.Getenv(modelPortRequestFileEnv))
+	if updateMode != updateModeBinary && updateMode != updateModeDocker {
+		updateMode = updateModeManual
+	}
+	if updateMode == updateModeDocker && (!filepath.IsAbs(requestFile) || requestFile == string(filepath.Separator)) {
+		updateMode = updateModeManual
+		requestFile = ""
+	}
+
 	return &UpdateService{
 		cache:          cache,
 		githubClient:   githubClient,
 		currentVersion: version,
 		buildType:      buildType,
+		updateChannel:  modelPortUpdateChannel(version),
+		updateMode:     updateMode,
+		updateRequest:  requestFile,
 	}
 }
 
@@ -86,6 +116,9 @@ type UpdateInfo struct {
 	Cached         bool         `json:"cached"`
 	Warning        string       `json:"warning,omitempty"`
 	BuildType      string       `json:"build_type"` // "source" or "release"
+	UpdateMode     string       `json:"update_mode"`
+	UpdateChannel  string       `json:"update_channel,omitempty"`
+	Repository     string       `json:"repository"`
 }
 
 // ReleaseInfo contains GitHub release details
@@ -131,6 +164,10 @@ type GitHubAsset struct {
 
 // CheckUpdate checks for available updates
 func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInfo, error) {
+	if s.updateChannel == "" {
+		return s.currentUpdateInfo("This build does not use a ModelPort release version"), nil
+	}
+
 	// Try cache first
 	if !force {
 		if cached, err := s.getFromCache(ctx); err == nil && cached != nil {
@@ -152,6 +189,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 			HasUpdate:      false,
 			Warning:        err.Error(),
 			BuildType:      s.buildType,
+			UpdateMode:     s.updateMode,
+			UpdateChannel:  s.updateChannel,
+			Repository:     modelPortGitHubRepo,
 		}, nil
 	}
 
@@ -172,7 +212,21 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 		return ErrNoUpdateAvailable
 	}
 
-	return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
+	switch s.updateMode {
+	case updateModeDocker:
+		return s.queueDockerUpdate(info.LatestVersion)
+	case updateModeBinary:
+		if info.ReleaseInfo == nil {
+			return fmt.Errorf("cached update metadata is incomplete; retry when GitHub is available")
+		}
+		return s.applyReleaseAssets(ctx, info.ReleaseInfo.Assets)
+	default:
+		return fmt.Errorf("online update is disabled for this deployment")
+	}
+}
+
+func (s *UpdateService) UpdateMode() string {
+	return s.updateMode
 }
 
 // applyReleaseAssets downloads the platform archive from the given release assets,
@@ -281,6 +335,9 @@ func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if s.updateMode != updateModeBinary {
+		return fmt.Errorf("local binary rollback is disabled for this deployment")
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -305,8 +362,11 @@ func (s *UpdateService) Rollback() error {
 
 // ListRollbackVersions returns up to maxRollbackVersions release versions that are
 // strictly older than the current version (the current version itself is excluded),
-// newest first. Draft and prerelease entries are skipped.
+// newest first. Releases outside the current ModelPort channel are skipped.
 func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVersion, error) {
+	if s.updateChannel == "" {
+		return []RollbackVersion{}, nil
+	}
 	releases, err := s.fetchRollbackCandidates(ctx)
 	if err != nil {
 		return nil, err
@@ -315,9 +375,9 @@ func (s *UpdateService) ListRollbackVersions(ctx context.Context) ([]RollbackVer
 	versions := make([]RollbackVersion, 0, len(releases))
 	for _, r := range releases {
 		versions = append(versions, RollbackVersion{
-			Version:     strings.TrimPrefix(r.TagName, "v"),
+			Version:     modelPortReleaseVersion(r, s.updateChannel),
 			PublishedAt: r.PublishedAt,
-			HTMLURL:     r.HTMLURL,
+			HTMLURL:     modelPortReleaseURL(r.TagName),
 		})
 	}
 	return versions, nil
@@ -339,7 +399,7 @@ func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) e
 
 	var match *GitHubRelease
 	for _, r := range releases {
-		if strings.TrimPrefix(r.TagName, "v") == target {
+		if modelPortReleaseVersion(r, s.updateChannel) == target {
 			match = r
 			break
 		}
@@ -357,13 +417,19 @@ func (s *UpdateService) RollbackToVersion(ctx context.Context, version string) e
 		}
 	}
 
-	return s.applyReleaseAssets(ctx, assets)
+	if s.updateMode == updateModeDocker {
+		return s.queueDockerUpdate(target)
+	}
+	if s.updateMode == updateModeBinary {
+		return s.applyReleaseAssets(ctx, assets)
+	}
+	return fmt.Errorf("online rollback is disabled for this deployment")
 }
 
 // fetchRollbackCandidates fetches recent releases and keeps the newest
 // maxRollbackVersions entries strictly older than the current version.
 func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubRelease, error) {
-	releases, err := s.githubClient.FetchRecentReleases(ctx, githubRepo, rollbackFetchPageSize)
+	releases, err := s.githubClient.FetchRecentReleases(ctx, modelPortGitHubRepo, rollbackFetchPageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -371,10 +437,13 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	seen := make(map[string]bool, len(releases))
 	candidates := make([]*GitHubRelease, 0, maxRollbackVersions)
 	for _, r := range releases {
-		if r == nil || r.Draft || r.Prerelease {
+		if r == nil || r.Draft {
 			continue
 		}
-		v := strings.TrimPrefix(r.TagName, "v")
+		if s.updateMode == updateModeDocker && !hasDockerRollbackProtocolAssets(r) {
+			continue
+		}
+		v := modelPortReleaseVersion(r, s.updateChannel)
 		if v == "" || seen[v] {
 			continue
 		}
@@ -388,8 +457,8 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return compareVersions(
-			strings.TrimPrefix(candidates[i].TagName, "v"),
-			strings.TrimPrefix(candidates[j].TagName, "v"),
+			modelPortReleaseVersion(candidates[i], s.updateChannel),
+			modelPortReleaseVersion(candidates[j], s.updateChannel),
 		) > 0
 	})
 
@@ -399,13 +468,42 @@ func (s *UpdateService) fetchRollbackCandidates(ctx context.Context) ([]*GitHubR
 	return candidates, nil
 }
 
+func hasDockerRollbackProtocolAssets(release *GitHubRelease) bool {
+	manifestCount := 0
+	revisionCount := 0
+	for _, asset := range release.Assets {
+		switch asset.Name {
+		case dockerManifestAssetName:
+			manifestCount++
+		case dockerRevisionAssetName:
+			revisionCount++
+		}
+	}
+	return manifestCount == 1 && revisionCount == 1
+}
+
 func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	releases, err := s.githubClient.FetchRecentReleases(ctx, modelPortGitHubRepo, rollbackFetchPageSize)
 	if err != nil {
 		return nil, err
 	}
+	var release *GitHubRelease
+	latestVersion := ""
+	for _, candidate := range releases {
+		if candidate == nil || candidate.Draft {
+			continue
+		}
+		version := modelPortReleaseVersion(candidate, s.updateChannel)
+		if version != "" && (release == nil || compareVersions(version, latestVersion) > 0) {
+			release = candidate
+			latestVersion = version
+		}
+	}
+	if release == nil {
+		return nil, fmt.Errorf("no ModelPort %s release found", s.updateChannel)
+	}
 
-	latestVersion := strings.TrimPrefix(release.TagName, "v")
+	releaseURL := modelPortReleaseURL(release.TagName)
 
 	assets := make([]Asset, len(release.Assets))
 	for i, a := range release.Assets {
@@ -424,11 +522,14 @@ func (s *UpdateService) fetchLatestRelease(ctx context.Context) (*UpdateInfo, er
 			Name:        release.Name,
 			Body:        release.Body,
 			PublishedAt: release.PublishedAt,
-			HTMLURL:     release.HTMLURL,
+			HTMLURL:     releaseURL,
 			Assets:      assets,
 		},
-		Cached:    false,
-		BuildType: s.buildType,
+		Cached:        false,
+		BuildType:     s.buildType,
+		UpdateMode:    s.updateMode,
+		UpdateChannel: s.updateChannel,
+		Repository:    modelPortGitHubRepo,
 	}, nil
 }
 
@@ -603,6 +704,8 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
+		Repository  string       `json:"repository"`
+		Channel     string       `json:"channel"`
 	}
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
@@ -610,6 +713,15 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 
 	if time.Now().Unix()-cached.Timestamp > updateCacheTTL {
 		return nil, fmt.Errorf("cache expired")
+	}
+	if cached.Repository != modelPortGitHubRepo || cached.Channel != s.updateChannel {
+		return nil, fmt.Errorf("cache belongs to a different update source")
+	}
+	if !modelPortVersionMatchesChannel(cached.Latest, s.updateChannel) {
+		return nil, fmt.Errorf("cache contains an invalid ModelPort version")
+	}
+	if cached.ReleaseInfo != nil {
+		cached.ReleaseInfo.HTMLURL = modelPortReleaseURL(modelPortReleaseTag(cached.Latest, s.updateChannel))
 	}
 
 	return &UpdateInfo{
@@ -619,6 +731,9 @@ func (s *UpdateService) getFromCache(ctx context.Context) (*UpdateInfo, error) {
 		ReleaseInfo:    cached.ReleaseInfo,
 		Cached:         true,
 		BuildType:      s.buildType,
+		UpdateMode:     s.updateMode,
+		UpdateChannel:  s.updateChannel,
+		Repository:     modelPortGitHubRepo,
 	}, nil
 }
 
@@ -627,40 +742,187 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 		Latest      string       `json:"latest"`
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"`
+		Repository  string       `json:"repository"`
+		Channel     string       `json:"channel"`
 	}{
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),
+		Repository:  modelPortGitHubRepo,
+		Channel:     s.updateChannel,
 	}
 
 	data, _ := json.Marshal(cacheData)
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
 }
 
-// compareVersions compares two semantic versions
-func compareVersions(current, latest string) int {
-	currentParts := parseVersion(current)
-	latestParts := parseVersion(latest)
+type modelPortVersion struct {
+	parts       [4]int
+	development bool
+	devNumber   int
+}
 
-	for i := 0; i < 3; i++ {
-		if currentParts[i] < latestParts[i] {
+func modelPortUpdateChannel(version string) string {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	if modelPortDevelopVersionPattern.MatchString(version) {
+		return updateChannelDevelop
+	}
+	if modelPortStableVersionPattern.MatchString(version) {
+		return updateChannelStable
+	}
+	return ""
+}
+
+func modelPortVersionMatchesChannel(version, channel string) bool {
+	return modelPortUpdateChannel(version) == channel
+}
+
+func modelPortReleaseVersion(release *GitHubRelease, channel string) string {
+	if release == nil {
+		return ""
+	}
+
+	var version string
+	switch channel {
+	case updateChannelDevelop:
+		if !release.Prerelease || !strings.HasPrefix(release.TagName, "dev-v") {
+			return ""
+		}
+		version = strings.TrimPrefix(release.TagName, "dev-v")
+	case updateChannelStable:
+		if release.Prerelease || !strings.HasPrefix(release.TagName, "custom-v") {
+			return ""
+		}
+		version = strings.TrimPrefix(release.TagName, "custom-v")
+	default:
+		return ""
+	}
+	if !modelPortVersionMatchesChannel(version, channel) {
+		return ""
+	}
+	return version
+}
+
+func modelPortReleaseURL(tag string) string {
+	return fmt.Sprintf("https://github.com/%s/releases/tag/%s", modelPortGitHubRepo, url.PathEscape(tag))
+}
+
+func modelPortReleaseTag(version, channel string) string {
+	if channel == updateChannelDevelop {
+		return "dev-v" + version
+	}
+	return "custom-v" + version
+}
+
+func parseModelPortVersion(version string) (modelPortVersion, bool) {
+	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
+	matches := modelPortStableVersionPattern.FindStringSubmatch(version)
+	development := false
+	if matches == nil {
+		matches = modelPortDevelopVersionPattern.FindStringSubmatch(version)
+		development = true
+	}
+	if matches == nil {
+		return modelPortVersion{}, false
+	}
+
+	parsed := modelPortVersion{development: development}
+	for index := range parsed.parts {
+		value, err := strconv.Atoi(matches[index+1])
+		if err != nil {
+			return modelPortVersion{}, false
+		}
+		parsed.parts[index] = value
+	}
+	if development {
+		value, err := strconv.Atoi(matches[5])
+		if err != nil {
+			return modelPortVersion{}, false
+		}
+		parsed.devNumber = value
+	}
+	return parsed, true
+}
+
+func compareVersions(current, latest string) int {
+	currentVersion, currentOK := parseModelPortVersion(current)
+	latestVersion, latestOK := parseModelPortVersion(latest)
+	if !currentOK || !latestOK {
+		return 0
+	}
+
+	for index := range currentVersion.parts {
+		if currentVersion.parts[index] < latestVersion.parts[index] {
 			return -1
 		}
-		if currentParts[i] > latestParts[i] {
+		if currentVersion.parts[index] > latestVersion.parts[index] {
 			return 1
 		}
+	}
+	if currentVersion.development != latestVersion.development {
+		if currentVersion.development {
+			return -1
+		}
+		return 1
+	}
+	if currentVersion.devNumber < latestVersion.devNumber {
+		return -1
+	}
+	if currentVersion.devNumber > latestVersion.devNumber {
+		return 1
 	}
 	return 0
 }
 
-func parseVersion(v string) [3]int {
-	v = strings.TrimPrefix(v, "v")
-	parts := strings.Split(v, ".")
-	result := [3]int{0, 0, 0}
-	for i := 0; i < len(parts) && i < 3; i++ {
-		if parsed, err := strconv.Atoi(parts[i]); err == nil {
-			result[i] = parsed
-		}
+func (s *UpdateService) currentUpdateInfo(warning string) *UpdateInfo {
+	return &UpdateInfo{
+		CurrentVersion: s.currentVersion,
+		LatestVersion:  s.currentVersion,
+		HasUpdate:      false,
+		Warning:        warning,
+		BuildType:      s.buildType,
+		UpdateMode:     s.updateMode,
+		UpdateChannel:  s.updateChannel,
+		Repository:     modelPortGitHubRepo,
 	}
-	return result
+}
+
+func (s *UpdateService) queueDockerUpdate(version string) error {
+	if !modelPortVersionMatchesChannel(version, s.updateChannel) {
+		return fmt.Errorf("version is not valid for the %s update channel", s.updateChannel)
+	}
+	if s.updateRequest == "" {
+		return fmt.Errorf("docker update request file is not configured")
+	}
+
+	directory := filepath.Dir(s.updateRequest)
+	if err := os.MkdirAll(directory, 0750); err != nil {
+		return fmt.Errorf("create update request directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(directory, ".modelport-update-*")
+	if err != nil {
+		return fmt.Errorf("create update request: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer func() { _ = os.Remove(temporaryPath) }()
+
+	if err := temporary.Chmod(0600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("secure update request: %w", err)
+	}
+	if _, err := io.WriteString(temporary, version+"\n"); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write update request: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("sync update request: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close update request: %w", err)
+	}
+	if err := os.Rename(temporaryPath, s.updateRequest); err != nil {
+		return fmt.Errorf("publish update request: %w", err)
+	}
+	return nil
 }

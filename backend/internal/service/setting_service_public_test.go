@@ -101,6 +101,35 @@ func TestSettingService_GetPublicSettings_ExposesCompactHomeEnabled(t *testing.T
 	require.False(t, missingSettings.CompactHomeEnabled)
 }
 
+func TestSettingService_GetPublicSettings_UsesModelPortAsDefaultBrand(t *testing.T) {
+	missing, err := NewSettingService(
+		&settingPublicRepoStub{values: map[string]string{}},
+		&config.Config{},
+	).GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, defaultSiteName, missing.SiteName)
+
+	configured, err := NewSettingService(
+		&settingPublicRepoStub{values: map[string]string{SettingKeySiteName: "Custom Gateway"}},
+		&config.Config{},
+	).GetPublicSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "Custom Gateway", configured.SiteName)
+}
+
+func TestSettingService_GetPublicSettingsForInjection_ExposesBuildVersions(t *testing.T) {
+	svc := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{})
+	svc.SetVersion("0.1.183.1")
+	svc.SetUpstreamVersion(" 0.1.183 ")
+
+	raw, err := svc.GetPublicSettingsForInjection(context.Background())
+	require.NoError(t, err)
+	payload, ok := raw.(*PublicSettingsInjectionPayload)
+	require.True(t, ok)
+	require.Equal(t, "0.1.183.1", payload.Version)
+	require.Equal(t, "0.1.183", payload.UpstreamVersion)
+}
+
 func TestSettingService_ChannelMonitorHideThroughputDefaultsToPrivate(t *testing.T) {
 	missing := NewSettingService(&settingPublicRepoStub{values: map[string]string{}}, &config.Config{}).GetChannelMonitorRuntime(context.Background())
 	require.True(t, missing.HideThroughput)
