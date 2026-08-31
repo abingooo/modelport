@@ -18,7 +18,7 @@
 | 项目 | 状态 | 证据 | 缺口/边界 |
 | --- | --- | --- | --- |
 | ModelPort 品牌体系 | `passed` | `frontend/src/i18n/__tests__/modelPortBrandSurface.spec.ts`、`frontend/src/__tests__/modelPortRepositoryLinks.spec.ts`、HomeView 测试 | 仅代表本地代码与渲染回归通过。 |
-| 动态模型港首页 | `passed` | `frontend/e2e/home.visual.spec.ts`、Playwright 本地视觉回归、隔离 smoke 首页 HTTP/静态资源检查 | 正式候选 `linux/amd64` 构建与 smoke 结果尚待本轮确认。 |
+| 动态模型港首页 | `passed` | `frontend/e2e/home.visual.spec.ts`、Playwright 本地视觉回归、隔离 smoke 首页 HTTP/静态资源检查 | 最终 clean HEAD 的 `linux/amd64` 镜像仍由正式发布 runner 再次验证。 |
 | 免费分组 | `passed` | 免费计费后端回归、`frontend/src/components/common/__tests__/GroupBadge.free.spec.ts`、`backend/migrations/modelport_free_group_bridge_migration_test.go` | 真实生产财务不变量仍需生产快照升级前后核对。 |
 | 抽奖系统 | `passed` | `backend/internal/service/lottery_test.go`、前端 Lottery API/View 测试、迁移桥测试 | 真实多实例故障演练尚未连接生产。 |
 | Instruction Audit V2 | `passed` | 指令解析/服务/路由测试、`backend/internal/server/routes/instruction_audit_route_coverage_test.go`、前端 V2 API/作用域测试 | 加密行为只按现状兼容门验收，不在本版本升级。 |
@@ -64,9 +64,9 @@
 | Playwright 视觉门 | `passed` | 桌面/移动端、深浅色、减少动画和 Canvas/资源检查；此前 5 项通过、3 项按设计跳过 | 跳过项必须在发布证据中保留理由。 |
 | 迁移/恢复契约 | `passed` | PostgreSQL/Redis 合成与空库 restore contract tests、`actionlint`、ShellCheck | 不等同于真实生产恢复证明。 |
 | 安全扫描 | `passed` | Gitleaks 差异/历史扫描、Trivy secret/config、高危/严重配置扫描、pnpm audit 例外校验 | pnpm 有 11 项中危；镜像完整扫描有 2 项 `UNKNOWN` 且无 fixed 版本，须在发布前按 owner/缓解措施记录。 |
-| 正式候选镜像构建 | `pending` | Homebrew `docker-buildx v0.36.1` 可直接运行；Colima builder 正在运行，BuildKit `v0.30.0` 声明支持 `linux/amd64`、`linux/arm64` 和 `linux/386`；现有隔离 smoke 镜像可启动并通过健康/API 检查 | `docker buildx` 插件子命令未注册，但不影响直接调用 buildx；最终候选提交的 `linux/amd64` 构建和 smoke 尚待本轮完成。 |
+| 正式候选镜像构建 | `passed` | Homebrew `docker-buildx v0.36.1` 直接调用 Colima BuildKit `v0.30.0`，从 clean HEAD 使用工作流锁定的基础镜像 digest 构建并 load `linux/amd64`，再使用锁定的 PostgreSQL/Redis digest 做 smoke；镜像架构、`sub2api` 默认用户、UID `1000`、OCI revision/version、容器 `healthy`、`/health` 和公开设置中的 `0.1.183.1` / `0.1.183` 均通过 | 本机 Docker Hub 超时，使用内容 digest 相同的 DaoCloud 引用完成本地验证；正式发布仍须由 GitHub amd64 runner 使用工作流官方引用重建，并生成最终 registry digest、SBOM、provenance 和签名。 |
 | 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 attestation 校验脚本已通过静态/合同测试；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、独立 reviewer 和真实恢复证明绑定；这些独立门槛未满足前不得写入 GitHub/GHCR。 |
-| 生产目标架构冒烟 | `blocked` | 隔离环境 smoke：容器 healthy、`/health`/设置/首页/API 契约通过，非 root 和 no-new-privileges 已核对 | 不是生产目标架构的最终候选镜像证明。 |
+| 生产目标架构冒烟 | `blocked` | clean HEAD 的 `linux/amd64` 候选已在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 本地跨架构 smoke 不能替代 GitHub 原生 amd64 runner 的正式镜像验证，也不能替代用户手动更新后的生产实例健康检查。 |
 
 ## 当前发布结论
 
@@ -74,7 +74,7 @@
 
 1. 生产只读审计所需的轮换后 SSH Agent、专用别名、独立主机指纹和用户授权。
 2. 审计后的备份目标、空间、RPO/一致性、独立备份加密安排和真实隔离恢复证明。
-3. 最终候选镜像的目标架构构建、digest、SBOM/provenance/signature 和公开发布验证。
+3. 正式 runner 生成的 registry digest、SBOM/provenance/signature 和公开发布验证。
 4. 受保护发布 Environment 和独立 reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代前述恢复与审批门槛。
 
 注：已有 `v0.1.184` 只读比较仅作范围排除记录；本次不继续评估或对齐，且不阻止 `v0.1.183` 的开发、验证和发布。
