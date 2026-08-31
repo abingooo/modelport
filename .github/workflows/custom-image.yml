@@ -11,13 +11,29 @@ on:
         description: 'Exact 40-character production commit to release'
         required: true
         type: string
+      production_deployment_mode:
+        description: 'Production evidence mode for this release'
+        required: true
+        default: existing_upgrade
+        type: choice
+        options:
+          - existing_upgrade
+          - first_install
       production_restore_attestation_sha256:
         description: 'SHA-256 of the approved external encrypted production restore attestation'
-        required: true
+        required: false
         type: string
       production_restore_attestation_utc:
         description: 'UTC timestamp recorded by the approved production restore attestation'
-        required: true
+        required: false
+        type: string
+      production_first_install_attestation_sha256:
+        description: 'SHA-256 of the approved external encrypted first-install attestation'
+        required: false
+        type: string
+      production_first_install_attestation_utc:
+        description: 'UTC timestamp recorded by the approved first-install attestation'
+        required: false
         type: string
       go_vex_sha256:
         description: 'SHA-256 of the security-owner-approved OpenVEX document'
@@ -67,6 +83,7 @@ env:
   SHELLCHECK_VERSION: 0.11.0
   SHELLCHECK_LINUX_X64_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
   RESTORE_ATTESTATION_MAX_AGE_SECONDS: 86400
+  FIRST_INSTALL_ATTESTATION_MAX_AGE_SECONDS: 86400
   GO_VEX_MAX_VALIDITY_SECONDS: 7776000
   GO_VEX_MIN_REMAINING_SECONDS: 7200
 
@@ -95,10 +112,15 @@ jobs:
           GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
           INPUT_VERSION: ${{ inputs.version }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
           INPUT_RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           APPROVED_RESTORE_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}
           APPROVED_RESTORE_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}
           INPUT_RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          INPUT_FIRST_INSTALL_ATTESTATION_SHA256: ${{ inputs.production_first_install_attestation_sha256 }}
+          APPROVED_FIRST_INSTALL_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256 }}
+          APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256 }}
+          INPUT_FIRST_INSTALL_ATTESTATION_UTC: ${{ inputs.production_first_install_attestation_utc }}
           INPUT_GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
           INPUT_GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
           INPUT_GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
@@ -129,13 +151,35 @@ jobs:
             "${APPROVED_GO_VEX_SHA256}" "${APPROVED_GO_VEX_OWNER_ID}" \
             "${APPROVED_GO_VEX_BINDING_SHA256}" "${GO_VEX_MAX_VALIDITY_SECONDS}" \
             "${GO_VEX_MIN_REMAINING_SECONDS}"
-          /bin/sh custom/release/assert-production-restore-attestation \
-            "${version}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
-            "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
-            "${APPROVED_RESTORE_ATTESTATION_SHA256}" \
-            "${APPROVED_RESTORE_ATTESTATION_BINDING_SHA256}" \
-            "${RESTORE_ATTESTATION_MAX_AGE_SECONDS}" \
-            "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+          case "${PRODUCTION_DEPLOYMENT_MODE}" in
+            existing_upgrade)
+              test -z "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}"
+              test -z "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}"
+              /bin/sh custom/release/assert-production-restore-attestation \
+                "${version}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+                "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
+                "${APPROVED_RESTORE_ATTESTATION_SHA256}" \
+                "${APPROVED_RESTORE_ATTESTATION_BINDING_SHA256}" \
+                "${RESTORE_ATTESTATION_MAX_AGE_SECONDS}" \
+                "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+              ;;
+            first_install)
+              test -z "${INPUT_RESTORE_ATTESTATION_SHA256}"
+              test -z "${INPUT_RESTORE_ATTESTATION_UTC}"
+              /bin/sh custom/release/assert-production-first-install-attestation \
+                "${version}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+                "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}" \
+                "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}" \
+                "${APPROVED_FIRST_INSTALL_ATTESTATION_SHA256}" \
+                "${APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256}" \
+                "${FIRST_INSTALL_ATTESTATION_MAX_AGE_SECONDS}" \
+                "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+              ;;
+            *)
+              echo "Unsupported production deployment mode: ${PRODUCTION_DEPLOYMENT_MODE}" >&2
+              exit 1
+              ;;
+          esac
           git fetch --no-tags origin production
           git fetch --force --no-tags origin \
             "refs/tags/${LEGACY_MODELPORT_TAG}:refs/tags/${LEGACY_MODELPORT_TAG}"
@@ -708,16 +752,21 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:18080/api/v1/settings/public \
             | jq -e --arg version "${VERSION}" '.data.version == $version and .data.upstream_version == "0.1.183"'
 
-      - name: Revalidate protected environment, OpenVEX, and restore attestation
+      - name: Revalidate protected environment, OpenVEX, and deployment evidence
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
           VERSION: ${{ needs.quality.outputs.version }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
           INPUT_RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           APPROVED_RESTORE_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}
           APPROVED_RESTORE_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}
           INPUT_RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          INPUT_FIRST_INSTALL_ATTESTATION_SHA256: ${{ inputs.production_first_install_attestation_sha256 }}
+          APPROVED_FIRST_INSTALL_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256 }}
+          APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256 }}
+          INPUT_FIRST_INSTALL_ATTESTATION_UTC: ${{ inputs.production_first_install_attestation_utc }}
           INPUT_GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
           INPUT_GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
           INPUT_GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
@@ -746,13 +795,35 @@ jobs:
             "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-release-environment \
             "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
-          /bin/sh custom/release/assert-production-restore-attestation \
-            "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
-            "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
-            "${APPROVED_RESTORE_ATTESTATION_SHA256}" \
-            "${APPROVED_RESTORE_ATTESTATION_BINDING_SHA256}" \
-            "${RESTORE_ATTESTATION_MAX_AGE_SECONDS}" \
-            "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+          case "${PRODUCTION_DEPLOYMENT_MODE}" in
+            existing_upgrade)
+              test -z "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}"
+              test -z "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}"
+              /bin/sh custom/release/assert-production-restore-attestation \
+                "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+                "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
+                "${APPROVED_RESTORE_ATTESTATION_SHA256}" \
+                "${APPROVED_RESTORE_ATTESTATION_BINDING_SHA256}" \
+                "${RESTORE_ATTESTATION_MAX_AGE_SECONDS}" \
+                "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+              ;;
+            first_install)
+              test -z "${INPUT_RESTORE_ATTESTATION_SHA256}"
+              test -z "${INPUT_RESTORE_ATTESTATION_UTC}"
+              /bin/sh custom/release/assert-production-first-install-attestation \
+                "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+                "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}" \
+                "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}" \
+                "${APPROVED_FIRST_INSTALL_ATTESTATION_SHA256}" \
+                "${APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256}" \
+                "${FIRST_INSTALL_ATTESTATION_MAX_AGE_SECONDS}" \
+                "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+              ;;
+            *)
+              echo "Unsupported production deployment mode: ${PRODUCTION_DEPLOYMENT_MODE}" >&2
+              exit 1
+              ;;
+          esac
 
       - name: Log in to GHCR after verification
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
@@ -832,8 +903,11 @@ jobs:
           VERSION: ${{ needs.quality.outputs.version }}
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
           DIGEST: ${{ steps.publish.outputs.digest }}
+          PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
           RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          FIRST_INSTALL_ATTESTATION_SHA256: ${{ inputs.production_first_install_attestation_sha256 }}
+          FIRST_INSTALL_ATTESTATION_UTC: ${{ inputs.production_first_install_attestation_utc }}
           GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
           GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
           GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
@@ -852,18 +926,42 @@ jobs:
             < modelport-go-module-inventory.json)"
           printf '%s\n' "${DIGEST}" > manifest-digest.txt
           printf '%s\n' "${GITHUB_SHA}" > release-revision.txt
+          case "${PRODUCTION_DEPLOYMENT_MODE}" in
+            existing_upgrade)
+              deployment_evidence_sha256="${RESTORE_ATTESTATION_SHA256}"
+              deployment_evidence_utc="${RESTORE_ATTESTATION_UTC}"
+              deployment_evidence_scope='["postgresql","redis","persistent_assets"]'
+              existing_restore_proof=approved
+              deployment_ci_evidence='[]'
+              ;;
+            first_install)
+              deployment_evidence_sha256="${FIRST_INSTALL_ATTESTATION_SHA256}"
+              deployment_evidence_utc="${FIRST_INSTALL_ATTESTATION_UTC}"
+              deployment_evidence_scope='["no_existing_modelport_production_dataset","no_postgresql_migration","no_redis_migration","no_persistent_assets_migration","no_deployment_state_migration","no_update_state_migration"]'
+              existing_restore_proof=not_applicable
+              deployment_ci_evidence='["clean_database_migration","release_image_smoke"]'
+              ;;
+            *)
+              echo "Unsupported production deployment mode: ${PRODUCTION_DEPLOYMENT_MODE}" >&2
+              exit 1
+              ;;
+          esac
           jq -n \
-            --arg sha256 "${RESTORE_ATTESTATION_SHA256}" \
-            --arg recorded_at "${RESTORE_ATTESTATION_UTC}" \
+            --arg evidence_kind "${PRODUCTION_DEPLOYMENT_MODE}" \
+            --arg sha256 "${deployment_evidence_sha256}" \
+            --arg recorded_at "${deployment_evidence_utc}" \
             --arg version "${VERSION}" \
             --arg candidate_revision "${GITHUB_SHA}" \
             --arg upstream_revision "${UPSTREAM_SHA}" \
-            '{schema_version:1,sha256:$sha256,version:$version,
+            --argjson scope "${deployment_evidence_scope}" \
+            --arg existing_restore_proof "${existing_restore_proof}" \
+            --argjson ci_evidence "${deployment_ci_evidence}" \
+            '{schema_version:1,evidence_kind:$evidence_kind,sha256:$sha256,version:$version,
               candidate_revision:$candidate_revision,upstream_revision:$upstream_revision,
-              recorded_at:$recorded_at,
-              scope:["postgresql","redis","persistent_assets"],
-              report_location:"external-encrypted-storage"}' \
-            > production-restore-attestation.json
+              recorded_at:$recorded_at,scope:$scope,
+              existing_restore_proof:$existing_restore_proof,ci_evidence:$ci_evidence,
+              report_location:"external-encrypted-storage",production_update_performed:false}' \
+            > production-deployment-evidence.json
           jq -n \
             --arg version "${VERSION}" \
             --arg tag "${RELEASE_TAG}" \
@@ -876,8 +974,12 @@ jobs:
             --arg alpine_image "${ALPINE_IMAGE}" \
             --arg postgres_image "${POSTGRES_IMAGE}" \
             --arg redis_image "${REDIS_IMAGE}" \
-            --arg restore_attestation_sha256 "${RESTORE_ATTESTATION_SHA256}" \
-            --arg restore_attestation_utc "${RESTORE_ATTESTATION_UTC}" \
+            --arg evidence_kind "${PRODUCTION_DEPLOYMENT_MODE}" \
+            --arg deployment_evidence_sha256 "${deployment_evidence_sha256}" \
+            --arg deployment_evidence_utc "${deployment_evidence_utc}" \
+            --argjson deployment_evidence_scope "${deployment_evidence_scope}" \
+            --arg existing_restore_proof "${existing_restore_proof}" \
+            --argjson deployment_ci_evidence "${deployment_ci_evidence}" \
             --arg go_vex_sha256 "${GO_VEX_SHA256}" \
             --argjson go_vex_owner_id "${GO_VEX_OWNER_ID}" \
             --arg go_vex_approved_at "${GO_VEX_APPROVED_AT}" \
@@ -888,10 +990,14 @@ jobs:
               upstream_revision:$upstream,platforms:["linux/amd64"],
               base_images:{node:$node_image,golang:$golang_image,alpine:$alpine_image,
                 postgres:$postgres_image,redis:$redis_image},
-              production_restore_attestation:{sha256:$restore_attestation_sha256,
+              production_deployment_evidence:{evidence_kind:$evidence_kind,
+                sha256:$deployment_evidence_sha256,
                 version:$version,candidate_revision:$revision,upstream_revision:$upstream,
-                recorded_at:$restore_attestation_utc,
-                scope:["postgresql","redis","persistent_assets"]},
+                recorded_at:$deployment_evidence_utc,scope:$deployment_evidence_scope,
+                existing_restore_proof:$existing_restore_proof,
+                ci_evidence:$deployment_ci_evidence,
+                report_location:"external-encrypted-storage",
+                production_update_performed:false},
               go_vulnerability_approval:{document_sha256:$go_vex_sha256,
                 inventory_sha256:$go_inventory_sha256,owner_id:$go_vex_owner_id,
                 approved_at:$go_vex_approved_at,expires_at:$go_vex_expires_at,
@@ -905,7 +1011,7 @@ jobs:
             manifest-digest.txt
             release-revision.txt
             release-metadata.json
-            production-restore-attestation.json
+            production-deployment-evidence.json
             modelport-go-vex.openvex.json
             modelport-go-module-inventory.json
             modelport-sbom.spdx.json
@@ -940,8 +1046,11 @@ jobs:
           VERSION: ${{ needs.quality.outputs.version }}
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
           DIGEST: ${{ needs.image.outputs.digest }}
+          PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
           RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          FIRST_INSTALL_ATTESTATION_SHA256: ${{ inputs.production_first_install_attestation_sha256 }}
+          FIRST_INSTALL_ATTESTATION_UTC: ${{ inputs.production_first_install_attestation_utc }}
           GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
           GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
           GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
@@ -961,6 +1070,26 @@ jobs:
             < modelport-go-vex.openvex.json)" = "${GO_VEX_SHA256}"
           go_inventory_sha256="$(/bin/sh ../custom/release/sha256-stdin \
             < modelport-go-module-inventory.json)"
+          case "${PRODUCTION_DEPLOYMENT_MODE}" in
+            existing_upgrade)
+              deployment_evidence_sha256="${RESTORE_ATTESTATION_SHA256}"
+              deployment_evidence_utc="${RESTORE_ATTESTATION_UTC}"
+              deployment_evidence_scope='["postgresql","redis","persistent_assets"]'
+              existing_restore_proof=approved
+              deployment_ci_evidence='[]'
+              ;;
+            first_install)
+              deployment_evidence_sha256="${FIRST_INSTALL_ATTESTATION_SHA256}"
+              deployment_evidence_utc="${FIRST_INSTALL_ATTESTATION_UTC}"
+              deployment_evidence_scope='["no_existing_modelport_production_dataset","no_postgresql_migration","no_redis_migration","no_persistent_assets_migration","no_deployment_state_migration","no_update_state_migration"]'
+              existing_restore_proof=not_applicable
+              deployment_ci_evidence='["clean_database_migration","release_image_smoke"]'
+              ;;
+            *)
+              echo "Unsupported production deployment mode: ${PRODUCTION_DEPLOYMENT_MODE}" >&2
+              exit 1
+              ;;
+          esac
           jq -e \
             --arg version "${VERSION}" \
             --arg tag "${RELEASE_TAG}" \
@@ -973,8 +1102,12 @@ jobs:
             --arg alpine_image "${ALPINE_IMAGE}" \
             --arg postgres_image "${POSTGRES_IMAGE}" \
             --arg redis_image "${REDIS_IMAGE}" \
-            --arg restore_attestation_sha256 "${RESTORE_ATTESTATION_SHA256}" \
-            --arg restore_attestation_utc "${RESTORE_ATTESTATION_UTC}" \
+            --arg evidence_kind "${PRODUCTION_DEPLOYMENT_MODE}" \
+            --arg deployment_evidence_sha256 "${deployment_evidence_sha256}" \
+            --arg deployment_evidence_utc "${deployment_evidence_utc}" \
+            --argjson deployment_evidence_scope "${deployment_evidence_scope}" \
+            --arg existing_restore_proof "${existing_restore_proof}" \
+            --argjson deployment_ci_evidence "${deployment_ci_evidence}" \
             --arg go_vex_sha256 "${GO_VEX_SHA256}" \
             --argjson go_vex_owner_id "${GO_VEX_OWNER_ID}" \
             --arg go_vex_approved_at "${GO_VEX_APPROVED_AT}" \
@@ -986,33 +1119,44 @@ jobs:
              .upstream_revision == $upstream and .platforms == ["linux/amd64"] and
              .base_images == {node:$node_image,golang:$golang_image,alpine:$alpine_image,
                postgres:$postgres_image,redis:$redis_image} and
-             .production_restore_attestation == {
-               sha256:$restore_attestation_sha256,version:$version,
+             .production_deployment_evidence == {
+               evidence_kind:$evidence_kind,sha256:$deployment_evidence_sha256,
+               version:$version,
                candidate_revision:$revision,upstream_revision:$upstream,
-               recorded_at:$restore_attestation_utc,
-               scope:["postgresql","redis","persistent_assets"]} and
+               recorded_at:$deployment_evidence_utc,scope:$deployment_evidence_scope,
+               existing_restore_proof:$existing_restore_proof,
+               ci_evidence:$deployment_ci_evidence,
+               report_location:"external-encrypted-storage",
+               production_update_performed:false} and
              .go_vulnerability_approval == {
                document_sha256:$go_vex_sha256,inventory_sha256:$go_inventory_sha256,
                owner_id:$go_vex_owner_id,approved_at:$go_vex_approved_at,
                expires_at:$go_vex_expires_at,findings:$go_inventory[0]}' \
             release-metadata.json
           jq -e \
-            --arg sha256 "${RESTORE_ATTESTATION_SHA256}" \
-            --arg recorded_at "${RESTORE_ATTESTATION_UTC}" \
+            --arg evidence_kind "${PRODUCTION_DEPLOYMENT_MODE}" \
+            --arg sha256 "${deployment_evidence_sha256}" \
+            --arg recorded_at "${deployment_evidence_utc}" \
             --arg version "${VERSION}" \
             --arg candidate_revision "${GITHUB_SHA}" \
             --arg upstream_revision "${UPSTREAM_SHA}" \
-            '.schema_version == 1 and .sha256 == $sha256 and .version == $version and
+            --argjson scope "${deployment_evidence_scope}" \
+            --arg existing_restore_proof "${existing_restore_proof}" \
+            --argjson ci_evidence "${deployment_ci_evidence}" \
+            '.schema_version == 1 and .evidence_kind == $evidence_kind and
+             .sha256 == $sha256 and .version == $version and
              .candidate_revision == $candidate_revision and
              .upstream_revision == $upstream_revision and .recorded_at == $recorded_at and
-             .scope == ["postgresql","redis","persistent_assets"] and
-             .report_location == "external-encrypted-storage"' \
-            production-restore-attestation.json
+             .scope == $scope and .existing_restore_proof == $existing_restore_proof and
+             .ci_evidence == $ci_evidence and
+             .report_location == "external-encrypted-storage" and
+             .production_update_performed == false' \
+            production-deployment-evidence.json
           sha256sum \
             manifest-digest.txt \
             release-revision.txt \
             release-metadata.json \
-            production-restore-attestation.json \
+            production-deployment-evidence.json \
             modelport-go-vex.openvex.json \
             modelport-go-module-inventory.json \
             modelport-sbom.spdx.json \
@@ -1030,10 +1174,15 @@ jobs:
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
           VERSION: ${{ needs.quality.outputs.version }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
+          PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
           INPUT_RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           APPROVED_RESTORE_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}
           APPROVED_RESTORE_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}
           INPUT_RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          INPUT_FIRST_INSTALL_ATTESTATION_SHA256: ${{ inputs.production_first_install_attestation_sha256 }}
+          APPROVED_FIRST_INSTALL_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256 }}
+          APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256 }}
+          INPUT_FIRST_INSTALL_ATTESTATION_UTC: ${{ inputs.production_first_install_attestation_utc }}
           INPUT_GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
           INPUT_GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
           INPUT_GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
@@ -1058,13 +1207,35 @@ jobs:
             "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-release-environment \
             "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
-          /bin/sh custom/release/assert-production-restore-attestation \
-            "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
-            "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
-            "${APPROVED_RESTORE_ATTESTATION_SHA256}" \
-            "${APPROVED_RESTORE_ATTESTATION_BINDING_SHA256}" \
-            "${RESTORE_ATTESTATION_MAX_AGE_SECONDS}" \
-            "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+          case "${PRODUCTION_DEPLOYMENT_MODE}" in
+            existing_upgrade)
+              test -z "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}"
+              test -z "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}"
+              /bin/sh custom/release/assert-production-restore-attestation \
+                "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+                "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
+                "${APPROVED_RESTORE_ATTESTATION_SHA256}" \
+                "${APPROVED_RESTORE_ATTESTATION_BINDING_SHA256}" \
+                "${RESTORE_ATTESTATION_MAX_AGE_SECONDS}" \
+                "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+              ;;
+            first_install)
+              test -z "${INPUT_RESTORE_ATTESTATION_SHA256}"
+              test -z "${INPUT_RESTORE_ATTESTATION_UTC}"
+              /bin/sh custom/release/assert-production-first-install-attestation \
+                "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+                "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}" \
+                "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}" \
+                "${APPROVED_FIRST_INSTALL_ATTESTATION_SHA256}" \
+                "${APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256}" \
+                "${FIRST_INSTALL_ATTESTATION_MAX_AGE_SECONDS}" \
+                "${CONFIRM_WAIT_FOR_MANUAL_UPDATE}"
+              ;;
+            *)
+              echo "Unsupported production deployment mode: ${PRODUCTION_DEPLOYMENT_MODE}" >&2
+              exit 1
+              ;;
+          esac
           /bin/sh custom/release/assert-github-slots-absent \
             origin "${RELEASE_TAG}" "${GITHUB_REPOSITORY}"
 
@@ -1092,7 +1263,7 @@ jobs:
             --asset release-assets/manifest-digest.txt \
             --asset release-assets/release-revision.txt \
             --asset release-assets/release-metadata.json \
-            --asset release-assets/production-restore-attestation.json \
+            --asset release-assets/production-deployment-evidence.json \
             --asset release-assets/modelport-go-vex.openvex.json \
             --asset release-assets/modelport-go-module-inventory.json \
             --asset release-assets/release-assets.sha256 \
@@ -1170,8 +1341,11 @@ jobs:
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
           DIGEST: ${{ needs.image.outputs.digest }}
           TAG_OBJECT_SHA: ${{ needs.release.outputs.tag_object }}
+          PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
           RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          FIRST_INSTALL_ATTESTATION_SHA256: ${{ inputs.production_first_install_attestation_sha256 }}
+          FIRST_INSTALL_ATTESTATION_UTC: ${{ inputs.production_first_install_attestation_utc }}
           GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
           GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
           GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
@@ -1201,7 +1375,7 @@ jobs:
           mkdir release-assets
           for asset in \
             manifest-digest.txt release-revision.txt release-metadata.json \
-            production-restore-attestation.json modelport-go-vex.openvex.json \
+            production-deployment-evidence.json modelport-go-vex.openvex.json \
             modelport-go-module-inventory.json release-assets.sha256 \
             modelport-sbom.spdx.json modelport-docker-updater \
             modelport-update.service modelport-update.path \
@@ -1222,6 +1396,26 @@ jobs:
             "${GO_VEX_SHA256}"
           go_inventory_sha256="$(sha256sum modelport-go-module-inventory.json \
             | cut -d' ' -f1)"
+          case "${PRODUCTION_DEPLOYMENT_MODE}" in
+            existing_upgrade)
+              deployment_evidence_sha256="${RESTORE_ATTESTATION_SHA256}"
+              deployment_evidence_utc="${RESTORE_ATTESTATION_UTC}"
+              deployment_evidence_scope='["postgresql","redis","persistent_assets"]'
+              existing_restore_proof=approved
+              deployment_ci_evidence='[]'
+              ;;
+            first_install)
+              deployment_evidence_sha256="${FIRST_INSTALL_ATTESTATION_SHA256}"
+              deployment_evidence_utc="${FIRST_INSTALL_ATTESTATION_UTC}"
+              deployment_evidence_scope='["no_existing_modelport_production_dataset","no_postgresql_migration","no_redis_migration","no_persistent_assets_migration","no_deployment_state_migration","no_update_state_migration"]'
+              existing_restore_proof=not_applicable
+              deployment_ci_evidence='["clean_database_migration","release_image_smoke"]'
+              ;;
+            *)
+              echo "Unsupported production deployment mode: ${PRODUCTION_DEPLOYMENT_MODE}" >&2
+              exit 1
+              ;;
+          esac
           jq -e \
             --arg version "${VERSION}" \
             --arg tag "${RELEASE_TAG}" \
@@ -1234,8 +1428,12 @@ jobs:
             --arg alpine_image "${ALPINE_IMAGE}" \
             --arg postgres_image "${POSTGRES_IMAGE}" \
             --arg redis_image "${REDIS_IMAGE}" \
-            --arg restore_attestation_sha256 "${RESTORE_ATTESTATION_SHA256}" \
-            --arg restore_attestation_utc "${RESTORE_ATTESTATION_UTC}" \
+            --arg evidence_kind "${PRODUCTION_DEPLOYMENT_MODE}" \
+            --arg deployment_evidence_sha256 "${deployment_evidence_sha256}" \
+            --arg deployment_evidence_utc "${deployment_evidence_utc}" \
+            --argjson deployment_evidence_scope "${deployment_evidence_scope}" \
+            --arg existing_restore_proof "${existing_restore_proof}" \
+            --argjson deployment_ci_evidence "${deployment_ci_evidence}" \
             --arg go_vex_sha256 "${GO_VEX_SHA256}" \
             --argjson go_vex_owner_id "${GO_VEX_OWNER_ID}" \
             --arg go_vex_approved_at "${GO_VEX_APPROVED_AT}" \
@@ -1247,28 +1445,39 @@ jobs:
              .upstream_revision == $upstream and .platforms == ["linux/amd64"] and
              .base_images == {node:$node_image,golang:$golang_image,alpine:$alpine_image,
                postgres:$postgres_image,redis:$redis_image} and
-             .production_restore_attestation == {
-               sha256:$restore_attestation_sha256,version:$version,
+             .production_deployment_evidence == {
+               evidence_kind:$evidence_kind,sha256:$deployment_evidence_sha256,
+               version:$version,
                candidate_revision:$revision,upstream_revision:$upstream,
-               recorded_at:$restore_attestation_utc,
-               scope:["postgresql","redis","persistent_assets"]} and
+               recorded_at:$deployment_evidence_utc,scope:$deployment_evidence_scope,
+               existing_restore_proof:$existing_restore_proof,
+               ci_evidence:$deployment_ci_evidence,
+               report_location:"external-encrypted-storage",
+               production_update_performed:false} and
              .go_vulnerability_approval == {
                document_sha256:$go_vex_sha256,inventory_sha256:$go_inventory_sha256,
                owner_id:$go_vex_owner_id,approved_at:$go_vex_approved_at,
                expires_at:$go_vex_expires_at,findings:$go_inventory[0]}' \
             release-metadata.json
           jq -e \
-            --arg sha256 "${RESTORE_ATTESTATION_SHA256}" \
-            --arg recorded_at "${RESTORE_ATTESTATION_UTC}" \
+            --arg evidence_kind "${PRODUCTION_DEPLOYMENT_MODE}" \
+            --arg sha256 "${deployment_evidence_sha256}" \
+            --arg recorded_at "${deployment_evidence_utc}" \
             --arg version "${VERSION}" \
             --arg candidate_revision "${GITHUB_SHA}" \
             --arg upstream_revision "${UPSTREAM_SHA}" \
-            '.schema_version == 1 and .sha256 == $sha256 and .version == $version and
+            --argjson scope "${deployment_evidence_scope}" \
+            --arg existing_restore_proof "${existing_restore_proof}" \
+            --argjson ci_evidence "${deployment_ci_evidence}" \
+            '.schema_version == 1 and .evidence_kind == $evidence_kind and
+             .sha256 == $sha256 and .version == $version and
              .candidate_revision == $candidate_revision and
              .upstream_revision == $upstream_revision and .recorded_at == $recorded_at and
-             .scope == ["postgresql","redis","persistent_assets"] and
-             .report_location == "external-encrypted-storage"' \
-            production-restore-attestation.json
+             .scope == $scope and .existing_restore_proof == $existing_restore_proof and
+             .ci_evidence == $ci_evidence and
+             .report_location == "external-encrypted-storage" and
+             .production_update_performed == false' \
+            production-deployment-evidence.json
           cd ..
           docker logout ghcr.io >/dev/null 2>&1 || true
           for ref in "${RELEASE_IMAGE}:${RELEASE_TAG}" "${RELEASE_IMAGE}:sha-${GITHUB_SHA}"; do

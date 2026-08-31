@@ -16,6 +16,7 @@ github_slot_check=custom/release/assert-github-slots-absent
 image_slot_check=custom/release/assert-image-tags-absent
 release_environment_check=custom/release/assert-production-release-environment
 restore_attestation_check=custom/release/assert-production-restore-attestation
+first_install_attestation_check=custom/release/assert-production-first-install-attestation
 go_vulnerability_approval_check=custom/release/assert-go-vulnerability-approval
 go_vulnerability_approval_contract=deploy/tests/modelport-go-vulnerability-approval-test.sh
 portable_sha256=custom/release/sha256-stdin
@@ -44,7 +45,8 @@ expected_shellcheck_linux_x64_sha256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681
 
 for required_release_dependency in \
   "$github_slot_check" "$image_slot_check" "$release_environment_check" \
-  "$restore_attestation_check" "$go_vulnerability_approval_check" \
+  "$restore_attestation_check" "$first_install_attestation_check" \
+  "$go_vulnerability_approval_check" \
   "$go_vulnerability_approval_contract" "$portable_sha256" "$github_release_publisher" \
   "$github_release_publisher_contract"; do
   [ -x "$required_release_dependency" ] || \
@@ -363,11 +365,29 @@ raise 'workflow root must be a mapping' unless workflow.is_a?(Hash)
 raise 'UPSTREAM_SHA is not the locked Sub2API commit' unless
   workflow.dig('env', 'UPSTREAM_SHA') == expected_upstream_sha
 
+workflow_dispatch = (workflow['on'] || workflow[true]).fetch('workflow_dispatch')
+workflow_inputs = workflow_dispatch.fetch('inputs')
+deployment_mode_input = workflow_inputs.fetch('production_deployment_mode')
+raise 'production deployment mode must be a required choice' unless
+  deployment_mode_input['required'] == true && deployment_mode_input['type'] == 'choice'
+raise 'production deployment mode must default safely to existing_upgrade' unless
+  deployment_mode_input['default'] == 'existing_upgrade'
+raise 'production deployment mode choices changed' unless
+  deployment_mode_input['options'] == %w[existing_upgrade first_install]
+%w[production_restore_attestation_sha256 production_restore_attestation_utc
+   production_first_install_attestation_sha256 production_first_install_attestation_utc].each do |name|
+  input = workflow_inputs.fetch(name)
+  raise "#{name} must be conditionally required by the selected mode" unless
+    input['required'] == false && input['type'] == 'string'
+end
+
 jobs = workflow.fetch('jobs')
 target_jobs = %w[quality image release]
 environment_name = 'modelport-production-release'
 environment_validator = '/bin/sh custom/release/assert-production-release-environment'
-attestation_validator = '/bin/sh custom/release/assert-production-restore-attestation'
+restore_attestation_validator = '/bin/sh custom/release/assert-production-restore-attestation'
+first_install_attestation_validator =
+  '/bin/sh custom/release/assert-production-first-install-attestation'
 vex_validator = '/bin/sh custom/release/assert-go-vulnerability-approval'
 immutable_preflight = 'gh api --method GET "repos/${GITHUB_REPOSITORY}/immutable-releases"'
 
@@ -461,21 +481,62 @@ target_jobs.each do |job_name|
     checkout_steps.first.fetch('with', {})['fetch-depth'] == 0
   runs = steps.map { |step| step.fetch('run', '').to_s }
   environment_calls = runs.sum { |run| run.scan(environment_validator).length }
-  attestation_calls = runs.sum { |run| run.scan(attestation_validator).length }
+  restore_attestation_calls = runs.sum { |run| run.scan(restore_attestation_validator).length }
+  first_install_attestation_calls =
+    runs.sum { |run| run.scan(first_install_attestation_validator).length }
   vex_calls = runs.sum { |run| run.scan(vex_validator).length }
   raise "#{job_name} must query and validate the Environment exactly once" unless
     environment_calls == 1
-  raise "#{job_name} must validate the restore attestation exactly once" unless
-    attestation_calls == 1
+  raise "#{job_name} must contain the existing-upgrade validator exactly once" unless
+    restore_attestation_calls == 1
+  raise "#{job_name} must contain the first-install validator exactly once" unless
+    first_install_attestation_calls == 1
   raise "#{job_name} must validate the approved OpenVEX document exactly once" unless
     vex_calls == 1
   environment_step = runs.index { |run| run.include?(environment_validator) }
-  attestation_step = runs.index { |run| run.include?(attestation_validator) }
+  restore_attestation_step = runs.index { |run| run.include?(restore_attestation_validator) }
+  first_install_attestation_step =
+    runs.index { |run| run.include?(first_install_attestation_validator) }
+  raise "#{job_name} must select exactly one evidence validator in one guarded step" unless
+    restore_attestation_step == first_install_attestation_step
+  attestation_step = restore_attestation_step
   vex_step = runs.index { |run| run.include?(vex_validator) }
   environment_step_definition = steps.fetch(environment_step)
   expected_token = '${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}'
   raise "#{job_name} Environment query token is missing" unless
     environment_step_definition.fetch('env', {})['GH_TOKEN'] == expected_token
+  validation_environment = environment_step_definition.fetch('env', {})
+  required_evidence_environment = {
+    'PRODUCTION_DEPLOYMENT_MODE' => '${{ inputs.production_deployment_mode }}',
+    'INPUT_RESTORE_ATTESTATION_SHA256' =>
+      '${{ inputs.production_restore_attestation_sha256 }}',
+    'INPUT_RESTORE_ATTESTATION_UTC' => '${{ inputs.production_restore_attestation_utc }}',
+    'APPROVED_RESTORE_ATTESTATION_SHA256' =>
+      '${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}',
+    'APPROVED_RESTORE_ATTESTATION_BINDING_SHA256' =>
+      '${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}',
+    'INPUT_FIRST_INSTALL_ATTESTATION_SHA256' =>
+      '${{ inputs.production_first_install_attestation_sha256 }}',
+    'INPUT_FIRST_INSTALL_ATTESTATION_UTC' =>
+      '${{ inputs.production_first_install_attestation_utc }}',
+    'APPROVED_FIRST_INSTALL_ATTESTATION_SHA256' =>
+      '${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256 }}',
+    'APPROVED_FIRST_INSTALL_ATTESTATION_BINDING_SHA256' =>
+      '${{ secrets.MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256 }}'
+  }
+  required_evidence_environment.each do |name, expected_value|
+    raise "#{job_name} evidence environment is missing #{name}" unless
+      validation_environment[name] == expected_value
+  end
+  validation_run = runs.fetch(attestation_step)
+  raise "#{job_name} must reject a missing or unknown production deployment mode" unless
+    validation_run.include?('case "${PRODUCTION_DEPLOYMENT_MODE}" in') &&
+      validation_run.include?('Unsupported production deployment mode:')
+  raise "#{job_name} must reject mixed existing-upgrade and first-install evidence" unless
+    validation_run.include?('test -z "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}"') &&
+      validation_run.include?('test -z "${INPUT_FIRST_INSTALL_ATTESTATION_UTC}"') &&
+      validation_run.include?('test -z "${INPUT_RESTORE_ATTESTATION_SHA256}"') &&
+      validation_run.include?('test -z "${INPUT_RESTORE_ATTESTATION_UTC}"')
 
   case job_name
   when 'quality'
@@ -485,7 +546,8 @@ target_jobs.each do |job_name|
     raise 'quality Environment validation must precede its output write' unless
       validation_run.index(environment_validator) < output_write
     raise 'quality attestation validation must precede its output write' unless
-      validation_run.index(attestation_validator) < output_write
+      validation_run.index(restore_attestation_validator) < output_write &&
+        validation_run.index(first_install_attestation_validator) < output_write
     raise 'quality OpenVEX validation must precede its output write' unless
       validation_run.index(vex_validator) < output_write
   when 'image'
@@ -558,8 +620,10 @@ all_runs = jobs.values.flat_map do |job|
 end
 raise 'Environment validator leaked into an unexpected job' unless
   all_runs.sum { |run| run.scan(environment_validator).length } == target_jobs.length
-raise 'attestation validator leaked into an unexpected job' unless
-  all_runs.sum { |run| run.scan(attestation_validator).length } == target_jobs.length
+raise 'restore attestation validator leaked into an unexpected job' unless
+  all_runs.sum { |run| run.scan(restore_attestation_validator).length } == target_jobs.length
+raise 'first-install attestation validator leaked into an unexpected job' unless
+  all_runs.sum { |run| run.scan(first_install_attestation_validator).length } == target_jobs.length
 raise 'OpenVEX validator leaked into an unexpected job' unless
   all_runs.sum { |run| run.scan(vex_validator).length } == target_jobs.length
 RUBY
@@ -567,6 +631,10 @@ grep -Fq 'production_restore_attestation_sha256:' "$workflow" || \
   fail 'production restore attestation hash input is missing'
 grep -Fq 'production_restore_attestation_utc:' "$workflow" || \
   fail 'production restore attestation timestamp input is missing'
+grep -Fq 'production_first_install_attestation_sha256:' "$workflow" || \
+  fail 'production first-install attestation hash input is missing'
+grep -Fq 'production_first_install_attestation_utc:' "$workflow" || \
+  fail 'production first-install attestation timestamp input is missing'
 for go_vex_input in go_vex_sha256 go_vex_owner_id \
   go_vex_approved_at_utc go_vex_expires_at_utc; do
   grep -Fq "      ${go_vex_input}:" "$workflow" || \
@@ -579,10 +647,16 @@ grep -Fqx '        default: false' "$workflow" || \
 # shellcheck disable=SC2016 # Match the literal validator variable reference.
 grep -Fq '[ "${manual_update_confirmation}" = true ]' "$restore_attestation_check" || \
   fail 'release validation must enforce the manual update boundary confirmation'
+grep -Fq '[ "${manual_update_confirmation}" = true ]' "$first_install_attestation_check" || \
+  fail 'first-install validation must enforce the manual update boundary confirmation'
 grep -Fq 'MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256' "$workflow" || \
   fail 'approved restore attestation environment secret gate is missing'
 grep -Fq 'MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256' "$workflow" || \
   fail 'approved restore attestation binding secret gate is missing'
+grep -Fq 'MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256' "$workflow" || \
+  fail 'approved first-install attestation environment secret gate is missing'
+grep -Fq 'MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256' "$workflow" || \
+  fail 'approved first-install attestation binding secret gate is missing'
 for go_vex_secret in MODELPORT_GO_VEX_DOCUMENT_BASE64 MODELPORT_GO_VEX_SHA256 \
   MODELPORT_GO_VEX_OWNER_ID MODELPORT_GO_VEX_BINDING_SHA256; do
   grep -Fq "$go_vex_secret" "$workflow" || \
@@ -590,6 +664,8 @@ for go_vex_secret in MODELPORT_GO_VEX_DOCUMENT_BASE64 MODELPORT_GO_VEX_SHA256 \
 done
 grep -Fqx '  RESTORE_ATTESTATION_MAX_AGE_SECONDS: 86400' "$workflow" || \
   fail 'production restore attestation must expire after 24 hours'
+grep -Fqx '  FIRST_INSTALL_ATTESTATION_MAX_AGE_SECONDS: 86400' "$workflow" || \
+  fail 'production first-install attestation must expire after 24 hours'
 grep -Fqx '  GO_VEX_MAX_VALIDITY_SECONDS: 7776000' "$workflow" || \
   fail 'OpenVEX approval must expire within 90 days'
 grep -Fqx '  GO_VEX_MIN_REMAINING_SECONDS: 7200' "$workflow" || \
@@ -612,8 +688,31 @@ grep -Fq '.reviewer.id == $security_owner_id' "$release_environment_check" || \
 grep -Fq 'modelport-production-release must require only the approved security owner without administrator bypass' \
   "$release_environment_check" || \
   fail 'security-owner required reviewer preflight is missing'
-grep -Fq 'production-restore-attestation.json' "$workflow" || \
-  fail 'non-sensitive restore attestation release asset is missing'
+grep -Fq 'production-deployment-evidence.json' "$workflow" || \
+  fail 'non-sensitive production deployment evidence release asset is missing'
+if grep -Fq 'production-restore-attestation.json' "$workflow"; then
+  fail 'mode-neutral public evidence must not be published under the restore-only asset name'
+fi
+grep -Fq 'production_deployment_evidence:' "$workflow" || \
+  fail 'release metadata is missing mode-neutral production deployment evidence'
+if grep -Fq 'production_restore_attestation:' "$workflow"; then
+  fail 'release metadata must not claim every deployment mode has a restore attestation'
+fi
+for deployment_evidence_fragment in \
+  'evidence_kind:$evidence_kind' \
+  'existing_restore_proof:$existing_restore_proof' \
+  'production_update_performed:false' \
+  'no_existing_modelport_production_dataset' \
+  'no_postgresql_migration' \
+  'no_redis_migration' \
+  'no_persistent_assets_migration' \
+  'no_deployment_state_migration' \
+  'no_update_state_migration' \
+  'clean_database_migration' \
+  'release_image_smoke'; do
+  grep -Fq "$deployment_evidence_fragment" "$workflow" || \
+    fail "production deployment evidence is missing: $deployment_evidence_fragment"
+done
 grep -Fq 'modelport-go-vex.openvex.json' "$workflow" || \
   fail 'approved OpenVEX release asset is missing'
 grep -Fq 'modelport-go-module-inventory.json' "$workflow" || \
@@ -662,6 +761,24 @@ attestation_binding_sha256() {
   printf '%s' "$binding_json" | /bin/sh "$portable_sha256"
 }
 
+first_install_attestation_binding_sha256() {
+  binding_sha256=$1
+  binding_version=$2
+  binding_candidate=$3
+  binding_upstream=$4
+  binding_recorded_at=$5
+  binding_json="$(jq -cn \
+    --arg sha256 "$binding_sha256" \
+    --arg version "$binding_version" \
+    --arg candidate_revision "$binding_candidate" \
+    --arg upstream_revision "$binding_upstream" \
+    --arg recorded_at "$binding_recorded_at" \
+    '{schema_version:1,evidence_kind:"first_install",sha256:$sha256,version:$version,
+      candidate_revision:$candidate_revision,upstream_revision:$upstream_revision,
+      recorded_at:$recorded_at}')" || return 1
+  printf '%s' "$binding_json" | /bin/sh "$portable_sha256"
+}
+
 rfc3339_from_epoch() {
   ruby -rtime -e 'puts Time.at(Integer(ARGV.fetch(0))).utc.iso8601' "$1"
 }
@@ -678,6 +795,18 @@ assert_attestation_rejected() {
     fail "restore attestation negative vector reached the wrong rejection: $vector_name"
 }
 
+assert_first_install_attestation_rejected() {
+  vector_name=$1
+  expected_error=$2
+  shift 2
+  vector_error="$temporary_dir/first-install-attestation-${vector_name}.err"
+  if /bin/sh "$first_install_attestation_check" "$@" > /dev/null 2> "$vector_error"; then
+    fail "first-install attestation negative vector was accepted: $vector_name"
+  fi
+  grep -Fq "$expected_error" "$vector_error" || \
+    fail "first-install attestation negative vector reached the wrong rejection: $vector_name"
+}
+
 fixed_binding="$(jq -cn \
   --arg sha256 '0000000000000000000000000000000000000000000000000000000000000000' \
   --arg version '0.1.183.1' \
@@ -690,6 +819,21 @@ fixed_binding="$(jq -cn \
 fixed_binding_sha256="$(printf '%s' "$fixed_binding" | /bin/sh "$portable_sha256")"
 [ "$fixed_binding_sha256" = '51bbac88e5e644eeb2e22b81d32bbd6735aacf9f6eec31077987fdbc8f5fe38a' ] || \
   fail 'restore attestation canonical binding vector changed'
+
+fixed_first_install_binding="$(jq -cn \
+  --arg sha256 '0000000000000000000000000000000000000000000000000000000000000000' \
+  --arg version '0.1.183.1' \
+  --arg candidate_revision '1111111111111111111111111111111111111111' \
+  --arg upstream_revision "$expected_upstream_sha" \
+  --arg recorded_at '2026-08-29T00:00:00Z' \
+  '{schema_version:1,evidence_kind:"first_install",sha256:$sha256,version:$version,
+    candidate_revision:$candidate_revision,upstream_revision:$upstream_revision,
+    recorded_at:$recorded_at}')"
+fixed_first_install_binding_sha256="$(printf '%s' "$fixed_first_install_binding" | \
+  /bin/sh "$portable_sha256")"
+[ "$fixed_first_install_binding_sha256" = \
+  'e8193c2cfdf1fdd56870e12ee0ad28778918d0b1a2a2fbe35a012503a6a5e139' ] || \
+  fail 'first-install attestation canonical binding vector changed'
 
 current_revision=$(git rev-parse HEAD)
 now_epoch=$(date -u '+%s')
@@ -773,6 +917,102 @@ assert_attestation_rejected unknown-candidate \
   "$version" "$unknown_candidate" "$expected_upstream_sha" \
   "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
   "$unknown_binding_sha256" 86400 true
+
+current_first_install_binding_sha256="$(first_install_attestation_binding_sha256 \
+  "$current_attestation_sha256" "$version" "$current_revision" \
+  "$expected_upstream_sha" "$current_recorded_at")"
+/bin/sh "$first_install_attestation_check" \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$current_first_install_binding_sha256" 86400 true || \
+  fail 'valid first-install attestation binding was rejected'
+
+assert_first_install_attestation_rejected invalid-binding \
+  'first-install attestation binding does not match the approved value' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+  86400 true
+
+assert_first_install_attestation_rejected restore-binding-cross-mode \
+  'first-install attestation binding does not match the approved value' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$current_binding_sha256" 86400 true
+
+assert_attestation_rejected first-install-binding-cross-mode \
+  'restore attestation binding does not match the approved value' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$current_first_install_binding_sha256" 86400 true
+
+assert_first_install_attestation_rejected digest-mismatch \
+  'first-install attestation SHA-256 does not match the approved value' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" \
+  'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' \
+  "$current_first_install_binding_sha256" 86400 true
+
+assert_first_install_attestation_rejected missing-approved-secret \
+  'approved first-install attestation SHA-256 is required' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" '' \
+  "$current_first_install_binding_sha256" 86400 true
+
+assert_first_install_attestation_rejected manual-false \
+  'manual production update boundary was not confirmed' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$current_first_install_binding_sha256" 86400 false
+
+future_first_install_binding_sha256="$(first_install_attestation_binding_sha256 \
+  "$current_attestation_sha256" "$version" "$current_revision" \
+  "$expected_upstream_sha" "$future_recorded_at")"
+assert_first_install_attestation_rejected future \
+  'first-install attestation timestamp is in the future' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$future_recorded_at" "$current_attestation_sha256" \
+  "$future_first_install_binding_sha256" 86400 true
+
+predates_first_install_binding_sha256="$(first_install_attestation_binding_sha256 \
+  "$current_attestation_sha256" "$version" "$current_revision" \
+  "$expected_upstream_sha" "$predates_recorded_at")"
+assert_first_install_attestation_rejected predates-candidate \
+  'first-install attestation predates the candidate commit' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$predates_recorded_at" "$current_attestation_sha256" \
+  "$predates_first_install_binding_sha256" 86400 true
+
+stale_first_install_binding_sha256="$(first_install_attestation_binding_sha256 \
+  "$current_attestation_sha256" "$version" "$expected_upstream_sha" \
+  "$expected_upstream_sha" "$stale_recorded_at")"
+assert_first_install_attestation_rejected older-than-24h \
+  'first-install attestation is older than the allowed release window' \
+  "$version" "$expected_upstream_sha" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$stale_recorded_at" "$current_attestation_sha256" \
+  "$stale_first_install_binding_sha256" 86400 true
+
+assert_first_install_attestation_rejected max-age-over-24h \
+  'first-install attestation maximum age exceeds 24 hours' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$current_first_install_binding_sha256" 86401 true
+
+assert_first_install_attestation_rejected max-age-overflow \
+  'first-install attestation maximum age exceeds 24 hours' \
+  "$version" "$current_revision" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$current_first_install_binding_sha256" \
+  999999999999999999999999999999999999999999999 true
+
+unknown_first_install_binding_sha256="$(first_install_attestation_binding_sha256 \
+  "$current_attestation_sha256" "$version" "$unknown_candidate" \
+  "$expected_upstream_sha" "$current_recorded_at")"
+assert_first_install_attestation_rejected unknown-candidate \
+  'candidate revision is not available in the checkout' \
+  "$version" "$unknown_candidate" "$expected_upstream_sha" \
+  "$current_attestation_sha256" "$current_recorded_at" "$current_attestation_sha256" \
+  "$unknown_first_install_binding_sha256" 86400 true
 
 portable_hash_test_dir="$temporary_dir/portable-hash"
 mkdir -p "$portable_hash_test_dir/both" "$portable_hash_test_dir/shasum-only" \

@@ -1,6 +1,6 @@
 # ModelPort 生产升级审计、备份与恢复 Runbook
 
-本文用于 ModelPort 正式发布前的生产只读审计、备份和隔离恢复验证。它不授权部署、迁移、重启、镜像拉取、配置修改或站内更新。
+本文用于 ModelPort 正式发布前的生产只读审计、备份和隔离恢复验证；发布章节还定义不接触目标服务器的 `first_install` 公开发布证据路径。它不授权部署、迁移、重启、镜像拉取、配置修改或站内更新。
 
 ## 只读审计前硬门槛
 
@@ -241,6 +241,12 @@ PostgreSQL 工具与说明见 `deploy/modelport-isolated-restore.sh` 和 `deploy
 
 ## 发布与人工更新
 
+公开 GitHub/GHCR 发布必须通过 `production_deployment_mode` 采用一条且仅一条证据路径：省略输入时安全回落到默认的 `existing_upgrade` 并仍要求完整恢复证明，首次部署则必须显式选择 `first_install`。未知模式、两组输入混用或所选模式证据不完整时都必须 fail-closed。模式只决定公开发布所需证据，不授权连接、审计、修改或部署任何特定服务器，也不证明任何无关服务的状态。
+
+### 发布证据路径及共用约束
+
+只要本次部署会接触任何既有 ModelPort 生产数据集，或 ModelPort 所有的 PostgreSQL、Redis、持久资产、部署状态、更新状态，就必须选择 `existing_upgrade`。本 Runbook 前述只读审计、真实备份与隔离恢复章节，以及下列涉及生产快照、恢复证明和恢复 Secret 的现有门槛，仅适用于 `existing_upgrade` 且保持不变；下列 create-only 写入、Environment 保护、VEX 和人工更新边界适用于两种模式：
+
 只有源码 CI、安全扫描、正式镜像冒烟和生产快照隔离恢复全部通过后，才能创建不可变 Git tag、GitHub Release 和 GHCR 版本/SHA 标签。生产恢复证明必须绑定本次版本、40 位候选提交、上游提交和 UTC 时间，覆盖 PostgreSQL、Redis、持久资产/外部存储三类证据，并保存在批准的仓库外加密目标中；正式发布只接收该证明的 SHA-256 和记录时间，不接收报告内容、真实路径、数据统计、密文或凭据。
 
 GitHub tag/Release 发布使用 create-only REST 请求：先创建指向候选提交的随机 ownership 注解 tag object，再以 `POST` 创建 tag ref、draft Release 和每个资产；同名 tag、Release 或资产存在时必须收到非 `201` 并失败，不能转为更新。所有远端资产按本地 SHA-256 回读验证后才把本次创建的 draft 改为正式 Release。失败回滚只删除 API 返回的本次 Release ID/node ID、资产 ID 和注解 tag object SHA 仍完全匹配的资源；发现外部 Release、未知资产、字段变化或 tag ref 被替换时保留现场并失败，绝不删除无法证明归属的资源。
@@ -249,7 +255,7 @@ GHCR/OCI 当前没有已文档化且经本工作流验证的服务端 create-onl
 
 唯一正式 GitHub/GHCR 写入路径是 `.github/workflows/custom-image.yml` 及其受保护的 `modelport-production-release` Environment。执行者不得自行配置或批准恢复证明哈希、批准自己的 Environment、绕过独立 reviewer，或使用本地个人 token 直接执行 `git push`、`docker push`、创建 tag/Release 或调用 GitHub/GHCR 写 API；用户确认不能替代 reviewer/Environment，reviewer/Environment 也不能替代用户确认。
 
-正式工作流的质量、GHCR 镜像发布和 GitHub Release 三个作业都必须直接通过受保护的 `modelport-production-release` GitHub Environment：禁止管理员绕过保护规则，启用 `prevent_self_review`，并且只配置一名 required reviewer；该用户的 GitHub numeric ID 必须与获批 VEX owner ID 完全一致。Environment 必须配置两个恢复证明 Secret：`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256`、`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256`；以及四个 VEX Secret：`MODELPORT_GO_VEX_DOCUMENT_BASE64`、`MODELPORT_GO_VEX_SHA256`、`MODELPORT_GO_VEX_OWNER_ID`、`MODELPORT_GO_VEX_BINDING_SHA256`。每个作业都重新验证 Environment、恢复证明与 VEX；任何重跑都必须重新经过该作业自身的保护和校验，不能复用上游作业结果绕过审批。合成恢复演练、空数据库演练或仅 PostgreSQL/Redis 单项通过都不能生成恢复批准证明。
+正式工作流的质量、GHCR 镜像发布和 GitHub Release 三个作业都必须直接通过受保护的 `modelport-production-release` GitHub Environment：禁止管理员绕过保护规则，启用 `prevent_self_review`，并且只配置一名 required reviewer；该用户的 GitHub numeric ID 必须与获批 VEX owner ID 完全一致。Environment 只配置所选路径的两个证明 Secret：`existing_upgrade` 使用 `MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256`、`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256`，`first_install` 使用 `MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256`、`MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256`；两种路径都另配置四个 VEX Secret：`MODELPORT_GO_VEX_DOCUMENT_BASE64`、`MODELPORT_GO_VEX_SHA256`、`MODELPORT_GO_VEX_OWNER_ID`、`MODELPORT_GO_VEX_BINDING_SHA256`。每个作业都重新验证 Environment、所选证明与 VEX；任何重跑都必须重新经过该作业自身的保护和校验，不能复用上游作业结果绕过审批。合成恢复演练、空数据库演练或仅 PostgreSQL/Redis 单项通过都不能生成 `existing_upgrade` 恢复批准证明。
 
 仓库外证明至少包含以下逻辑字段；实际文件及其加密封装不得提交到仓库：
 
@@ -286,6 +292,56 @@ printf '%s' "$binding_json" | /bin/sh custom/release/sha256-stdin
 
 唯一 security-owner reviewer 必须先在批准环境解密并核对证明字段、三份报告哈希和候选提交，再核对加密文件哈希及绑定哈希。`recorded_at` 不得早于候选提交，不得位于未来，正式工作流开始时不得超过 24 小时。证明中不得加入真实路径、对象名、数据规模、账户标识、密文、摘要明细或原文。
 
+### `first_install`：首次部署证据
+
+`first_install` 是独立的公开发布证据路径，不是合成恢复通过，也不会把现有恢复结果标成 `passed`。仓库外证明只能声明：本次候选用于首次 ModelPort 部署，不迁移任何既有 ModelPort 生产数据集，也不迁移任何 ModelPort 所有的 PostgreSQL、Redis、持久资产、部署状态或更新状态。它不得绑定或命名某台服务器，不得声称已经审计、连接、修改或部署任何服务器或无关服务。目标端口、目录、Compose service、卷、数据库、Redis、更新监听路径等冲突预检属于公开发布后的实际部署阶段，不能写进或替代本证明。
+
+仓库外证明至少包含以下逻辑字段；实际文件必须在仓库外静态加密并通过加密通道保存，证明内容及其加密封装不得提交到仓库、Actions artifact 或 Release：
+
+```json
+{
+  "schema_version": 1,
+  "evidence_kind": "first_install",
+  "version": "0.1.183.1",
+  "candidate_revision": "<40 lowercase hex>",
+  "upstream_revision": "e8cb019fabf8b55199436229044cbf9aa7a82564",
+  "recorded_at": "<UTC RFC3339 seconds>",
+  "no_existing_modelport_production_dataset": true,
+  "migration": {
+    "postgresql": false,
+    "redis": false,
+    "persistent_assets": false,
+    "deployment_state": false,
+    "update_state": false
+  },
+  "existing_restore_proof": "not_applicable",
+  "production_update_performed": false
+}
+```
+
+`existing_restore_proof` 的唯一允许值是 `not_applicable`（`N/A`），不得写成 `passed`。正式 CI 仍必须实际完成干净数据库迁移及第二次运行幂等性验证，并对最终发布镜像完成 smoke；它们作为发布工作流生成的 `ci_evidence`，不能伪装成生产恢复或目标服务器检查。
+
+工作流输入必须使用 `production_first_install_attestation_sha256` 和 `production_first_install_attestation_utc`，并保持两个 `production_restore_attestation_*` 输入为空。受保护 Environment 必须配置 `MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_SHA256` 和 `MODELPORT_PRODUCTION_FIRST_INSTALL_ATTESTATION_BINDING_SHA256`。前者等于最终仓库外加密证明文件本身的 SHA-256；后者对以下字段顺序固定、无空白、无末尾换行的单行 JSON 原样计算 SHA-256：
+
+```sh
+binding_json="$(jq -cn \
+  --arg sha256 '<encrypted-attestation-sha256>' \
+  --arg version '0.1.183.1' \
+  --arg candidate_revision '<40 lowercase hex>' \
+  --arg upstream_revision 'e8cb019fabf8b55199436229044cbf9aa7a82564' \
+  --arg recorded_at '<UTC RFC3339 seconds>' \
+  '{schema_version:1,evidence_kind:"first_install",sha256:$sha256,version:$version,
+    candidate_revision:$candidate_revision,upstream_revision:$upstream_revision,
+    recorded_at:$recorded_at}')"
+printf '%s' "$binding_json" | /bin/sh custom/release/sha256-stdin
+```
+
+独立 reviewer 必须在批准环境解密证明，确认上述断言、`production_update_performed=false`、加密文件哈希和规范绑定哈希。`recorded_at` 不得早于候选提交，不得位于未来，每个受保护发布作业校验时不得超过 24 小时。Environment 必须禁止管理员绕过并启用 `prevent_self_review`；用户、工作流发起者、执行者或证明提交者都不能用自我批准替代独立 reviewer。
+
+两种模式最终都只公开 `production-deployment-evidence.json`。`existing_upgrade` 的固定范围为 `postgresql`、`redis`、`persistent_assets`，`existing_restore_proof` 为 `approved`，`ci_evidence` 为空；`first_install` 的固定范围为 `no_existing_modelport_production_dataset`、`no_postgresql_migration`、`no_redis_migration`、`no_persistent_assets_migration`、`no_deployment_state_migration`、`no_update_state_migration`，`existing_restore_proof` 为 `not_applicable`，`ci_evidence` 为 `clean_database_migration`、`release_image_smoke`。两者都记录 `production_update_performed=false` 和仓库外加密位置标识，不公开证明正文、路径、统计、密文或凭据。
+
+### 两种模式共用的 VEX 门槛
+
 同一 reviewer 还必须批准最终 OpenVEX 文档。工作流输入必须提供 `go_vex_sha256`、`go_vex_owner_id`、`go_vex_approved_at_utc` 和 `go_vex_expires_at_utc`，并分别与 Environment Secret 及文档内容一致。文档要求如下：
 
 - `@context` 固定为 `https://openvex.dev/ns/v0.2.0`，`author` 固定为 `github-user-id:<numeric-owner-id>`，`role` 固定为 `Security Owner`，`timestamp` 等于批准时间。
@@ -317,11 +373,11 @@ printf '%s' "$binding_json" | /bin/sh custom/release/sha256-stdin
 
 `MODELPORT_GO_VEX_DOCUMENT_BASE64` 只是 Environment 内的受保护传输形式。工作流会把解码后的完整文档以 `modelport-go-vex.openvex.json` 公开到 GitHub Release，并同时公开实时生成的 `modelport-go-module-inventory.json`；security owner 必须确保 `impact_statement`、`action_statement` 和其他字段不含凭据、内部路径、非公开拓扑、生产数据或其他敏感信息。
 
-发布不会触碰生产。公开产物、digest、SBOM、provenance、Cosign 和站内版本发现验证完成后，Codex 必须停止在“等待用户从站内手动更新”。
+发布不会触碰生产。公开产物、digest、SBOM、provenance、Cosign 和站内版本发现验证完成后，Codex 必须停止：`existing_upgrade` 等待用户从站内手动更新，`first_install` 等待用户另行授权实际部署和目标冲突预检。
 
-用户点击站内更新前应再次确认：
+用户点击站内更新或另行开始首次部署前应再次确认：
 
-- 备份仍足够新且校验和有效。
+- `existing_upgrade` 的备份仍足够新且校验和有效；`first_install` 已在此部署阶段独立完成目标冲突预检，且没有把该预检倒填为公开发布证据。
 - 当前生产版本、目标版本和镜像 digest 匹配发布记录。
 - 维护窗口、监控和回滚责任人就绪。
 - PostgreSQL 迁移是前向操作；旧镜像回退不能撤销数据库迁移。需要数据库回滚时必须使用已验证备份并按独立维护流程恢复。

@@ -46,9 +46,10 @@
 | 旧 ModelPort bridge 路径 | `passed` | legacy migration path tests、PostgreSQL 隔离恢复 drill、checksum/平台约束验证 | 没有真实生产快照时不得声称生产恢复通过。 |
 | 非空无 ledger 数据库 | `passed` | `modelport_migration_paths_integration_test.go` 验证缺少 `schema_migrations` 但存在 public 业务表时，在任何 ledger/Atlas 写入前 fail-closed，并保留原数据 | 该状态无法证明是空库或纯 Sub2API；必须先人工分类和恢复 ledger，不能猜测迁移。 |
 | 226 约束与 checksum 兼容 | `passed` | `migrations_runner_manifest_parser_test.go`、`channel_monitor_quota_mode_migration_test.go` 和隔离 PostgreSQL 迁移测试；当前 raw SHA-256 `ebbe62cedfd602a67f6a3e08a705e5982f314a668ee681e1eebc63ca1c639733`、Runner trimmed SHA-256 `ea9926655a2cf71a23b0f54597f7f57d59fca8d5fb1b5fe45c779acd0a57f784` | parser 要求已验证 CHECK 只绑定目标列，且表达式是单一正向 `IN`/`ANY` 精确集合；这是必要的非密码学迁移适配，不改变指令审核加密。 |
-| 生产只读审计 | `blocked` | 当前没有用户提供的专用 SSH 别名、轮换后 Agent 和独立主机指纹 | 需用户明确授权后才能连接；只读审计不得修改生产。 |
-| 生产备份 | `blocked` | Runbook 与备份工具/契约测试已存在 | 尚无审计后的规模、空间、目标挂载、RPO/一致性和独立加密安排，也未获逐项备份确认。 |
-| 真实生产隔离恢复 | `blocked` | `deploy/modelport-isolated-restore.sh`、Redis restore 工具及合成/空库 drill | 尚无真实生产快照和恢复证明；不得以合成结果替代。 |
+| `existing_upgrade` 生产只读审计 | `blocked` | 当前没有用户提供的专用 SSH 别名、轮换后 Agent 和独立主机指纹 | 选择既有升级路径时需用户明确授权后才能连接；只读审计不得修改生产。`first_install` 公开发布路径不要求也不授权该审计。 |
+| `existing_upgrade` 生产备份 | `blocked` | Runbook 与备份工具/契约测试已存在 | 选择既有升级路径时仍缺审计后的规模、空间、目标挂载、RPO/一致性、独立加密安排和逐项备份确认。 |
+| `existing_upgrade` 真实生产隔离恢复 | `blocked` | `deploy/modelport-isolated-restore.sh`、Redis restore 工具及合成/空库 drill | 尚无真实生产快照和恢复证明；不得以合成结果替代。仅对独立批准的 `first_install` 路径为 `N/A`，绝不标记为 `passed`。 |
+| `first_install` 首次部署无存量数据证明 | `blocked` | `not-run`；当前没有受保护的仓库外证明、哈希或候选绑定 | 证明只能断言本次发布不迁移既有 ModelPort 生产数据集或 ModelPort 所有的 PostgreSQL、Redis、持久资产、部署状态、更新状态；须仓库外加密、记录不早于候选且不超过 24 小时、绑定版本/候选/上游、受 Environment 独立审批，并记录现有恢复为 `N/A`、`production_update_performed=false`。用户或执行者不能自我批准；证明不代表服务器或无关服务已审计/修改，冲突预检属于以后实际部署阶段。 |
 
 ## 历史兼容字段
 
@@ -63,25 +64,24 @@
 | 后端测试、vet、lint | `passed` | `GOTOOLCHAIN=local go test ./...`；锁定 Colima socket 的 integration suite；`GOTOOLCHAIN=local go test -race ./internal/service ./internal/repository ./internal/securityaudit -run 'Lottery|Instruction|Free|APIKey' -count=1`；`GOTOOLCHAIN=local go vet ./...`；`golangci-lint run --timeout=10m` 均成功 | 后续改动若触及后端需重跑受影响套件。 |
 | 前端测试、类型检查、生产构建 | `passed` | ESLint；`./node_modules/.bin/vitest run`：268 files/1882 tests；`./node_modules/.bin/vue-tsc --noEmit`；`./node_modules/.bin/vite build`；pnpm 9 frozen-lockfile 离线安装和 pnpm 11 workspace 配置读取均成功 | 构建保留既有动态导入与 chunk-size 警告；`frontend/pnpm-workspace.yaml` 已纳入候选。 |
 | Playwright 视觉门 | `passed` | 桌面/移动端、深浅色、减少动画和 Canvas/资源检查；此前 5 项通过、3 项按设计跳过 | 跳过项必须在发布证据中保留理由。 |
-| 迁移/恢复契约 | `passed` | PostgreSQL/Redis 合成与空库 restore contract tests、`actionlint`、ShellCheck | 不等同于真实生产恢复证明。 |
+| 迁移/恢复契约 | `passed` | PostgreSQL/Redis 合成与空库 restore contract tests、`actionlint`、ShellCheck | 不等同于 `existing_upgrade` 的真实生产恢复证明；空库迁移/幂等性是 `first_install` 的 CI release evidence 之一，不会把恢复状态改成 `passed`。 |
 | 安全扫描 | `pending` | Gitleaks 差异/历史扫描、Trivy secret/config/image、高危/严重配置扫描、pnpm production audit 与例外校验已通过；非最终本地诊断已证明固定 `govulncheck v1.7.0` 对 `CGO_ENABLED=0`、`linux/amd64`、`embed` 发布入口源码和同构未剥离诊断二进制报告 Symbol 0、Package 0、实际可达漏洞 0 | 已新增发布门，要求从正式 backend builder 派生诊断二进制，归一化路径后比对完整 Go 版本、模块和构建设置，核对全部运行时分配 ELF 节的地址和大小，并逐字节比较除 build-id notes 外所有有文件内容的运行时分配节；须在最终 clean HEAD 重新执行后改回 `passed`。正式 stripped 二进制会因无符号而退化为模块级保守结果，不能写成二进制扫描为 0。 |
 | Go 模块级漏洞可达性 | `passed` | `CVE-2026-46603` / `GO-2026-6222` 只影响未进入发布依赖闭包的 `x/image/vp8l`，候选闭包中的 `x/image` 仅有 `draw` 与 `math/f64`，头像入口只注册 GIF/JPEG/PNG；`GO-2026-5932` 只影响未进入闭包的 `x/crypto/openpgp*`；`GO-2026-5158`（OpenTelemetry）未进入发布入口调用链。精确源码扫描及符号保留诊断二进制均为 0 | 正式镜像使用 `-s -w`；govulncheck 无法提取符号时会按 `go.mod` 精度保守报告上述三项并退出 3，该结果不是实际符号可达性证据。`x/image` 项有 `v0.45.0` 修复，`openpgp` 项无修复版；本次不为消除工具退化结果扩大 `v0.1.183` 的依赖差异。 |
 | 安全 owner 可达性例外/VEX | `blocked` | 技术可达性证据已完成；`.github/audit-exceptions.yml` 当前为空 | 公开发布前仍需真实安全 owner 记录范围、理由、缓解措施、有效期和批准；占位 owner 或空例外列表不能视为批准。 |
 | 正式候选镜像构建 | `pending` | 旧候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 的 `linux/amd64` 镜像曾通过架构、非 root、健康、版本和 PostgreSQL/Redis smoke，但该镜像早于当前 Dockerfile 诊断 target 与发布门修改 | 必须从最终冻结提交重新构建并重新完成镜像、govulncheck、Trivy、SBOM 与 smoke，旧候选证据不能转移。 |
-| 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 attestation 校验脚本待最终修改纳入 Git 后重跑；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、唯一 security-owner reviewer、真实恢复证明绑定和获批 OpenVEX；这些独立门槛未满足前不得写入 GitHub/GHCR。 |
-| 生产目标架构冒烟 | `blocked` | 已被后续修改取代的候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 曾在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 最终冻结提交尚未重跑；本地跨架构 smoke 也不能替代 GitHub 原生 amd64 runner 的正式镜像验证或用户手动更新后的生产实例健康检查。 |
+| 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 deployment evidence 校验脚本待最终修改纳入 Git 后重跑；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、唯一 security-owner reviewer、获批 OpenVEX，也没有 `existing_upgrade` 的真实恢复证明或 `first_install` 的受保护无存量迁移证明；所选路径门槛未满足前不得写入 GitHub/GHCR。 |
+| `linux/amd64` 发布镜像 smoke | `blocked` | 已被后续修改取代的候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 曾在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 最终冻结提交尚未在 GitHub 原生 amd64 runner 重跑；这是 `first_install` 必需的 CI release evidence，不代表任何目标服务器已验证，也不能替代以后用户手动操作后的实例健康检查。 |
 
 ## 当前发布结论
 
 当前状态为 `blocked-before-public-release`：本地实现、测试、迁移工具和加密兼容门已有证据，但以下事项仍不能由本地代码或意图文件替代：
 
-1. 生产只读审计所需的轮换后 SSH Agent、专用别名、独立主机指纹和用户授权。
-2. 审计后的备份目标、空间、RPO/一致性、独立备份加密安排和真实隔离恢复证明。
-3. 获准的下游 live 测试实例、专用 Key、模型和费用上限。
-4. 针对模块级不可达漏洞的真实安全 owner 可达性例外/VEX 记录。
-5. 正式 runner 生成的 registry digest、SBOM/provenance/signature 和公开发布验证。
-6. 受保护发布 Environment 和与 OpenVEX owner ID 完全一致的唯一 security-owner reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代前述恢复与审批门槛。
+1. 尚未选定并满足一条完整生产证据路径：`existing_upgrade` 仍缺只读审计授权、连接条件、备份安排和真实隔离恢复证明；替代的 `first_install` 路径也没有仓库外加密、24 小时内、候选绑定且由 Environment 独立审批的无存量迁移证明。两者不能拼接，现有恢复在 `first_install` 下只能是 `N/A`。
+2. 获准的下游 live 测试实例、专用 Key、模型和费用上限。
+3. 针对模块级不可达漏洞的真实安全 owner 可达性例外/VEX 记录。
+4. 正式 runner 生成的 registry digest、SBOM/provenance/signature、干净数据库迁移/幂等性、发布镜像 smoke 和公开发布验证。
+5. 受保护发布 Environment 和与 OpenVEX owner ID 完全一致的唯一 security-owner reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代所选部署证据与审批门槛，用户或执行者也不能自我批准。
 
 注：已有 `v0.1.184` 只读比较仅作范围排除记录；本次不继续评估或对齐，且不阻止 `v0.1.183` 的开发、验证和发布。
 
-在上述门槛满足前，不执行 GitHub/GHCR 正式写入、生产迁移、拉取镜像、重启、流量切换或 ModelPort 站内更新。即使公开发布完成，执行终态仍为“等待用户从 ModelPort 站内手动更新”。
+在上述门槛满足前，不执行 GitHub/GHCR 正式写入、生产迁移、拉取镜像、重启、流量切换或 ModelPort 站内更新。`first_install` 的目标冲突预检属于公开发布后的独立部署阶段，不是本矩阵的发布证据，也未被授权执行。即使公开发布完成，`existing_upgrade` 的执行终态仍为“等待用户从 ModelPort 站内手动更新”，`first_install` 的执行终态为“等待用户另行授权实际部署和目标冲突预检”。
