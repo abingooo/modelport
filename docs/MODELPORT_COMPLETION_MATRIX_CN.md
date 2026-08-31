@@ -2,7 +2,7 @@
 
 本矩阵是当前工作区的证据台账，不是生产变更授权或公开发布批准。每一项只在有可追溯命令、输出或运行证据时标记为 `passed`；`blocked` 表示需要外部权限、真实生产状态或当前环境无法提供的前置条件，`pending` 表示仍需补充核对，`not-run` 表示尚未执行。
 
-审计时间：2026-08-31（Asia/Shanghai）
+审计时间：2026-09-01（Asia/Shanghai）
 
 ## 基线与范围
 
@@ -25,7 +25,8 @@
 | 旧 per-client Prompt Audit supplement 运行时清理 | `passed` | 删除 `backend/internal/securityaudit/instruction_prompt_compat.go` 及其 `ResolvePromptAuditRoute`、eligibility provider、管理 API/UI 开关；`instruction_v2_route.go` 与跨协议/完成后继续执行 Prompt Audit 的回归测试证明当前严格路由边界 | 该删除仅清理旧 supplement 兼容层，不删除独立 Prompt Audit；迁移中的 `prompt_audit_enabled` 列仍按下方历史 schema/storage 兼容边界保留。 |
 | Prompt Audit `full_prompt` 实现事实 | `passed` | `backend/migrations/182_prompt_audit_full_prompt.sql`、`backend/internal/securityaudit/prompt_repository.go`、`prompt_event_repository.go`、`prompt_repository_integration_test.go:154-183` | 事件表保存未脱敏 `full_prompt`（去 NUL，以 65536 rune 为截断阈值，超限追加截断标记）；staging job/列表不保存或返回该列，单事件管理详情/API/UI 可读；详情路由当前只继承管理端认证；这不是 evidence/hash-raw 密文。 |
 | Prompt Audit 隐私规范一致性 | `pending` | 当前代码与集成测试已证明上述行为；历史 OpenSpec/验证材料仍要求完整提示词不得进入 PostgreSQL、管理 API 或前端 | 本版本冻结现状，不擅自加密、删除、脱敏、改变留存或访问门控；后续隐私/产品决策及迁移、备份、API 兼容方案需单独授权。不能把旧规范当作已通过事实。 |
-| 下游 API 密钥测试 | `blocked` | `frontend/src/components/keys/__tests__/KeyTestModal.spec.ts` 仅证明 UI/请求契约 | 真实下游网关、授权测试凭据、模型和费用上限尚未提供；不得用本地假服务标记通过。 |
+| 下游 API 密钥测试实现 | `passed` | `frontend/src/components/keys/KeyTestModal.vue` 与 `KeyTestModal.spec.ts` 验证使用所选用户 Key 请求 `/v1/models`，可选择模型、Chat Completions/Responses/Messages 三种协议及流式/非流式模式，并覆盖成功响应、协议终止、超时、取消和错误脱敏；`backend/internal/server/routes/gateway.go`、`api_key_auth_test.go`、`gateway_record_usage_test.go` 与 `openai_gateway_record_usage_test.go` 证明这些是生产网关的正常鉴权、路由和 usage/计费路径 | 没有专用“测试”后端或计费旁路；浏览器发出的请求与普通用户请求具有相同服务端权限、调度和用量语义。 |
+| 下游 API 密钥 live 验证 | `blocked` | 本地组件、路由和 usage 回归均已通过 | 尚未提供获准的真实下游实例、专用测试 Key、允许的模型和费用上限；在这些信息到位前不得用第三方凭据发起真实计费请求，也不得把合成上游描述成 live 成功。 |
 | ModelPort 更新与发布流程 | `pending` | 发布契约、create-only 发布器、版本发现和人工更新入口测试 | 未执行真实 GitHub/GHCR 写入；站内更新必须由用户人工执行。 |
 
 ## 加密兼容边界
@@ -63,7 +64,9 @@
 | 前端测试、类型检查、生产构建 | `passed` | ESLint；`./node_modules/.bin/vitest run`：268 files/1882 tests；`./node_modules/.bin/vue-tsc --noEmit`；`./node_modules/.bin/vite build`；pnpm 9 frozen-lockfile 离线安装和 pnpm 11 workspace 配置读取均成功 | 构建保留既有动态导入与 chunk-size 警告；`frontend/pnpm-workspace.yaml` 已纳入候选。 |
 | Playwright 视觉门 | `passed` | 桌面/移动端、深浅色、减少动画和 Canvas/资源检查；此前 5 项通过、3 项按设计跳过 | 跳过项必须在发布证据中保留理由。 |
 | 迁移/恢复契约 | `passed` | PostgreSQL/Redis 合成与空库 restore contract tests、`actionlint`、ShellCheck | 不等同于真实生产恢复证明。 |
-| 安全扫描 | `passed` | Gitleaks 差异/历史扫描、Trivy secret/config、高危/严重配置扫描、pnpm audit 例外校验 | pnpm 有 11 项中危；镜像完整扫描有 2 项 `UNKNOWN` 且无 fixed 版本，须在发布前按 owner/缓解措施记录。 |
+| 安全扫描 | `passed` | Gitleaks 差异/历史扫描、Trivy secret/config/image、高危/严重配置扫描、pnpm production audit 与例外校验；固定 `govulncheck v1.7.0`（漏洞库 2026-08-28）分别扫描源码入口和 `linux/amd64` 二进制，均报告 Symbol 0、Package 0、实际可达漏洞 0 | pnpm 有 11 项中危；Trivy 镜像完整扫描另列 2 项 `UNKNOWN`，详见下一行，不得把模块级发现误写成可达漏洞。 |
+| Go 模块级漏洞可达性 | `passed` | `CVE-2026-46603` / `GO-2026-6222` 只影响 `x/image/vp8l`，候选只链接 `x/image/draw` 与 `math/f64`，头像入口只注册 GIF/JPEG/PNG；`GO-2026-5932` 只影响 `x/crypto/openpgp*`，候选只使用 bcrypt、curve25519、nacl/box；`GO-2026-5158`（OpenTelemetry）同样仅出现在 govulncheck Module Results | `x/image` 项有 `v0.45.0` 修复，`openpgp` 项无修复版；三项均不可达，因此不为本次锁定的 `v0.1.183` 候选升级依赖。若未来升级，须作为独立变更重跑完整门槛。 |
+| 安全 owner 可达性例外/VEX | `blocked` | 技术可达性证据已完成；`.github/audit-exceptions.yml` 当前为空 | 公开发布前仍需真实安全 owner 记录范围、理由、缓解措施、有效期和批准；占位 owner 或空例外列表不能视为批准。 |
 | 正式候选镜像构建 | `passed` | Homebrew `docker-buildx v0.36.1` 直接调用 Colima BuildKit `v0.30.0`，从 clean HEAD 使用工作流锁定的基础镜像 digest 构建并 load `linux/amd64`，再使用锁定的 PostgreSQL/Redis digest 做 smoke；镜像架构、`sub2api` 默认用户、UID `1000`、OCI revision/version、容器 `healthy`、`/health` 和公开设置中的 `0.1.183.1` / `0.1.183` 均通过 | 本机 Docker Hub 超时，使用内容 digest 相同的 DaoCloud 引用完成本地验证；正式发布仍须由 GitHub amd64 runner 使用工作流官方引用重建，并生成最终 registry digest、SBOM、provenance 和签名。 |
 | 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 attestation 校验脚本已通过静态/合同测试；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、独立 reviewer 和真实恢复证明绑定；这些独立门槛未满足前不得写入 GitHub/GHCR。 |
 | 生产目标架构冒烟 | `blocked` | clean HEAD 的 `linux/amd64` 候选已在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 本地跨架构 smoke 不能替代 GitHub 原生 amd64 runner 的正式镜像验证，也不能替代用户手动更新后的生产实例健康检查。 |
@@ -74,8 +77,10 @@
 
 1. 生产只读审计所需的轮换后 SSH Agent、专用别名、独立主机指纹和用户授权。
 2. 审计后的备份目标、空间、RPO/一致性、独立备份加密安排和真实隔离恢复证明。
-3. 正式 runner 生成的 registry digest、SBOM/provenance/signature 和公开发布验证。
-4. 受保护发布 Environment 和独立 reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代前述恢复与审批门槛。
+3. 获准的下游 live 测试实例、专用 Key、模型和费用上限。
+4. 针对模块级不可达漏洞的真实安全 owner 可达性例外/VEX 记录。
+5. 正式 runner 生成的 registry digest、SBOM/provenance/signature 和公开发布验证。
+6. 受保护发布 Environment 和独立 reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代前述恢复与审批门槛。
 
 注：已有 `v0.1.184` 只读比较仅作范围排除记录；本次不继续评估或对齐，且不阻止 `v0.1.183` 的开发、验证和发布。
 
