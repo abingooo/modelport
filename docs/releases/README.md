@@ -10,13 +10,16 @@
 - 对应 `docs/releases/<version>.md` 必须存在且已经完成审阅。
 - `ghcr.io/abingooo/modelport` 必须允许匿名拉取，否则公开发布验证会失败。
 - GitHub 仓库必须预先启用 Immutable Releases；工作流只读检查该设置，不会代替仓库所有者修改。该 REST 检查要求 `admin:read`，内置令牌无权时需配置最小权限的 `MODELPORT_RELEASE_ADMIN_TOKEN` Repository Secret。
-- GitHub Environment `modelport-production-release` 必须禁止管理员绕过、启用 `prevent_self_review` 并配置至少一名 required reviewer，同时保存 `MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256` 与 `MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256`。前者是仓库外已批准、已加密生产恢复证明的 SHA-256；后者是该哈希、本次版本、40 位候选提交、上游提交和 UTC 时间组成的无末尾换行规范 JSON 的 SHA-256。两者都不是生产报告内容、路径、凭据或数据统计。仓库外证明必须明确覆盖 PostgreSQL、Redis、持久资产/外部存储三类证据；独立 reviewer 必须逐项核对工作流输入与证明原文。质量、GHCR 写入和 GitHub Release 写入三个作业都直接使用该 Environment，并在各自写入前重新验证绑定与 24 小时时效，不能用已成功的上游作业绕过重跑审批。
+- GitHub Environment `modelport-production-release` 必须禁止管理员绕过、启用 `prevent_self_review`，且只配置一名 required reviewer；该用户的 GitHub numeric ID 必须与 `MODELPORT_GO_VEX_OWNER_ID` 完全一致。Environment 保存两个生产恢复 Secret：`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256`、`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256`；以及四个 VEX Secret：`MODELPORT_GO_VEX_DOCUMENT_BASE64`、`MODELPORT_GO_VEX_SHA256`、`MODELPORT_GO_VEX_OWNER_ID`、`MODELPORT_GO_VEX_BINDING_SHA256`。质量、GHCR 写入和 GitHub Release 写入三个作业都直接使用该 Environment，并在各自写入前重新验证 Environment、恢复证明和 VEX，不能用已成功的上游作业绕过重跑审批。
 - 手动触发时必须输入获批证明 SHA-256、证明记录的 UTC 时间，并确认工作流只发布公开产物、不会更新生产。证明时间不得早于候选提交、不得位于未来，且触发时不得超过 24 小时。缺少三类真实恢复证据时不得创建或更新上述批准值。
+- 手动触发还必须输入 `go_vex_sha256`、`go_vex_owner_id`、`go_vex_approved_at_utc` 和 `go_vex_expires_at_utc`。获批 OpenVEX 必须精确包含工作流观测到的三项模块发现，每条 statement 的唯一 product `@id` 必须为 `https://github.com/abingooo/modelport/commit/<40位候选提交>`，并包含唯一的受影响模块 subcomponent。批准时间不得早于候选提交，最长有效期为 90 天；每个发布作业校验时必须至少还剩 2 小时。
 - 正式版本号使用四段数字，Git 标签和镜像版本标签使用 `custom-v<version>`。
 
 ## 不可变发布
 
 工作流只发布两个镜像标签：`custom-v<version>` 和 `sha-<40位提交>`。两者必须解析到同一个 `sha256` manifest digest；不发布 `latest`、主版本或主次版本等可变标签。正式构建使用的 Node、Go、Alpine、PostgreSQL 和 Redis 基础镜像也必须固定 OCI index digest。最终 digest、提交、上游提交、基础镜像和平台记录在 Release 资产中，并为该 digest 生成 provenance、SBOM attestation 和 keyless Cosign 签名。
+
+GHCR 标签使用写入前不存在检查和推送后 digest 回读的 best-effort create-only 流程；GHCR 未提供本工作流可验证的服务端原子条件写入，因此标签本身不得描述为绝对不可变。正式运行与更新均以 manifest digest 为身份来源；发布窗口仍要求受保护 Environment、workflow concurrency 和唯一写入者。
 
 任何正式 Git 标签、GitHub Release 或镜像标签已存在时，工作流必须失败，不覆盖、不删除、不复用。GitHub Release 发布后必须处于 immutable 状态，标签和资产不能再替换。若工作流在镜像发布后、Release 完成前失败，该版本视为不可发布；修复原因后递增第四段版本号重新发布，不能覆盖残留标签。
 
@@ -40,6 +43,8 @@ GitHub Release 必须同时包含：
 - `release-revision.txt`
 - `release-metadata.json`
 - `production-restore-attestation.json`
+- `modelport-go-vex.openvex.json`
+- `modelport-go-module-inventory.json`
 - `release-assets.sha256`
 - `modelport-sbom.spdx.json`
 - `modelport-docker-updater`
@@ -47,4 +52,4 @@ GitHub Release 必须同时包含：
 - `modelport-update.path`
 - `modelport-compose.override.yml`
 
-公开验证作业必须确认 Release 非草稿、非预发布且不可变，Git 标签指向预期提交，所有资产校验和正确，恢复证明 SHA-256/版本/候选提交/上游提交/UTC/范围与批准绑定完全一致，版本标签与 SHA 标签解析到同一 digest，镜像 OCI 标签匹配，并且 Cosign 签名可由本工作流的 `production` 分支身份验证。
+获批 OpenVEX 会作为公开 Release 资产发布。security owner 必须确保 `impact_statement`、`action_statement` 和其他字段不含凭据、内部路径、非公开拓扑、生产数据或其他敏感信息；Environment 中采用 Base64 Secret 只为受保护传输，不表示发布后仍保密。公开验证作业必须确认 Release 非草稿、非预发布且不可变，Git 标签指向预期提交，所有资产校验和正确，恢复证明和 OpenVEX 绑定均完全一致，VEX 与实时模块 inventory 精确对应，版本标签与 SHA 标签解析到同一 digest，镜像 OCI 标签匹配，并且 Cosign 签名可由本工作流的 `production` 分支身份验证。

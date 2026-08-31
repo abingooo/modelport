@@ -249,7 +249,7 @@ GHCR/OCI 当前没有已文档化且经本工作流验证的服务端 create-onl
 
 唯一正式 GitHub/GHCR 写入路径是 `.github/workflows/custom-image.yml` 及其受保护的 `modelport-production-release` Environment。执行者不得自行配置或批准恢复证明哈希、批准自己的 Environment、绕过独立 reviewer，或使用本地个人 token 直接执行 `git push`、`docker push`、创建 tag/Release 或调用 GitHub/GHCR 写 API；用户确认不能替代 reviewer/Environment，reviewer/Environment 也不能替代用户确认。
 
-正式工作流的质量、GHCR 镜像发布和 GitHub Release 三个作业都必须直接通过受保护的 `modelport-production-release` GitHub Environment：禁止管理员绕过保护规则，启用 `prevent_self_review`，并由至少一名独立 required reviewer 审核仓库外证明后配置两个 Environment Secret。`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256` 是最终加密证明文件本身的 SHA-256；`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256` 是下述规范绑定 JSON 的 SHA-256。每个作业都逐项验证本次版本、候选提交、上游提交、UTC 时间和 24 小时时效；任何重跑都必须重新经过写入作业自身的 Environment 保护和校验。工作流只把这些非敏感字段及固定范围写入 Release 元数据。合成恢复演练、空数据库演练或仅 PostgreSQL/Redis 单项通过都不能生成这一批准证明。
+正式工作流的质量、GHCR 镜像发布和 GitHub Release 三个作业都必须直接通过受保护的 `modelport-production-release` GitHub Environment：禁止管理员绕过保护规则，启用 `prevent_self_review`，并且只配置一名 required reviewer；该用户的 GitHub numeric ID 必须与获批 VEX owner ID 完全一致。Environment 必须配置两个恢复证明 Secret：`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256`、`MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256`；以及四个 VEX Secret：`MODELPORT_GO_VEX_DOCUMENT_BASE64`、`MODELPORT_GO_VEX_SHA256`、`MODELPORT_GO_VEX_OWNER_ID`、`MODELPORT_GO_VEX_BINDING_SHA256`。每个作业都重新验证 Environment、恢复证明与 VEX；任何重跑都必须重新经过该作业自身的保护和校验，不能复用上游作业结果绕过审批。合成恢复演练、空数据库演练或仅 PostgreSQL/Redis 单项通过都不能生成恢复批准证明。
 
 仓库外证明至少包含以下逻辑字段；实际文件及其加密封装不得提交到仓库：
 
@@ -284,7 +284,38 @@ printf '%s' "$binding_json" | /bin/sh custom/release/sha256-stdin
 
 哈希输入不包含末尾换行；不得把 `jq` 的标准输出直接通过管道送入哈希工具，否则会把该换行计入并得到不同结果。仓库内 helper 在 Linux 优先使用 `sha256sum`，在 macOS 回退到 `shasum -a 256`，两者均不可用时明确失败。
 
-reviewer 必须先在批准环境解密并核对证明字段、三份报告哈希和候选提交，再核对加密文件哈希及绑定哈希。`recorded_at` 不得早于候选提交，不得位于未来，正式工作流开始时不得超过 24 小时。证明中不得加入真实路径、对象名、数据规模、账户标识、密文、摘要明细或原文。
+唯一 security-owner reviewer 必须先在批准环境解密并核对证明字段、三份报告哈希和候选提交，再核对加密文件哈希及绑定哈希。`recorded_at` 不得早于候选提交，不得位于未来，正式工作流开始时不得超过 24 小时。证明中不得加入真实路径、对象名、数据规模、账户标识、密文、摘要明细或原文。
+
+同一 reviewer 还必须批准最终 OpenVEX 文档。工作流输入必须提供 `go_vex_sha256`、`go_vex_owner_id`、`go_vex_approved_at_utc` 和 `go_vex_expires_at_utc`，并分别与 Environment Secret 及文档内容一致。文档要求如下：
+
+- `@context` 固定为 `https://openvex.dev/ns/v0.2.0`，`author` 固定为 `github-user-id:<numeric-owner-id>`，`role` 固定为 `Security Owner`，`timestamp` 等于批准时间。
+- 恰好包含 `GO-2026-5158` / `go.opentelemetry.io/otel@v1.43.0`、`GO-2026-5932` / `golang.org/x/crypto@v0.55.0`、`GO-2026-6222` / `golang.org/x/image@v0.43.0` 三条 `not_affected` statement，理由为 `vulnerable_code_not_present`；新增、缺失或版本变化都会失败。
+- 每条 statement 只允许一个 product，其 `@id` 必须是 `https://github.com/abingooo/modelport/commit/<40位候选提交>`；该 product 只允许一个 subcomponent，且必须是对应 finding 的精确 PURL。
+- `approved_at` 不得早于候选提交或位于未来；`expires_at` 必须晚于批准时间，最长有效期 90 天，并且每个发布作业校验时至少还剩 2 小时，以覆盖最长 90 分钟写入作业及缓冲。
+
+四个 VEX Secret 的含义分别是：完整 OpenVEX 文件的单行 Base64、该文件的 SHA-256、唯一 reviewer 的 GitHub numeric ID、下述规范绑定 JSON 的 SHA-256。绑定计算必须保持字段顺序和无末尾换行：
+
+```sh
+binding_json="$(jq -cn \
+  --arg document_sha256 '<openvex-file-sha256>' \
+  --arg version '0.1.183.1' \
+  --arg candidate_revision '<40 lowercase hex>' \
+  --arg upstream_revision 'e8cb019fabf8b55199436229044cbf9aa7a82564' \
+  --argjson owner_id '<numeric-github-user-id>' \
+  --arg approved_at '<UTC RFC3339 seconds>' \
+  --arg expires_at '<UTC RFC3339 seconds>' \
+  '{schema_version:1,document_sha256:$document_sha256,version:$version,
+    candidate_revision:$candidate_revision,upstream_revision:$upstream_revision,
+    product_id:("https://github.com/abingooo/modelport/commit/" + $candidate_revision),
+    findings:[
+      {advisory:"GO-2026-5158",component:"pkg:golang/go.opentelemetry.io%2Fotel@v1.43.0"},
+      {advisory:"GO-2026-5932",component:"pkg:golang/golang.org%2Fx%2Fcrypto@v0.55.0"},
+      {advisory:"GO-2026-6222",component:"pkg:golang/golang.org%2Fx%2Fimage@v0.43.0"}],
+    owner_id:$owner_id,approved_at:$approved_at,expires_at:$expires_at}')"
+printf '%s' "$binding_json" | /bin/sh custom/release/sha256-stdin
+```
+
+`MODELPORT_GO_VEX_DOCUMENT_BASE64` 只是 Environment 内的受保护传输形式。工作流会把解码后的完整文档以 `modelport-go-vex.openvex.json` 公开到 GitHub Release，并同时公开实时生成的 `modelport-go-module-inventory.json`；security owner 必须确保 `impact_statement`、`action_statement` 和其他字段不含凭据、内部路径、非公开拓扑、生产数据或其他敏感信息。
 
 发布不会触碰生产。公开产物、digest、SBOM、provenance、Cosign 和站内版本发现验证完成后，Codex 必须停止在“等待用户从站内手动更新”。
 

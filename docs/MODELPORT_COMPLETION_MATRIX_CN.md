@@ -64,12 +64,12 @@
 | 前端测试、类型检查、生产构建 | `passed` | ESLint；`./node_modules/.bin/vitest run`：268 files/1882 tests；`./node_modules/.bin/vue-tsc --noEmit`；`./node_modules/.bin/vite build`；pnpm 9 frozen-lockfile 离线安装和 pnpm 11 workspace 配置读取均成功 | 构建保留既有动态导入与 chunk-size 警告；`frontend/pnpm-workspace.yaml` 已纳入候选。 |
 | Playwright 视觉门 | `passed` | 桌面/移动端、深浅色、减少动画和 Canvas/资源检查；此前 5 项通过、3 项按设计跳过 | 跳过项必须在发布证据中保留理由。 |
 | 迁移/恢复契约 | `passed` | PostgreSQL/Redis 合成与空库 restore contract tests、`actionlint`、ShellCheck | 不等同于真实生产恢复证明。 |
-| 安全扫描 | `passed` | Gitleaks 差异/历史扫描、Trivy secret/config/image、高危/严重配置扫描、pnpm production audit 与例外校验；固定 `govulncheck v1.7.0`（漏洞库 2026-08-28）分别扫描源码入口和 `linux/amd64` 二进制，均报告 Symbol 0、Package 0、实际可达漏洞 0 | pnpm 有 11 项中危；Trivy 镜像完整扫描另列 2 项 `UNKNOWN`，详见下一行，不得把模块级发现误写成可达漏洞。 |
-| Go 模块级漏洞可达性 | `passed` | `CVE-2026-46603` / `GO-2026-6222` 只影响 `x/image/vp8l`，候选只链接 `x/image/draw` 与 `math/f64`，头像入口只注册 GIF/JPEG/PNG；`GO-2026-5932` 只影响 `x/crypto/openpgp*`，候选只使用 bcrypt、curve25519、nacl/box；`GO-2026-5158`（OpenTelemetry）同样仅出现在 govulncheck Module Results | `x/image` 项有 `v0.45.0` 修复，`openpgp` 项无修复版；三项均不可达，因此不为本次锁定的 `v0.1.183` 候选升级依赖。若未来升级，须作为独立变更重跑完整门槛。 |
+| 安全扫描 | `pending` | Gitleaks 差异/历史扫描、Trivy secret/config/image、高危/严重配置扫描、pnpm production audit 与例外校验已通过；非最终本地诊断已证明固定 `govulncheck v1.7.0` 对 `CGO_ENABLED=0`、`linux/amd64`、`embed` 发布入口源码和同构未剥离诊断二进制报告 Symbol 0、Package 0、实际可达漏洞 0 | 已新增发布门，要求从正式 backend builder 派生诊断二进制，归一化路径后比对完整 Go 版本、模块和构建设置，核对全部运行时分配 ELF 节的地址和大小，并逐字节比较除 build-id notes 外所有有文件内容的运行时分配节；须在最终 clean HEAD 重新执行后改回 `passed`。正式 stripped 二进制会因无符号而退化为模块级保守结果，不能写成二进制扫描为 0。 |
+| Go 模块级漏洞可达性 | `passed` | `CVE-2026-46603` / `GO-2026-6222` 只影响未进入发布依赖闭包的 `x/image/vp8l`，候选闭包中的 `x/image` 仅有 `draw` 与 `math/f64`，头像入口只注册 GIF/JPEG/PNG；`GO-2026-5932` 只影响未进入闭包的 `x/crypto/openpgp*`；`GO-2026-5158`（OpenTelemetry）未进入发布入口调用链。精确源码扫描及符号保留诊断二进制均为 0 | 正式镜像使用 `-s -w`；govulncheck 无法提取符号时会按 `go.mod` 精度保守报告上述三项并退出 3，该结果不是实际符号可达性证据。`x/image` 项有 `v0.45.0` 修复，`openpgp` 项无修复版；本次不为消除工具退化结果扩大 `v0.1.183` 的依赖差异。 |
 | 安全 owner 可达性例外/VEX | `blocked` | 技术可达性证据已完成；`.github/audit-exceptions.yml` 当前为空 | 公开发布前仍需真实安全 owner 记录范围、理由、缓解措施、有效期和批准；占位 owner 或空例外列表不能视为批准。 |
-| 正式候选镜像构建 | `passed` | Homebrew `docker-buildx v0.36.1` 直接调用 Colima BuildKit `v0.30.0`，从 clean HEAD 使用工作流锁定的基础镜像 digest 构建并 load `linux/amd64`，再使用锁定的 PostgreSQL/Redis digest 做 smoke；镜像架构、`sub2api` 默认用户、UID `1000`、OCI revision/version、容器 `healthy`、`/health` 和公开设置中的 `0.1.183.1` / `0.1.183` 均通过 | 本机 Docker Hub 超时，使用内容 digest 相同的 DaoCloud 引用完成本地验证；正式发布仍须由 GitHub amd64 runner 使用工作流官方引用重建，并生成最终 registry digest、SBOM、provenance 和签名。 |
-| 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 attestation 校验脚本已通过静态/合同测试；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、独立 reviewer 和真实恢复证明绑定；这些独立门槛未满足前不得写入 GitHub/GHCR。 |
-| 生产目标架构冒烟 | `blocked` | clean HEAD 的 `linux/amd64` 候选已在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 本地跨架构 smoke 不能替代 GitHub 原生 amd64 runner 的正式镜像验证，也不能替代用户手动更新后的生产实例健康检查。 |
+| 正式候选镜像构建 | `pending` | 旧候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 的 `linux/amd64` 镜像曾通过架构、非 root、健康、版本和 PostgreSQL/Redis smoke，但该镜像早于当前 Dockerfile 诊断 target 与发布门修改 | 必须从最终冻结提交重新构建并重新完成镜像、govulncheck、Trivy、SBOM 与 smoke，旧候选证据不能转移。 |
+| 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 attestation 校验脚本待最终修改纳入 Git 后重跑；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、唯一 security-owner reviewer、真实恢复证明绑定和获批 OpenVEX；这些独立门槛未满足前不得写入 GitHub/GHCR。 |
+| 生产目标架构冒烟 | `blocked` | 已被后续修改取代的候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 曾在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 最终冻结提交尚未重跑；本地跨架构 smoke 也不能替代 GitHub 原生 amd64 runner 的正式镜像验证或用户手动更新后的生产实例健康检查。 |
 
 ## 当前发布结论
 
@@ -80,7 +80,7 @@
 3. 获准的下游 live 测试实例、专用 Key、模型和费用上限。
 4. 针对模块级不可达漏洞的真实安全 owner 可达性例外/VEX 记录。
 5. 正式 runner 生成的 registry digest、SBOM/provenance/signature 和公开发布验证。
-6. 受保护发布 Environment 和独立 reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代前述恢复与审批门槛。
+6. 受保护发布 Environment 和与 OpenVEX owner ID 完全一致的唯一 security-owner reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代前述恢复与审批门槛。
 
 注：已有 `v0.1.184` 只读比较仅作范围排除记录；本次不继续评估或对齐，且不阻止 `v0.1.183` 的开发、验证和发布。
 

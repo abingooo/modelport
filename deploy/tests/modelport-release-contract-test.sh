@@ -16,6 +16,8 @@ github_slot_check=custom/release/assert-github-slots-absent
 image_slot_check=custom/release/assert-image-tags-absent
 release_environment_check=custom/release/assert-production-release-environment
 restore_attestation_check=custom/release/assert-production-restore-attestation
+go_vulnerability_approval_check=custom/release/assert-go-vulnerability-approval
+go_vulnerability_approval_contract=deploy/tests/modelport-go-vulnerability-approval-test.sh
 portable_sha256=custom/release/sha256-stdin
 github_release_publisher=custom/release/publish-github-release-create-only
 github_release_publisher_contract=deploy/tests/modelport-github-release-publisher-test.sh
@@ -42,7 +44,8 @@ expected_shellcheck_linux_x64_sha256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681
 
 for required_release_dependency in \
   "$github_slot_check" "$image_slot_check" "$release_environment_check" \
-  "$restore_attestation_check" "$portable_sha256" "$github_release_publisher" \
+  "$restore_attestation_check" "$go_vulnerability_approval_check" \
+  "$go_vulnerability_approval_contract" "$portable_sha256" "$github_release_publisher" \
   "$github_release_publisher_contract"; do
   [ -x "$required_release_dependency" ] || \
     fail "release dependency is missing or not executable: $required_release_dependency"
@@ -149,6 +152,13 @@ immutable_preflight_count=$(grep -Fc \
   'gh api --method GET "repos/${GITHUB_REPOSITORY}/immutable-releases"' "$workflow" || true)
 [ "$immutable_preflight_count" -eq 2 ] || \
   fail 'workflow must preflight GitHub Immutable Releases early and immediately before publication'
+production_refetch_count=$(grep -Fc 'git fetch --no-tags origin production' "$workflow" || true)
+[ "$production_refetch_count" -eq 3 ] || \
+  fail 'workflow must refetch production initially and before both publication boundaries'
+production_head_match_count=$(grep -Fc \
+  'test "${GITHUB_SHA}" = "$(git rev-parse origin/production)"' "$workflow" || true)
+[ "$production_head_match_count" -eq 3 ] || \
+  fail 'workflow must reject a stale production commit at every publication boundary'
 grep -Fq "'.immutable' <<< \"\${release_json}\"" "$workflow" || \
   fail 'public verification must confirm release immutability'
 
@@ -165,7 +175,47 @@ grep -Fq 'golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}' "$workflow" 
 grep -Fq 'grep -Fqx "Scanner: govulncheck@${GOVULNCHECK_VERSION}"' "$workflow" || \
   fail 'release workflow must verify the pinned govulncheck version'
 grep -Fq '"${scanner_dir}/govulncheck" ./...' "$workflow" || \
-  fail 'release workflow must run reachable govulncheck against the backend'
+  fail 'release workflow must scan the complete backend source tree'
+grep -Fq 'test -s internal/web/dist/index.html' "$workflow" || \
+  fail 'release workflow must build the frontend before scanning the embedded server'
+grep -Fq -- '-tags embed ./cmd/server' "$workflow" || \
+  fail 'release workflow must scan the exact embedded server source entrypoint'
+for release_source_env in \
+  '          CGO_ENABLED: 0' '          GOOS: linux' '          GOARCH: amd64'; do
+  grep -Fqx "$release_source_env" "$workflow" || \
+    fail "embedded server source scan is missing release setting: $release_source_env"
+done
+frontend_release_build_line=$(grep -nF '          pnpm run build' "$workflow" | head -n 1 | cut -d: -f1)
+embedded_source_scan_line=$(grep -nF '      - name: Scan embedded release server source' "$workflow" | cut -d: -f1)
+[ -n "$frontend_release_build_line" ] && [ -n "$embedded_source_scan_line" ] && \
+  [ "$frontend_release_build_line" -lt "$embedded_source_scan_line" ] || \
+  fail 'embedded server source scan must run after the frontend production build'
+grep -Fqx 'FROM scratch AS vulnerability-scan' Dockerfile || \
+  fail 'Dockerfile must export a symbol-bearing release analysis target'
+grep -Fqx 'FROM backend-builder AS vulnerability-scan-builder' Dockerfile || \
+  fail 'vulnerability analysis binary must inherit the exact release backend builder'
+grep -Fq 'target: vulnerability-scan' "$workflow" || \
+  fail 'release workflow must build the vulnerability analysis target'
+grep -Fq 'Set up Go for release binary analysis' "$workflow" || \
+  fail 'release workflow must install the pinned Go toolchain before binary analysis'
+grep -Fq 'go version -m "$1"' "$workflow" || \
+  fail 'release workflow must compare runtime and analysis binary build information'
+grep -Fq 'cmp "${runtime_dir}/runtime.buildinfo" "${runtime_dir}/analysis.buildinfo"' "$workflow" || \
+  fail 'release workflow must reject a release-parity build information mismatch'
+grep -Fq 'allocated_section_inventory()' "$workflow" || \
+  fail 'release workflow must inventory every runtime-allocated ELF section'
+grep -Fq 'cmp "${runtime_dir}/runtime.sections" "${runtime_dir}/analysis.sections"' "$workflow" || \
+  fail 'release workflow must reject a runtime-allocated ELF section mismatch'
+grep -Fq 'objcopy "${runtime_dump_args[@]}"' "$workflow" || \
+  fail 'release workflow must extract runtime binary allocated sections'
+grep -Fq 'objcopy "${analysis_dump_args[@]}"' "$workflow" || \
+  fail 'release workflow must extract analysis binary allocated sections'
+grep -Fq 'for section in "${loadable_sections[@]}"' "$workflow" || \
+  fail 'release workflow must compare every file-backed allocated section'
+grep -Fq 'go tool nm "${analysis_binary}"' "$workflow" || \
+  fail 'release workflow must verify that the analysis binary retains symbols'
+grep -Fq '"${scanner_dir}/govulncheck" -mode=binary "${analysis_binary}"' "$workflow" || \
+  fail 'release workflow must scan the symbol-bearing release analysis binary'
 grep -Fq 'pnpm audit --prod --audit-level=high --json' "$workflow" || \
   fail 'release workflow must audit frontend production dependencies'
 grep -Fq 'check_pnpm_audit_exceptions.py' "$workflow" || \
@@ -318,6 +368,7 @@ target_jobs = %w[quality image release]
 environment_name = 'modelport-production-release'
 environment_validator = '/bin/sh custom/release/assert-production-release-environment'
 attestation_validator = '/bin/sh custom/release/assert-production-restore-attestation'
+vex_validator = '/bin/sh custom/release/assert-go-vulnerability-approval'
 immutable_preflight = 'gh api --method GET "repos/${GITHUB_REPOSITORY}/immutable-releases"'
 
 quality = jobs.fetch('quality')
@@ -402,15 +453,25 @@ target_jobs.each do |job_name|
   raise "#{job_name} must use the protected Environment" unless
     job['environment'] == environment_name
   steps = job.fetch('steps')
+  checkout_steps = steps.select do |step|
+    step.fetch('uses', '').start_with?('actions/checkout@')
+  end
+  raise "#{job_name} must contain exactly one checkout" unless checkout_steps.length == 1
+  raise "#{job_name} VEX ancestry validation requires a full checkout" unless
+    checkout_steps.first.fetch('with', {})['fetch-depth'] == 0
   runs = steps.map { |step| step.fetch('run', '').to_s }
   environment_calls = runs.sum { |run| run.scan(environment_validator).length }
   attestation_calls = runs.sum { |run| run.scan(attestation_validator).length }
+  vex_calls = runs.sum { |run| run.scan(vex_validator).length }
   raise "#{job_name} must query and validate the Environment exactly once" unless
     environment_calls == 1
   raise "#{job_name} must validate the restore attestation exactly once" unless
     attestation_calls == 1
+  raise "#{job_name} must validate the approved OpenVEX document exactly once" unless
+    vex_calls == 1
   environment_step = runs.index { |run| run.include?(environment_validator) }
   attestation_step = runs.index { |run| run.include?(attestation_validator) }
+  vex_step = runs.index { |run| run.include?(vex_validator) }
   environment_step_definition = steps.fetch(environment_step)
   expected_token = '${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}'
   raise "#{job_name} Environment query token is missing" unless
@@ -425,6 +486,8 @@ target_jobs.each do |job_name|
       validation_run.index(environment_validator) < output_write
     raise 'quality attestation validation must precede its output write' unless
       validation_run.index(attestation_validator) < output_write
+    raise 'quality OpenVEX validation must precede its output write' unless
+      validation_run.index(vex_validator) < output_write
   when 'image'
     registry_write_steps = steps.each_index.select do |index|
       step = steps.fetch(index)
@@ -440,6 +503,8 @@ target_jobs.each do |job_name|
       registry_write_steps.all? { |index| environment_step < index }
     raise 'image attestation validation must precede every registry write' unless
       registry_write_steps.all? { |index| attestation_step < index }
+    raise 'image OpenVEX validation must precede every registry write' unless
+      registry_write_steps.all? { |index| vex_step < index }
   when 'release'
     release_write_steps = steps.each_index.select do |index|
       step = steps.fetch(index)
@@ -457,6 +522,8 @@ target_jobs.each do |job_name|
       environment_step < release_write_step
     raise 'release attestation validation must precede the GitHub Release write' unless
       attestation_step < release_write_step
+    raise 'release OpenVEX validation must precede the GitHub Release write' unless
+      vex_step < release_write_step
     release_write_run = runs.fetch(release_write_step)
     raise 'late Immutable Releases preflight must run in the GitHub Release write step' unless
       release_write_run.scan(immutable_preflight).length == 1
@@ -493,11 +560,18 @@ raise 'Environment validator leaked into an unexpected job' unless
   all_runs.sum { |run| run.scan(environment_validator).length } == target_jobs.length
 raise 'attestation validator leaked into an unexpected job' unless
   all_runs.sum { |run| run.scan(attestation_validator).length } == target_jobs.length
+raise 'OpenVEX validator leaked into an unexpected job' unless
+  all_runs.sum { |run| run.scan(vex_validator).length } == target_jobs.length
 RUBY
 grep -Fq 'production_restore_attestation_sha256:' "$workflow" || \
   fail 'production restore attestation hash input is missing'
 grep -Fq 'production_restore_attestation_utc:' "$workflow" || \
   fail 'production restore attestation timestamp input is missing'
+for go_vex_input in go_vex_sha256 go_vex_owner_id \
+  go_vex_approved_at_utc go_vex_expires_at_utc; do
+  grep -Fq "      ${go_vex_input}:" "$workflow" || \
+    fail "required OpenVEX workflow input is missing: $go_vex_input"
+done
 grep -Fq 'confirm_wait_for_manual_update:' "$workflow" || \
   fail 'manual production update confirmation is missing'
 grep -Fqx '        default: false' "$workflow" || \
@@ -509,8 +583,21 @@ grep -Fq 'MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256' "$workflow" || \
   fail 'approved restore attestation environment secret gate is missing'
 grep -Fq 'MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256' "$workflow" || \
   fail 'approved restore attestation binding secret gate is missing'
+for go_vex_secret in MODELPORT_GO_VEX_DOCUMENT_BASE64 MODELPORT_GO_VEX_SHA256 \
+  MODELPORT_GO_VEX_OWNER_ID MODELPORT_GO_VEX_BINDING_SHA256; do
+  grep -Fq "$go_vex_secret" "$workflow" || \
+    fail "protected OpenVEX secret gate is missing: $go_vex_secret"
+done
 grep -Fqx '  RESTORE_ATTESTATION_MAX_AGE_SECONDS: 86400' "$workflow" || \
   fail 'production restore attestation must expire after 24 hours'
+grep -Fqx '  GO_VEX_MAX_VALIDITY_SECONDS: 7776000' "$workflow" || \
+  fail 'OpenVEX approval must expire within 90 days'
+grep -Fqx '  GO_VEX_MIN_REMAINING_SECONDS: 7200' "$workflow" || \
+  fail 'OpenVEX approval must remain valid across the longest publication job'
+grep -Fq '.note.go.buildid|.note.gnu.build-id) continue ;;' "$workflow" || \
+  fail 'binary parity may exclude only the explicit build-id note allowlist'
+grep -Fq 'unexpected allocated note section:' "$workflow" || \
+  fail 'binary parity must fail on an unexpected allocated note section'
 # shellcheck disable=SC2016 # Match the literal workflow jq expression.
 grep -Fq 'candidate_revision:$candidate_revision,upstream_revision:$upstream_revision' "$workflow" || \
   fail 'public restore attestation must bind candidate and upstream revisions'
@@ -518,11 +605,23 @@ grep -Fq '.can_admins_bypass == false' "$release_environment_check" || \
   fail 'production release environment must disable administrator bypass'
 grep -Fq '.prevent_self_review == true' "$release_environment_check" || \
   fail 'production release environment must prevent self review'
-grep -Fq 'modelport-production-release must require independent review without administrator bypass' \
+grep -Fq '(.reviewers | length) == 1' "$release_environment_check" || \
+  fail 'production release environment must have exactly one approved reviewer'
+grep -Fq '.reviewer.id == $security_owner_id' "$release_environment_check" || \
+  fail 'production release environment reviewer must match the approved security owner'
+grep -Fq 'modelport-production-release must require only the approved security owner without administrator bypass' \
   "$release_environment_check" || \
-  fail 'independent required reviewer preflight is missing'
+  fail 'security-owner required reviewer preflight is missing'
 grep -Fq 'production-restore-attestation.json' "$workflow" || \
   fail 'non-sensitive restore attestation release asset is missing'
+grep -Fq 'modelport-go-vex.openvex.json' "$workflow" || \
+  fail 'approved OpenVEX release asset is missing'
+grep -Fq 'modelport-go-module-inventory.json' "$workflow" || \
+  fail 'Go module vulnerability inventory release asset is missing'
+grep -Fq -- '-mode=binary -scan=module -format=openvex' "$workflow" || \
+  fail 'release workflow must derive the observed Go module finding set'
+grep -Fq '/bin/sh deploy/tests/modelport-go-vulnerability-approval-test.sh' "$workflow" || \
+  fail 'release workflow must run the OpenVEX approval contract test'
 grep -Fq '/bin/bash custom/release/publish-github-release-create-only' "$workflow" || \
   fail 'create-only GitHub Release publisher is missing'
 if grep -Fq 'softprops/action-gh-release@' "$workflow"; then
@@ -790,11 +889,14 @@ grep -Fq 'created="$(git show -s --format=%cI "${GITHUB_SHA}")"' "$workflow" || 
 /bin/sh -n "$image_slot_check"
 /bin/sh -n "$release_environment_check"
 /bin/sh -n "$restore_attestation_check"
+/bin/sh -n "$go_vulnerability_approval_check"
+/bin/sh -n "$go_vulnerability_approval_contract"
 /bin/sh -n "$portable_sha256"
 /bin/bash -n "$github_release_publisher"
 /bin/bash -n "$github_release_publisher_contract"
 /bin/bash -n "$postgres_restore_contract"
 /bin/bash -n "$redis_restore_contract"
+/bin/sh "$go_vulnerability_approval_contract"
 
 mock_bin="$temporary_dir/bin"
 mkdir -p "$mock_bin"
@@ -927,14 +1029,18 @@ run_environment_check() {
   PATH="$mock_bin:$PATH" \
   GH_TOKEN=modelport-test-token \
   MODELPORT_TEST_GH_ENV_MODE="${MODELPORT_TEST_GH_ENV_MODE:-valid}" \
-    /bin/sh "$release_environment_check" abingooo/modelport
+    /bin/sh "$release_environment_check" abingooo/modelport 123
 }
 
 MODELPORT_TEST_GH_ENV_MODE=valid run_environment_check >/dev/null || \
   fail 'valid production release Environment was rejected'
 if PATH="$mock_bin:$PATH" GH_TOKEN='' MODELPORT_TEST_GH_ENV_MODE=valid \
-  /bin/sh "$release_environment_check" abingooo/modelport >/dev/null 2>&1; then
+  /bin/sh "$release_environment_check" abingooo/modelport 123 >/dev/null 2>&1; then
   fail 'production release Environment query accepted a missing token'
+fi
+if PATH="$mock_bin:$PATH" GH_TOKEN=modelport-test-token MODELPORT_TEST_GH_ENV_MODE=valid \
+  /bin/sh "$release_environment_check" abingooo/modelport 456 >/dev/null 2>&1; then
+  fail 'production release Environment accepted a reviewer other than the approved security owner'
 fi
 for environment_mode in \
   admin-bypass self-review no-reviewer no-required-reviewer-rule \

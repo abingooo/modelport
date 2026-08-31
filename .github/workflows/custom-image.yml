@@ -19,6 +19,22 @@ on:
         description: 'UTC timestamp recorded by the approved production restore attestation'
         required: true
         type: string
+      go_vex_sha256:
+        description: 'SHA-256 of the security-owner-approved OpenVEX document'
+        required: true
+        type: string
+      go_vex_owner_id:
+        description: 'Numeric GitHub user ID of the approving security owner'
+        required: true
+        type: string
+      go_vex_approved_at_utc:
+        description: 'UTC timestamp when the security owner approved the OpenVEX document'
+        required: true
+        type: string
+      go_vex_expires_at_utc:
+        description: 'UTC timestamp when the OpenVEX approval expires'
+        required: true
+        type: string
       confirm_wait_for_manual_update:
         description: 'Confirm this workflow publishes artifacts only and will not update production'
         required: true
@@ -51,6 +67,8 @@ env:
   SHELLCHECK_VERSION: 0.11.0
   SHELLCHECK_LINUX_X64_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
   RESTORE_ATTESTATION_MAX_AGE_SECONDS: 86400
+  GO_VEX_MAX_VALIDITY_SECONDS: 7776000
+  GO_VEX_MIN_REMAINING_SECONDS: 7200
 
 jobs:
   quality:
@@ -81,6 +99,14 @@ jobs:
           APPROVED_RESTORE_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}
           APPROVED_RESTORE_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}
           INPUT_RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          INPUT_GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
+          INPUT_GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
+          INPUT_GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
+          INPUT_GO_VEX_EXPIRES_AT: ${{ inputs.go_vex_expires_at_utc }}
+          APPROVED_GO_VEX_DOCUMENT_BASE64: ${{ secrets.MODELPORT_GO_VEX_DOCUMENT_BASE64 }}
+          APPROVED_GO_VEX_SHA256: ${{ secrets.MODELPORT_GO_VEX_SHA256 }}
+          APPROVED_GO_VEX_OWNER_ID: ${{ secrets.MODELPORT_GO_VEX_OWNER_ID }}
+          APPROVED_GO_VEX_BINDING_SHA256: ${{ secrets.MODELPORT_GO_VEX_BINDING_SHA256 }}
           CONFIRM_WAIT_FOR_MANUAL_UPDATE: ${{ inputs.confirm_wait_for_manual_update }}
         run: |
           set -euo pipefail
@@ -92,6 +118,17 @@ jobs:
           test "${GITHUB_REF}" = "refs/heads/production"
           test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          umask 077
+          go_vex_file="${RUNNER_TEMP}/modelport-go-vex.openvex.json"
+          printf '%s' "${APPROVED_GO_VEX_DOCUMENT_BASE64}" \
+            | base64 --decode > "${go_vex_file}"
+          /bin/sh custom/release/assert-go-vulnerability-approval \
+            "${version}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" "${go_vex_file}" \
+            "${INPUT_GO_VEX_SHA256}" "${INPUT_GO_VEX_OWNER_ID}" \
+            "${INPUT_GO_VEX_APPROVED_AT}" "${INPUT_GO_VEX_EXPIRES_AT}" \
+            "${APPROVED_GO_VEX_SHA256}" "${APPROVED_GO_VEX_OWNER_ID}" \
+            "${APPROVED_GO_VEX_BINDING_SHA256}" "${GO_VEX_MAX_VALIDITY_SECONDS}" \
+            "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-restore-attestation \
             "${version}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
             "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
@@ -116,7 +153,7 @@ jobs:
             exit 1
           fi
           /bin/sh custom/release/assert-production-release-environment \
-            "${GITHUB_REPOSITORY}"
+            "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
           /bin/sh custom/release/assert-github-slots-absent \
             origin "${tag}" "${GITHUB_REPOSITORY}"
           {
@@ -212,7 +249,7 @@ jobs:
       - name: Verify historical ModelPort crypto compatibility vectors
         run: /bin/sh backend/scripts/verify-modelport-crypto-compat-vectors.sh
 
-      - name: Scan reachable Go vulnerabilities with pinned govulncheck
+      - name: Scan backend source with pinned govulncheck
         working-directory: backend
         run: |
           set -euo pipefail
@@ -336,6 +373,18 @@ jobs:
           pnpm run test:run
           pnpm run build
 
+      - name: Scan embedded release server source
+        working-directory: backend
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          test -s internal/web/dist/index.html
+          "${RUNNER_TEMP}/modelport-govulncheck/govulncheck" \
+            -tags embed ./cmd/server
+
       - name: Install pinned Playwright Chromium
         working-directory: frontend
         run: pnpm exec playwright install --with-deps chromium
@@ -358,6 +407,7 @@ jobs:
           MODELPORT_REDIS_DRILL_IMAGE="${REDIS_IMAGE}" \
             /bin/bash deploy/modelport-isolated-redis-restore-contract-test.sh
           /bin/sh deploy/tests/modelport-release-contract-test.sh
+          /bin/sh deploy/tests/modelport-go-vulnerability-approval-test.sh
           /bin/sh custom/update/test-modelport-docker-updater.sh
 
       - name: Upload Playwright visual evidence after quality gates
@@ -372,7 +422,7 @@ jobs:
           retention-days: 14
 
   image:
-    name: Build, verify, and publish immutable image
+    name: Build, verify, and publish digest-addressed image
     needs: quality
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -390,7 +440,19 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Set up Go for release binary analysis
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: backend/go.mod
+          check-latest: false
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Verify Go toolchain for release binary analysis
+        run: go version | grep -q 'go1.27.0'
 
       - name: Resolve reproducible image metadata
         id: metadata
@@ -431,6 +493,138 @@ jobs:
             org.opencontainers.image.version=${{ needs.quality.outputs.tag }}
             org.opencontainers.image.created=${{ steps.metadata.outputs.created }}
           cache-from: type=gha
+
+      - name: Export release-parity vulnerability analysis binary
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: Dockerfile
+          target: vulnerability-scan
+          platforms: linux/amd64
+          push: false
+          build-args: |
+            VERSION=${{ needs.quality.outputs.version }}
+            COMMIT=${{ github.sha }}
+            DATE=${{ steps.metadata.outputs.created }}
+            NODE_IMAGE=${{ env.NODE_IMAGE }}
+            GOLANG_IMAGE=${{ env.GOLANG_IMAGE }}
+            ALPINE_IMAGE=${{ env.ALPINE_IMAGE }}
+            POSTGRES_IMAGE=${{ env.POSTGRES_IMAGE }}
+          outputs: type=local,dest=${{ runner.temp }}/modelport-vulnerability-scan
+          cache-from: type=gha
+
+      - name: Verify release binary reachability with pinned govulncheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          scanner_dir="${RUNNER_TEMP}/modelport-govulncheck"
+          runtime_dir="${RUNNER_TEMP}/modelport-runtime-binary"
+          analysis_binary="${RUNNER_TEMP}/modelport-vulnerability-scan/sub2api"
+          runtime_binary="${runtime_dir}/sub2api"
+          runtime_container=""
+          cleanup() {
+            if [ -n "${runtime_container}" ]; then
+              docker rm -f "${runtime_container}" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          mkdir -p "${scanner_dir}" "${runtime_dir}"
+          test -s "${analysis_binary}"
+          GOBIN="${scanner_dir}" go install \
+            "golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION}"
+          "${scanner_dir}/govulncheck" -version \
+            | grep -Fqx "Scanner: govulncheck@${GOVULNCHECK_VERSION}"
+
+          runtime_container="$(docker create "modelport-release-candidate:${GITHUB_SHA}")"
+          docker cp "${runtime_container}:/app/sub2api" "${runtime_binary}"
+          test -s "${runtime_binary}"
+
+          normalize_build_info() {
+            go version -m "$1" | sed '1s/^[^:]*:/binary:/'
+          }
+          normalize_build_info "${runtime_binary}" > "${runtime_dir}/runtime.buildinfo"
+          normalize_build_info "${analysis_binary}" > "${runtime_dir}/analysis.buildinfo"
+          cmp "${runtime_dir}/runtime.buildinfo" "${runtime_dir}/analysis.buildinfo"
+
+          command -v objcopy >/dev/null
+          command -v readelf >/dev/null
+          allocated_section_inventory() {
+            readelf --wide --sections "$1" \
+              | sed -E 's/^[[:space:]]*\[[[:space:]]*[0-9]+\][[:space:]]+//' \
+              | awk '$7 ~ /A/ { print $1, $2, $3, $4, $5, $6, $7, $8, $9, $10 }'
+          }
+          allocated_section_inventory "${runtime_binary}" \
+            > "${runtime_dir}/runtime.sections"
+          allocated_section_inventory "${analysis_binary}" \
+            > "${runtime_dir}/analysis.sections"
+          cmp "${runtime_dir}/runtime.sections" "${runtime_dir}/analysis.sections"
+
+          runtime_dump_args=()
+          analysis_dump_args=()
+          loadable_sections=()
+          while read -r section section_type _; do
+            case "${section}" in
+              .note.go.buildid|.note.gnu.build-id) continue ;;
+              .note.*)
+                echo "unexpected allocated note section: ${section}" >&2
+                exit 1
+                ;;
+            esac
+            if [ "${section_type}" != NOBITS ]; then
+              loadable_sections+=("${section}")
+              runtime_dump_args+=(
+                --dump-section "${section}=${runtime_dir}/runtime${section}"
+              )
+              analysis_dump_args+=(
+                --dump-section "${section}=${runtime_dir}/analysis${section}"
+              )
+            fi
+          done < "${runtime_dir}/runtime.sections"
+          ((${#loadable_sections[@]} > 0))
+          objcopy "${runtime_dump_args[@]}" \
+            "${runtime_binary}" "${runtime_dir}/runtime.elf"
+          objcopy "${analysis_dump_args[@]}" \
+            "${analysis_binary}" "${runtime_dir}/analysis.elf"
+          for section in "${loadable_sections[@]}"; do
+            test -s "${runtime_dir}/runtime${section}"
+            test -s "${runtime_dir}/analysis${section}"
+            cmp "${runtime_dir}/runtime${section}" \
+              "${runtime_dir}/analysis${section}"
+          done
+
+          go tool nm "${analysis_binary}" >/dev/null
+          "${scanner_dir}/govulncheck" -mode=binary "${analysis_binary}"
+          module_vex="${runtime_dir}/govuln-module.openvex.json"
+          module_inventory="${RUNNER_TEMP}/modelport-go-module-inventory.json"
+          set +e
+          "${scanner_dir}/govulncheck" -mode=binary -scan=module -format=openvex \
+            "${analysis_binary}" > "${module_vex}"
+          module_scan_status=$?
+          set -e
+          case "${module_scan_status}" in
+            0|3) ;;
+            *)
+              echo "govulncheck module inventory failed with status ${module_scan_status}" >&2
+              exit "${module_scan_status}"
+              ;;
+          esac
+          jq -e '.statements | type == "array" and length > 0 and
+            all(.[];
+              (.vulnerability.name | type == "string" and length > 0) and
+              (.products | type == "array" and length == 1) and
+              (.products[0].subcomponents | type == "array" and length == 1) and
+              (.products[0].subcomponents[0]["@id"] | type == "string" and length > 0))' \
+            "${module_vex}" >/dev/null
+          jq -cS '[.statements[] | {
+            advisory:.vulnerability.name,
+            component:.products[0].subcomponents[0]["@id"]
+          }] | sort_by(.advisory)' "${module_vex}" > "${module_inventory}"
+          jq -e '. == [
+            {"advisory":"GO-2026-5158","component":"pkg:golang/go.opentelemetry.io%2Fotel@v1.43.0"},
+            {"advisory":"GO-2026-5932","component":"pkg:golang/golang.org%2Fx%2Fcrypto@v0.55.0"},
+            {"advisory":"GO-2026-6222","component":"pkg:golang/golang.org%2Fx%2Fimage@v0.43.0"}
+          ]' "${module_inventory}" >/dev/null
 
       - name: Inspect local release candidate
         shell: bash
@@ -514,7 +708,7 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:18080/api/v1/settings/public \
             | jq -e --arg version "${VERSION}" '.data.version == $version and .data.upstream_version == "0.1.183"'
 
-      - name: Revalidate protected environment and restore attestation before registry write
+      - name: Revalidate protected environment, OpenVEX, and restore attestation
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
@@ -524,6 +718,14 @@ jobs:
           APPROVED_RESTORE_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}
           APPROVED_RESTORE_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}
           INPUT_RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          INPUT_GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
+          INPUT_GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
+          INPUT_GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
+          INPUT_GO_VEX_EXPIRES_AT: ${{ inputs.go_vex_expires_at_utc }}
+          APPROVED_GO_VEX_DOCUMENT_BASE64: ${{ secrets.MODELPORT_GO_VEX_DOCUMENT_BASE64 }}
+          APPROVED_GO_VEX_SHA256: ${{ secrets.MODELPORT_GO_VEX_SHA256 }}
+          APPROVED_GO_VEX_OWNER_ID: ${{ secrets.MODELPORT_GO_VEX_OWNER_ID }}
+          APPROVED_GO_VEX_BINDING_SHA256: ${{ secrets.MODELPORT_GO_VEX_BINDING_SHA256 }}
           CONFIRM_WAIT_FOR_MANUAL_UPDATE: ${{ inputs.confirm_wait_for_manual_update }}
         run: |
           set -euo pipefail
@@ -531,8 +733,19 @@ jobs:
           test "${GITHUB_REF}" = "refs/heads/production"
           test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          umask 077
+          go_vex_file="${RUNNER_TEMP}/modelport-go-vex.openvex.json"
+          printf '%s' "${APPROVED_GO_VEX_DOCUMENT_BASE64}" \
+            | base64 --decode > "${go_vex_file}"
+          /bin/sh custom/release/assert-go-vulnerability-approval \
+            "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" "${go_vex_file}" \
+            "${INPUT_GO_VEX_SHA256}" "${INPUT_GO_VEX_OWNER_ID}" \
+            "${INPUT_GO_VEX_APPROVED_AT}" "${INPUT_GO_VEX_EXPIRES_AT}" \
+            "${APPROVED_GO_VEX_SHA256}" "${APPROVED_GO_VEX_OWNER_ID}" \
+            "${APPROVED_GO_VEX_BINDING_SHA256}" "${GO_VEX_MAX_VALIDITY_SECONDS}" \
+            "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-release-environment \
-            "${GITHUB_REPOSITORY}"
+            "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
           /bin/sh custom/release/assert-production-restore-attestation \
             "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
             "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
@@ -555,6 +768,8 @@ jobs:
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin production
+          test "${GITHUB_SHA}" = "$(git rev-parse origin/production)"
           version_ref="${RELEASE_IMAGE}:${RELEASE_TAG}"
           commit_ref="${RELEASE_IMAGE}:sha-${GITHUB_SHA}"
           candidate="modelport-release-candidate:${GITHUB_SHA}"
@@ -619,8 +834,22 @@ jobs:
           DIGEST: ${{ steps.publish.outputs.digest }}
           RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
+          GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
+          GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
+          GO_VEX_EXPIRES_AT: ${{ inputs.go_vex_expires_at_utc }}
         run: |
           set -euo pipefail
+          test -s "${RUNNER_TEMP}/modelport-go-vex.openvex.json"
+          test -s "${RUNNER_TEMP}/modelport-go-module-inventory.json"
+          install -m 0644 "${RUNNER_TEMP}/modelport-go-vex.openvex.json" \
+            modelport-go-vex.openvex.json
+          install -m 0644 "${RUNNER_TEMP}/modelport-go-module-inventory.json" \
+            modelport-go-module-inventory.json
+          test "$(/bin/sh custom/release/sha256-stdin < modelport-go-vex.openvex.json)" = \
+            "${GO_VEX_SHA256}"
+          go_inventory_sha256="$(/bin/sh custom/release/sha256-stdin \
+            < modelport-go-module-inventory.json)"
           printf '%s\n' "${DIGEST}" > manifest-digest.txt
           printf '%s\n' "${GITHUB_SHA}" > release-revision.txt
           jq -n \
@@ -649,6 +878,12 @@ jobs:
             --arg redis_image "${REDIS_IMAGE}" \
             --arg restore_attestation_sha256 "${RESTORE_ATTESTATION_SHA256}" \
             --arg restore_attestation_utc "${RESTORE_ATTESTATION_UTC}" \
+            --arg go_vex_sha256 "${GO_VEX_SHA256}" \
+            --argjson go_vex_owner_id "${GO_VEX_OWNER_ID}" \
+            --arg go_vex_approved_at "${GO_VEX_APPROVED_AT}" \
+            --arg go_vex_expires_at "${GO_VEX_EXPIRES_AT}" \
+            --arg go_inventory_sha256 "${go_inventory_sha256}" \
+            --slurpfile go_inventory modelport-go-module-inventory.json \
             '{version:$version,tag:$tag,image:$image,digest:$digest,revision:$revision,
               upstream_revision:$upstream,platforms:["linux/amd64"],
               base_images:{node:$node_image,golang:$golang_image,alpine:$alpine_image,
@@ -656,7 +891,11 @@ jobs:
               production_restore_attestation:{sha256:$restore_attestation_sha256,
                 version:$version,candidate_revision:$revision,upstream_revision:$upstream,
                 recorded_at:$restore_attestation_utc,
-                scope:["postgresql","redis","persistent_assets"]}}' \
+                scope:["postgresql","redis","persistent_assets"]},
+              go_vulnerability_approval:{document_sha256:$go_vex_sha256,
+                inventory_sha256:$go_inventory_sha256,owner_id:$go_vex_owner_id,
+                approved_at:$go_vex_approved_at,expires_at:$go_vex_expires_at,
+                findings:$go_inventory[0]}}' \
             > release-metadata.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -667,6 +906,8 @@ jobs:
             release-revision.txt
             release-metadata.json
             production-restore-attestation.json
+            modelport-go-vex.openvex.json
+            modelport-go-module-inventory.json
             modelport-sbom.spdx.json
           if-no-files-found: error
           retention-days: 7
@@ -685,6 +926,7 @@ jobs:
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -700,6 +942,10 @@ jobs:
           DIGEST: ${{ needs.image.outputs.digest }}
           RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
+          GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
+          GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
+          GO_VEX_EXPIRES_AT: ${{ inputs.go_vex_expires_at_utc }}
         run: |
           set -euo pipefail
           install -m 0755 custom/update/modelport-docker-updater release-assets/modelport-docker-updater
@@ -711,6 +957,10 @@ jobs:
           test "$(cat manifest-digest.txt)" = "${DIGEST}"
           grep -Eq '^[0-9a-f]{40}$' release-revision.txt
           test "$(cat release-revision.txt)" = "${GITHUB_SHA}"
+          test "$(/bin/sh ../custom/release/sha256-stdin \
+            < modelport-go-vex.openvex.json)" = "${GO_VEX_SHA256}"
+          go_inventory_sha256="$(/bin/sh ../custom/release/sha256-stdin \
+            < modelport-go-module-inventory.json)"
           jq -e \
             --arg version "${VERSION}" \
             --arg tag "${RELEASE_TAG}" \
@@ -725,6 +975,12 @@ jobs:
             --arg redis_image "${REDIS_IMAGE}" \
             --arg restore_attestation_sha256 "${RESTORE_ATTESTATION_SHA256}" \
             --arg restore_attestation_utc "${RESTORE_ATTESTATION_UTC}" \
+            --arg go_vex_sha256 "${GO_VEX_SHA256}" \
+            --argjson go_vex_owner_id "${GO_VEX_OWNER_ID}" \
+            --arg go_vex_approved_at "${GO_VEX_APPROVED_AT}" \
+            --arg go_vex_expires_at "${GO_VEX_EXPIRES_AT}" \
+            --arg go_inventory_sha256 "${go_inventory_sha256}" \
+            --slurpfile go_inventory modelport-go-module-inventory.json \
             '.version == $version and .tag == $tag and .image == $image and
              .digest == $digest and .revision == $revision and
              .upstream_revision == $upstream and .platforms == ["linux/amd64"] and
@@ -734,7 +990,11 @@ jobs:
                sha256:$restore_attestation_sha256,version:$version,
                candidate_revision:$revision,upstream_revision:$upstream,
                recorded_at:$restore_attestation_utc,
-               scope:["postgresql","redis","persistent_assets"]}' \
+               scope:["postgresql","redis","persistent_assets"]} and
+             .go_vulnerability_approval == {
+               document_sha256:$go_vex_sha256,inventory_sha256:$go_inventory_sha256,
+               owner_id:$go_vex_owner_id,approved_at:$go_vex_approved_at,
+               expires_at:$go_vex_expires_at,findings:$go_inventory[0]}' \
             release-metadata.json
           jq -e \
             --arg sha256 "${RESTORE_ATTESTATION_SHA256}" \
@@ -753,6 +1013,8 @@ jobs:
             release-revision.txt \
             release-metadata.json \
             production-restore-attestation.json \
+            modelport-go-vex.openvex.json \
+            modelport-go-module-inventory.json \
             modelport-sbom.spdx.json \
             modelport-docker-updater \
             modelport-update.service \
@@ -761,7 +1023,7 @@ jobs:
             > release-assets.sha256
           sha256sum --check release-assets.sha256
 
-      - name: Revalidate protected environment, attestation, and Release slots
+      - name: Revalidate protected environment, OpenVEX, attestation, and Release slots
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
@@ -772,6 +1034,13 @@ jobs:
           APPROVED_RESTORE_ATTESTATION_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256 }}
           APPROVED_RESTORE_ATTESTATION_BINDING_SHA256: ${{ secrets.MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256 }}
           INPUT_RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          INPUT_GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
+          INPUT_GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
+          INPUT_GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
+          INPUT_GO_VEX_EXPIRES_AT: ${{ inputs.go_vex_expires_at_utc }}
+          APPROVED_GO_VEX_SHA256: ${{ secrets.MODELPORT_GO_VEX_SHA256 }}
+          APPROVED_GO_VEX_OWNER_ID: ${{ secrets.MODELPORT_GO_VEX_OWNER_ID }}
+          APPROVED_GO_VEX_BINDING_SHA256: ${{ secrets.MODELPORT_GO_VEX_BINDING_SHA256 }}
           CONFIRM_WAIT_FOR_MANUAL_UPDATE: ${{ inputs.confirm_wait_for_manual_update }}
         run: |
           set -euo pipefail
@@ -779,8 +1048,16 @@ jobs:
           test "${GITHUB_REF}" = "refs/heads/production"
           test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          /bin/sh custom/release/assert-go-vulnerability-approval \
+            "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
+            release-assets/modelport-go-vex.openvex.json \
+            "${INPUT_GO_VEX_SHA256}" "${INPUT_GO_VEX_OWNER_ID}" \
+            "${INPUT_GO_VEX_APPROVED_AT}" "${INPUT_GO_VEX_EXPIRES_AT}" \
+            "${APPROVED_GO_VEX_SHA256}" "${APPROVED_GO_VEX_OWNER_ID}" \
+            "${APPROVED_GO_VEX_BINDING_SHA256}" "${GO_VEX_MAX_VALIDITY_SECONDS}" \
+            "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-release-environment \
-            "${GITHUB_REPOSITORY}"
+            "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
           /bin/sh custom/release/assert-production-restore-attestation \
             "${VERSION}" "${EXPECTED_SHA}" "${UPSTREAM_SHA}" \
             "${INPUT_RESTORE_ATTESTATION_SHA256}" "${INPUT_RESTORE_ATTESTATION_UTC}" \
@@ -801,6 +1078,8 @@ jobs:
           VERSION: ${{ needs.quality.outputs.version }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin production
+          test "${GITHUB_SHA}" = "$(git rev-parse origin/production)"
           # This must remain the final read-only gate before the create-only publisher writes.
           GH_TOKEN="${IMMUTABLE_RELEASES_TOKEN}" \
             gh api --method GET "repos/${GITHUB_REPOSITORY}/immutable-releases" >/dev/null
@@ -814,6 +1093,8 @@ jobs:
             --asset release-assets/release-revision.txt \
             --asset release-assets/release-metadata.json \
             --asset release-assets/production-restore-attestation.json \
+            --asset release-assets/modelport-go-vex.openvex.json \
+            --asset release-assets/modelport-go-module-inventory.json \
             --asset release-assets/release-assets.sha256 \
             --asset release-assets/modelport-sbom.spdx.json \
             --asset release-assets/modelport-docker-updater \
@@ -891,6 +1172,10 @@ jobs:
           TAG_OBJECT_SHA: ${{ needs.release.outputs.tag_object }}
           RESTORE_ATTESTATION_SHA256: ${{ inputs.production_restore_attestation_sha256 }}
           RESTORE_ATTESTATION_UTC: ${{ inputs.production_restore_attestation_utc }}
+          GO_VEX_SHA256: ${{ inputs.go_vex_sha256 }}
+          GO_VEX_OWNER_ID: ${{ inputs.go_vex_owner_id }}
+          GO_VEX_APPROVED_AT: ${{ inputs.go_vex_approved_at_utc }}
+          GO_VEX_EXPIRES_AT: ${{ inputs.go_vex_expires_at_utc }}
         run: |
           set -euo pipefail
           release_json="$(curl --fail --silent --show-error --location \
@@ -916,7 +1201,8 @@ jobs:
           mkdir release-assets
           for asset in \
             manifest-digest.txt release-revision.txt release-metadata.json \
-            production-restore-attestation.json release-assets.sha256 \
+            production-restore-attestation.json modelport-go-vex.openvex.json \
+            modelport-go-module-inventory.json release-assets.sha256 \
             modelport-sbom.spdx.json modelport-docker-updater \
             modelport-update.service modelport-update.path \
             modelport-compose.override.yml; do
@@ -932,6 +1218,10 @@ jobs:
           test "$(cat manifest-digest.txt)" = "${DIGEST}"
           grep -Eq '^[0-9a-f]{40}$' release-revision.txt
           test "$(cat release-revision.txt)" = "${GITHUB_SHA}"
+          test "$(sha256sum modelport-go-vex.openvex.json | cut -d' ' -f1)" = \
+            "${GO_VEX_SHA256}"
+          go_inventory_sha256="$(sha256sum modelport-go-module-inventory.json \
+            | cut -d' ' -f1)"
           jq -e \
             --arg version "${VERSION}" \
             --arg tag "${RELEASE_TAG}" \
@@ -946,6 +1236,12 @@ jobs:
             --arg redis_image "${REDIS_IMAGE}" \
             --arg restore_attestation_sha256 "${RESTORE_ATTESTATION_SHA256}" \
             --arg restore_attestation_utc "${RESTORE_ATTESTATION_UTC}" \
+            --arg go_vex_sha256 "${GO_VEX_SHA256}" \
+            --argjson go_vex_owner_id "${GO_VEX_OWNER_ID}" \
+            --arg go_vex_approved_at "${GO_VEX_APPROVED_AT}" \
+            --arg go_vex_expires_at "${GO_VEX_EXPIRES_AT}" \
+            --arg go_inventory_sha256 "${go_inventory_sha256}" \
+            --slurpfile go_inventory modelport-go-module-inventory.json \
             '.version == $version and .tag == $tag and .image == $image and
              .digest == $digest and .revision == $revision and
              .upstream_revision == $upstream and .platforms == ["linux/amd64"] and
@@ -955,7 +1251,11 @@ jobs:
                sha256:$restore_attestation_sha256,version:$version,
                candidate_revision:$revision,upstream_revision:$upstream,
                recorded_at:$restore_attestation_utc,
-               scope:["postgresql","redis","persistent_assets"]}' \
+               scope:["postgresql","redis","persistent_assets"]} and
+             .go_vulnerability_approval == {
+               document_sha256:$go_vex_sha256,inventory_sha256:$go_inventory_sha256,
+               owner_id:$go_vex_owner_id,approved_at:$go_vex_approved_at,
+               expires_at:$go_vex_expires_at,findings:$go_inventory[0]}' \
             release-metadata.json
           jq -e \
             --arg sha256 "${RESTORE_ATTESTATION_SHA256}" \

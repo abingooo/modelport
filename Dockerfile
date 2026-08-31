@@ -4,7 +4,9 @@
 # =============================================================================
 # Stage 1: Build frontend
 # Stage 2: Build Go backend with embedded frontend
-# Stage 3: Final minimal image
+# Optional target: symbol-bearing vulnerability analysis binary
+# Stage 3: Copy PostgreSQL client
+# Stage 4: Final minimal image
 # =============================================================================
 
 ARG NODE_IMAGE=node:24-alpine
@@ -90,12 +92,39 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
     VERSION_VALUE="${VERSION}" && \
     if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
+    RELEASE_LDFLAGS="-X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
     -tags embed \
-    -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
+    -ldflags="-s -w ${RELEASE_LDFLAGS}" \
     -trimpath \
     -o /app/sub2api \
     ./cmd/server
+
+# This child stage is built only when the release workflow explicitly requests
+# the vulnerability-scan target. Normal runtime image builds do not pay for the
+# second link or retain the symbol-bearing binary.
+FROM backend-builder AS vulnerability-scan-builder
+ARG VERSION=
+ARG COMMIT=docker
+ARG DATE
+RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
+    --mount=type=cache,id=sub2api-gobuild,target=/root/.cache/go-build \
+    VERSION_VALUE="${VERSION}" && \
+    if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
+    DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
+    RELEASE_LDFLAGS="-X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" && \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
+    -tags embed \
+    -ldflags="${RELEASE_LDFLAGS}" \
+    -trimpath \
+    -o /app/sub2api.govulncheck \
+    ./cmd/server
+
+# govulncheck cannot recover symbol reachability from the stripped runtime
+# binary. Export an otherwise release-identical binary with symbols solely for
+# the pre-publication vulnerability gate; it is never copied into the image.
+FROM scratch AS vulnerability-scan
+COPY --from=vulnerability-scan-builder /app/sub2api.govulncheck /sub2api
 
 # -----------------------------------------------------------------------------
 # Stage 3: PostgreSQL Client (version-matched with docker-compose)
