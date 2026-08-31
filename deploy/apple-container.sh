@@ -15,6 +15,7 @@ APP_VOLUME="sub2api-apple-data"
 POSTGRES_VOLUME="sub2api-apple-postgres-data"
 REDIS_VOLUME="sub2api-apple-redis-data"
 PLATFORM="linux/arm64"
+FORMAL_MODELPORT_IMAGE="ghcr.io/abingooo/modelport:custom-v0.1.183.1"
 
 TEMP_DIR=""
 LOCK_DIR="${TMPDIR:-/tmp}/sub2api-apple-container.lock"
@@ -57,7 +58,7 @@ Usage: ./apple-container.sh <command> [options]
 
 Commands:
   init                  Create .env and generate required secrets
-  up [--recreate]       Create and start the complete Sub2API stack
+  up [--recreate]       Create and start the complete ModelPort stack
   down                  Stop the stack and preserve all data
   restart               Restart the stack in dependency order
   status                Show container and workload health
@@ -71,6 +72,11 @@ Destroy options:
 
 Environment:
   SUB2API_ENV_FILE      Path to the deployment env file (default: deploy/.env)
+
+Support boundary:
+  ModelPort 0.1.183.1 publishes linux/amd64 only. The up, restart, and pull
+  commands require a separately reviewed ModelPort linux/arm64 image and never
+  fall back to an upstream Sub2API image.
 EOF
 }
 
@@ -98,7 +104,7 @@ acquire_lock() {
             rm -rf "${LOCK_DIR}"
             mkdir "${LOCK_DIR}" || die "Failed to reclaim stale operation lock."
         else
-            die "Another Sub2API Apple container operation is already running."
+            die "Another ModelPort Apple container operation is already running."
         fi
     fi
     printf '%s\n' "$$" >"${LOCK_DIR}/pid"
@@ -400,7 +406,7 @@ validate_env_file_security() {
 prepare_environment() {
     validate_env_file_security
 
-    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE weishaw/sub2api:latest)"
+    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE "${FORMAL_MODELPORT_IMAGE}")"
     POSTGRES_IMAGE="$(read_env_value APPLE_CONTAINER_POSTGRES_IMAGE postgres:18-alpine)"
     REDIS_IMAGE="$(read_env_value APPLE_CONTAINER_REDIS_IMAGE redis:8-alpine)"
     BIND_HOST="$(read_env_value BIND_HOST 0.0.0.0)"
@@ -451,6 +457,17 @@ EOF
     fi
 
     chmod 600 "${POSTGRES_ENV_FILE}" "${POSTGRES_PROBE_ENV_FILE}" "${REDIS_ENV_FILE}"
+}
+
+assert_supported_arm64_app_image() {
+    case "${APP_IMAGE}" in
+        "${FORMAL_MODELPORT_IMAGE}")
+            die "ModelPort 0.1.183.1 publishes only linux/amd64; Apple container requires linux/arm64. This release is unsupported here. Configure a separately reviewed ModelPort linux/arm64 image before using up, restart, or pull."
+            ;;
+        weishaw/sub2api|weishaw/sub2api:*|docker.io/weishaw/sub2api|docker.io/weishaw/sub2api:*|ghcr.io/wei-shaw/sub2api|ghcr.io/wei-shaw/sub2api:*)
+            die "Upstream Sub2API images are not valid ModelPort artifacts and are refused by this helper. Configure a separately reviewed ModelPort linux/arm64 image."
+            ;;
+    esac
 }
 
 prepare_app_environment() {
@@ -506,7 +523,7 @@ create_redis_container() {
 }
 
 create_app_container() {
-    info "Creating Sub2API container..."
+    info "Creating ModelPort container..."
     container create \
         --name "${APP_CONTAINER}" \
         --label "${STACK_LABEL_KEY}=${STACK_LABEL_VALUE}" \
@@ -636,11 +653,11 @@ start_dependencies() {
 
 start_app() {
     start_container_if_needed "${APP_CONTAINER}"
-    if ! wait_for_probe "Sub2API" 180 probe_app; then
+    if ! wait_for_probe "ModelPort" 180 probe_app; then
         show_failure_logs "${APP_CONTAINER}"
-        die "Sub2API did not become ready."
+        die "ModelPort did not become ready."
     fi
-    if ! wait_for_probe "Sub2API host port" 15 probe_host_app; then
+    if ! wait_for_probe "ModelPort host port" 15 probe_host_app; then
         die "Host port forwarding failed. In System Settings > Privacy & Security > Local Network, allow container-runtime-linux; restart Apple container services; then run 'apple-container.sh up' again."
     fi
 }
@@ -656,8 +673,9 @@ cmd_up() {
         recreate=true
     fi
 
-    ensure_system
     prepare_environment
+    assert_supported_arm64_app_image
+    ensure_system
     preflight_stack_ownership
     ensure_network
     ensure_volume "${APP_VOLUME}"
@@ -684,7 +702,7 @@ cmd_up() {
     create_app_container
     start_app
 
-    info "Sub2API is available at http://${ACCESS_HOST}:${HOST_PORT}"
+    info "ModelPort is available at http://${ACCESS_HOST}:${HOST_PORT}"
 }
 
 cmd_down() {
@@ -697,10 +715,13 @@ cmd_down() {
     stop_container_if_running "${APP_CONTAINER}"
     stop_container_if_running "${REDIS_CONTAINER}"
     stop_container_if_running "${POSTGRES_CONTAINER}"
-    info "Sub2API stack stopped; persistent volumes were preserved."
+    info "ModelPort stack stopped; persistent volumes were preserved."
 }
 
 cmd_restart() {
+    validate_env_file_security
+    APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE "${FORMAL_MODELPORT_IMAGE}")"
+    assert_supported_arm64_app_image
     cmd_down
     cmd_up
 }
@@ -797,8 +818,9 @@ cmd_logs() {
 }
 
 cmd_pull() {
-    ensure_system
     prepare_environment
+    assert_supported_arm64_app_image
+    ensure_system
     info "Pulling ${APP_IMAGE}..."
     container image pull --platform "${PLATFORM}" "${APP_IMAGE}"
     info "Pulling ${POSTGRES_IMAGE}..."
@@ -812,9 +834,9 @@ confirm_destroy() {
     local answer
 
     if [[ "${include_volumes}" == true ]]; then
-        printf 'Delete the Sub2API stack and all persistent data? [y/N] '
+        printf 'Delete the ModelPort stack and all persistent data? [y/N] '
     else
-        printf 'Delete the Sub2API containers and network, preserving volumes? [y/N] '
+        printf 'Delete the ModelPort containers and network, preserving volumes? [y/N] '
     fi
     read -r answer
     [[ "${answer}" == "y" || "${answer}" == "Y" ]]
@@ -865,9 +887,9 @@ cmd_destroy() {
         delete_volume_if_present "${APP_VOLUME}"
         delete_volume_if_present "${REDIS_VOLUME}"
         delete_volume_if_present "${POSTGRES_VOLUME}"
-        info "Sub2API stack and persistent data deleted."
+        info "ModelPort stack and persistent data deleted."
     else
-        info "Sub2API stack deleted; persistent volumes were preserved."
+        info "ModelPort stack deleted; persistent volumes were preserved."
     fi
 }
 

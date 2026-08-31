@@ -42,13 +42,6 @@ function normalizeInstructionHash(hash: InstructionHash): InstructionHash {
   }
 }
 
-function normalizeInstructionClientProfile(profile: InstructionClientProfile): InstructionClientProfile {
-  return {
-    ...profile,
-    prompt_audit_enabled: profile.prompt_audit_enabled === true,
-  }
-}
-
 export const instructionAuditV2API = {
   async getConfig(): Promise<InstructionV2Config> {
     const { data } = await apiClient.get<InstructionV2Config>(`${basePath}/config`)
@@ -185,18 +178,14 @@ export const instructionAuditV2API = {
   },
   async listClientProfiles(): Promise<InstructionClientProfile[]> {
     const { data } = await apiClient.get<InstructionClientProfile[]>(`${basePath}/client-profiles`)
-    return Array.isArray(data) ? data.map(normalizeInstructionClientProfile) : []
+    return Array.isArray(data) ? data : []
   },
   async saveClientProfile(id: number | null, payload: SaveInstructionClientProfile): Promise<InstructionClientProfile> {
     const request = id
       ? apiClient.put<InstructionClientProfile>(`${basePath}/client-profiles/${id}`, payload)
       : apiClient.post<InstructionClientProfile>(`${basePath}/client-profiles`, payload)
     const { data } = await request
-    return normalizeInstructionClientProfile(data)
-  },
-  async setClientPromptAudit(id: number, enabled: boolean): Promise<InstructionClientProfile> {
-    const { data } = await apiClient.put<InstructionClientProfile>(`${basePath}/client-profiles/${id}/prompt-audit`, { enabled })
-    return normalizeInstructionClientProfile(data)
+    return data
   },
   async deleteClientProfile(id: number): Promise<void> {
     await apiClient.delete(`${basePath}/client-profiles/${id}`)

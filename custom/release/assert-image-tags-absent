@@ -16,12 +16,22 @@ for ref in "$@"; do
     inspect_status=$?
   fi
 
-  if printf '%s\n' "${inspect_error}" | awk '
+  if printf '%s\n' "${inspect_error}" | awk -v expected_ref="${ref}" '
+    BEGIN {
+      expected_ref = tolower(expected_ref)
+      expected_manifest = expected_ref
+      sub(/^ghcr\.io\//, "", expected_manifest)
+      sub(/:/, "/manifests/", expected_manifest)
+      expected_manifest = "ghcr.io/v2/" expected_manifest
+    }
     {
       line = tolower($0)
       if (line ~ /^[[:space:]]*$/) next
-      if (line ~ /head[[:space:]]+request/ &&
-          line ~ /(^|:[[:space:]])404[[:space:]]+not[[:space:]]+found[[:space:]]*$/) {
+      # Buildx currently reports a missing tag as
+      #   ERROR: <ref>: not found
+      # followed by a generic fatal-exit log line.  Match the reference
+      # exactly so a token/authentication 404 cannot be mistaken for absence.
+      if (line == "error: " expected_ref ": not found") {
         absent = 1
         next
       }
@@ -29,6 +39,15 @@ for ref in "$@"; do
         absent = 1
         next
       }
+      # Older/newer registry clients may expose the underlying HEAD status
+      # instead of normalizing it to "<ref>: not found".
+      if (index(line, expected_manifest) > 0 &&
+          line ~ /(^|[^[:alnum:]_])head([^[:alnum:]_]|$)/ &&
+          line ~ /(^|[^[:digit:]])404[[:space:]]+not[[:space:]]+found[[:space:]]*$/) {
+        absent = 1
+        next
+      }
+      if (line ~ /^time="[^"]+"[[:space:]]+level=fatal[[:space:]]+msg="exit status [0-9]+"[[:space:]]*$/) next
       unexpected = 1
       exit
     }

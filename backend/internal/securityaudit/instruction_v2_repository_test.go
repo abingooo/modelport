@@ -471,8 +471,8 @@ func TestInstructionV2RepositoryUpdatesOnlyEnabledForImmutableClientProfile(t *t
 	mock.ExpectQuery(`(?s)SELECT profile_key, name, description, matchers, priority, built_in, immutable_internal.*FOR UPDATE`).
 		WithArgs(int64(5)).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"profile_key", "name", "description", "matchers", "priority", "built_in", "immutable_internal", "prompt_audit_enabled",
-		}).AddRow(InstructionClientModelPortInternal, "ModelPort Internal", "trusted identity", []byte(`[]`), 0, true, true, false))
+			"profile_key", "name", "description", "matchers", "priority", "built_in", "immutable_internal",
+		}).AddRow(InstructionClientModelPortInternal, "ModelPort Internal", "trusted identity", []byte(`[]`), 0, true, true))
 	mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_client_profiles.*SET enabled = \$2.*WHERE id = \$1`).
 		WithArgs(int64(5), false, int64(7)).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -501,56 +501,6 @@ func TestInstructionV2RepositoryUpdatesOnlyEnabledForImmutableClientProfile(t *t
 	require.Empty(t, item.Matchers)
 	require.False(t, item.Enabled)
 	require.True(t, item.ImmutableInternal)
-}
-
-func TestInstructionV2RepositoryPromptAuditSwitchValidatesAndBumpsVersion(t *testing.T) {
-	for _, test := range []struct {
-		name           string
-		profileKey     string
-		profileEnabled bool
-		immutable      bool
-		wantErr        error
-		wantUpdate     bool
-	}{
-		{name: "enabled profile", profileKey: InstructionClientOther, profileEnabled: true, wantUpdate: true},
-		{name: "disabled profile", profileKey: InstructionClientOther, wantErr: errInstructionV2PromptProfileDisabled},
-		{name: "internal profile", profileKey: InstructionClientModelPortInternal, profileEnabled: true, immutable: true, wantErr: errInstructionV2PromptInternalProfile},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			mock.ExpectBegin()
-			mock.ExpectQuery(`(?s)SELECT profile_key, enabled, immutable_internal.*FOR UPDATE`).
-				WithArgs(int64(5)).
-				WillReturnRows(sqlmock.NewRows([]string{"profile_key", "enabled", "immutable_internal"}).
-					AddRow(test.profileKey, test.profileEnabled, test.immutable))
-			if test.wantUpdate {
-				mock.ExpectExec(`(?s)UPDATE instruction_audit_v2_client_profiles.*prompt_audit_enabled = \$2`).
-					WithArgs(int64(5), true, int64(7)).
-					WillReturnResult(sqlmock.NewResult(0, 1))
-				mock.ExpectQuery(`(?s)UPDATE instruction_audit_v2_config.*RETURNING config_version`).
-					WithArgs(int64(7)).
-					WillReturnRows(sqlmock.NewRows([]string{"config_version"}).AddRow(int64(13)))
-				mock.ExpectCommit()
-			} else {
-				mock.ExpectRollback()
-			}
-
-			version, err := NewInstructionV2Repository(db).SetClientProfilePromptAudit(
-				context.Background(), 5, true, 7,
-			)
-			if test.wantErr != nil {
-				require.ErrorIs(t, err, test.wantErr)
-				require.Zero(t, version)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, int64(13), version)
-			}
-			mock.ExpectClose()
-			require.NoError(t, db.Close())
-			require.NoError(t, mock.ExpectationsWereMet())
-		})
-	}
 }
 
 func TestInstructionV2RepositoryRejectsDeletingReferencedClientProfile(t *testing.T) {

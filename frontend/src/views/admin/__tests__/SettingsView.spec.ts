@@ -1,12 +1,14 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { defineComponent, h } from "vue";
-import { flushPromises, mount } from "@vue/test-utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent, h, nextTick } from "vue";
+import { enableAutoUnmount, flushPromises, mount } from "@vue/test-utils";
 
 import enCommon from "@/i18n/locales/en/common";
 import enSettings from "@/i18n/locales/en/admin/settings";
 import zhCommon from "@/i18n/locales/zh/common";
 import zhSettings from "@/i18n/locales/zh/admin/settings";
 import SettingsView from "../SettingsView.vue";
+
+enableAutoUnmount(afterEach);
 
 const {
   getSettings,
@@ -115,6 +117,21 @@ const {
 }));
 
 const localeRef = vi.hoisted(() => ({ value: "zh-CN" }));
+const { routeHarness, routerReplace } = vi.hoisted(() => ({
+  routeHarness: {
+    current: null as null | { query: Record<string, string | string[] | undefined> },
+  },
+  routerReplace: vi.fn(),
+}));
+
+vi.mock("vue-router", async () => {
+  const { reactive } = await vi.importActual<typeof import("vue")>("vue");
+  routeHarness.current = reactive({ query: {} });
+  return {
+    useRoute: () => routeHarness.current,
+    useRouter: () => ({ replace: routerReplace }),
+  };
+});
 
 vi.mock("@/api", () => ({
   adminAPI: {
@@ -189,6 +206,16 @@ vi.mock("@/features/instruction-audit/v2Api", () => ({
 }));
 
 beforeEach(() => {
+  if (!routeHarness.current) {
+    throw new Error("route harness was not initialized");
+  }
+  routeHarness.current.query = {};
+  routerReplace.mockReset();
+  routerReplace.mockImplementation(async ({ query }) => {
+    if (routeHarness.current) {
+      routeHarness.current.query = query;
+    }
+  });
   getInstructionConfig.mockReset();
   updateInstructionConfig.mockReset();
   getInstructionConfig.mockResolvedValue({ ...instructionConfig });
@@ -293,6 +320,7 @@ vi.mock("vue-i18n", async () => {
       "请由服务器运维在部署配置中将 webauthn.enabled 设为 true，填写 webauthn.rp_id（仅域名）与 webauthn.rp_origins（完整 HTTPS 来源），然后重启服务。",
     "admin.settings.site.uploadImage": "上传图片",
     "admin.settings.site.remove": "移除",
+    "admin.settings.smtp.fromNamePlaceholder": "{siteName}",
     "admin.settings.platformQuota.platform": "平台",
     "admin.settings.platformQuota.daily": "日限额 (USD)",
     "admin.settings.platformQuota.weekly": "周限额 (USD)",
@@ -690,7 +718,7 @@ describe("admin SettingsView email domain quota copy", () => {
   });
 });
 
-describe("admin SettingsView payment visible method controls", () => {
+describe("admin SettingsView tabs and payment visible method controls", () => {
   beforeEach(() => {
     getSettings.mockReset();
     updateSettings.mockReset();
@@ -784,6 +812,39 @@ describe("admin SettingsView payment visible method controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
+  it("opens a valid tab from the route query and preserves other query fields on selection", async () => {
+    if (!routeHarness.current) {
+      throw new Error("route harness was not initialized");
+    }
+    routeHarness.current.query = { tab: "features", source: "instruction-audit" };
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(wrapper.get("#settings-tab-features").attributes("aria-selected")).toBe("true");
+    await wrapper.get("#settings-tab-security").trigger("click");
+
+    expect(routerReplace).toHaveBeenLastCalledWith({
+      query: { tab: "security", source: "instruction-audit" },
+    });
+  });
+
+  it("tracks route query changes and falls back to general for unknown tabs", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+
+    if (!routeHarness.current) {
+      throw new Error("route harness was not initialized");
+    }
+    routeHarness.current.query = { tab: "backup" };
+    await nextTick();
+    expect(wrapper.get("#settings-tab-backup").attributes("aria-selected")).toBe("true");
+
+    routeHarness.current.query = { tab: "not-a-settings-tab" };
+    await nextTick();
+    expect(wrapper.get("#settings-tab-general").attributes("aria-selected")).toBe("true");
+  });
+
   it("submits the compact home page toggle", async () => {
     const wrapper = mountView();
     await flushPromises();
@@ -798,6 +859,24 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(updateSettings).toHaveBeenCalledWith(
       expect.objectContaining({ compact_home_enabled: true }),
     );
+  });
+
+  it("uses the configured site name as the SMTP placeholder without replacing the saved sender name", async () => {
+    getSettings.mockResolvedValue({
+      ...baseSettingsResponse,
+      site_name: "Custom Gateway",
+      email_verify_enabled: true,
+      smtp_from_name: "Existing Sender",
+    });
+
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get("#settings-tab-email").trigger("click");
+    await flushPromises();
+
+    const input = wrapper.get<HTMLInputElement>('[data-testid="smtp-from-name-input"]');
+    expect(input.element.value).toBe("Existing Sender");
+    expect(input.attributes("placeholder")).toBe("Custom Gateway");
   });
 
   it("enables Instruction Audit V2 without resetting the existing audit config", async () => {
@@ -1144,10 +1223,10 @@ describe("admin SettingsView payment visible method controls", () => {
 
     expect(paymentLinks).toHaveLength(2);
     expect(paymentLinks[0]?.attributes("href")).toBe(
-      "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md",
+      "https://github.com/abingooo/modelport/blob/main/docs/PAYMENT_CN.md",
     );
     expect(paymentLinks[1]?.attributes("href")).toBe(
-      "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md#支持的支付方式",
+      "https://github.com/abingooo/modelport/blob/main/docs/PAYMENT_CN.md#支持的支付方式",
     );
     for (const link of paymentLinks) {
       expect(link.attributes("href")).toContain("docs/PAYMENT");
@@ -1594,8 +1673,10 @@ describe("admin SettingsView payment visible method controls", () => {
         },
       },
       setup(props) {
-        receivedProviders = props.providers as Array<Record<string, unknown>>;
-        return () => h("div", { class: "provider-list-capture" });
+        return () => {
+          receivedProviders = props.providers as Array<Record<string, unknown>>;
+          return h("div", { class: "provider-list-capture" });
+        };
       },
     });
 

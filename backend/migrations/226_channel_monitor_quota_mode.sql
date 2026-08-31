@@ -14,15 +14,75 @@ DO $$
 DECLARE
     monitor_constraint_def TEXT;
     template_constraint_def TEXT;
+    monitor_provider_bound BOOLEAN;
+    template_provider_bound BOOLEAN;
+    monitor_provider_values TEXT[];
+    template_provider_values TEXT[];
 BEGIN
     SELECT pg_get_constraintdef(c.oid)
-      INTO monitor_constraint_def
+           , COALESCE(
+               c.contype = 'c'
+               AND c.conkey IS NOT NULL
+               AND cardinality(c.conkey) = 1
+               AND EXISTS (
+                   SELECT 1
+                     FROM pg_attribute a
+                    WHERE a.attrelid = c.conrelid
+                      AND a.attnum = c.conkey[1]
+                      AND a.attname = 'provider'
+                      AND NOT a.attisdropped
+               ),
+               FALSE
+           )
+      INTO monitor_constraint_def, monitor_provider_bound
       FROM pg_constraint c
       JOIN pg_class t ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
      WHERE t.relname = 'channel_monitors'
+       AND n.nspname = 'public'
+       AND c.conrelid = 'public.channel_monitors'::regclass
        AND c.conname = 'channel_monitors_provider_check';
 
-    IF monitor_constraint_def IS NULL OR position('kimi' IN monitor_constraint_def) = 0 THEN
+    -- pg_get_constraintdef renders CHECK membership as either IN (...) or
+    -- = ANY (ARRAY[...]). Extract and sort the literals so a partial list
+    -- (for example one that merely contains kimi) cannot be mistaken for the
+    -- complete upstream allow-list. The terminal 236 superset is accepted so
+    -- this migration never narrows providers restored by the legacy bridge.
+    SELECT COALESCE(
+        ARRAY(
+            SELECT match[1]
+            FROM regexp_matches(monitor_constraint_def, $re$'([^']*)'$re$, 'g') AS match
+            ORDER BY match[1]
+        ),
+        ARRAY[]::TEXT[]
+    ) INTO monitor_provider_values;
+
+    IF monitor_constraint_def IS NULL OR NOT COALESCE(monitor_provider_bound, FALSE) OR NOT (
+        (
+            cardinality(monitor_provider_values) = 8
+            AND monitor_provider_values <@ ARRAY[
+            'antigravity', 'anthropic', 'deepseek', 'gemini',
+            'grok', 'kimi', 'openai', 'zhipu'
+            ]::TEXT[]
+            AND ARRAY[
+                'antigravity', 'anthropic', 'deepseek', 'gemini',
+                'grok', 'kimi', 'openai', 'zhipu'
+            ]::TEXT[] <@ monitor_provider_values
+        )
+        OR (
+            cardinality(monitor_provider_values) = 13
+            AND monitor_provider_values <@ ARRAY[
+            'antigravity', 'anthropic', 'deepseek', 'doubao',
+            'gemini', 'glm', 'grok', 'kimi', 'mimo', 'minimax',
+            'openai', 'qwen', 'zhipu'
+            ]::TEXT[]
+            AND ARRAY[
+                'antigravity', 'anthropic', 'deepseek', 'doubao',
+                'gemini', 'glm', 'grok', 'kimi', 'mimo', 'minimax',
+                'openai', 'qwen', 'zhipu'
+            ]::TEXT[] <@ monitor_provider_values
+        )
+    ) THEN
         ALTER TABLE channel_monitors
             DROP CONSTRAINT IF EXISTS channel_monitors_provider_check;
         ALTER TABLE channel_monitors
@@ -32,13 +92,64 @@ BEGIN
     END IF;
 
     SELECT pg_get_constraintdef(c.oid)
-      INTO template_constraint_def
+           , COALESCE(
+               c.contype = 'c'
+               AND c.conkey IS NOT NULL
+               AND cardinality(c.conkey) = 1
+               AND EXISTS (
+                   SELECT 1
+                     FROM pg_attribute a
+                    WHERE a.attrelid = c.conrelid
+                      AND a.attnum = c.conkey[1]
+                      AND a.attname = 'provider'
+                      AND NOT a.attisdropped
+               ),
+               FALSE
+           )
+      INTO template_constraint_def, template_provider_bound
       FROM pg_constraint c
       JOIN pg_class t ON t.oid = c.conrelid
+      JOIN pg_namespace n ON n.oid = t.relnamespace
      WHERE t.relname = 'channel_monitor_request_templates'
+       AND n.nspname = 'public'
+       AND c.conrelid = 'public.channel_monitor_request_templates'::regclass
        AND c.conname = 'channel_monitor_request_templates_provider_check';
 
-    IF template_constraint_def IS NULL OR position('kimi' IN template_constraint_def) = 0 THEN
+    SELECT COALESCE(
+        ARRAY(
+            SELECT match[1]
+            FROM regexp_matches(template_constraint_def, $re$'([^']*)'$re$, 'g') AS match
+            ORDER BY match[1]
+        ),
+        ARRAY[]::TEXT[]
+    ) INTO template_provider_values;
+
+    IF template_constraint_def IS NULL OR NOT COALESCE(template_provider_bound, FALSE) OR NOT (
+        (
+            cardinality(template_provider_values) = 8
+            AND template_provider_values <@ ARRAY[
+            'antigravity', 'anthropic', 'deepseek', 'gemini',
+            'grok', 'kimi', 'openai', 'zhipu'
+            ]::TEXT[]
+            AND ARRAY[
+                'antigravity', 'anthropic', 'deepseek', 'gemini',
+                'grok', 'kimi', 'openai', 'zhipu'
+            ]::TEXT[] <@ template_provider_values
+        )
+        OR (
+            cardinality(template_provider_values) = 13
+            AND template_provider_values <@ ARRAY[
+            'antigravity', 'anthropic', 'deepseek', 'doubao',
+            'gemini', 'glm', 'grok', 'kimi', 'mimo', 'minimax',
+            'openai', 'qwen', 'zhipu'
+            ]::TEXT[]
+            AND ARRAY[
+                'antigravity', 'anthropic', 'deepseek', 'doubao',
+                'gemini', 'glm', 'grok', 'kimi', 'mimo', 'minimax',
+                'openai', 'qwen', 'zhipu'
+            ]::TEXT[] <@ template_provider_values
+        )
+    ) THEN
         ALTER TABLE channel_monitor_request_templates
             DROP CONSTRAINT IF EXISTS channel_monitor_request_templates_provider_check;
         ALTER TABLE channel_monitor_request_templates

@@ -76,7 +76,6 @@ export interface InstructionClientProfile {
   matchers: InstructionClientMatcher[]
   priority: number
   enabled: boolean
-  prompt_audit_enabled: boolean
   built_in: boolean
   immutable_internal: boolean
   created_at: string

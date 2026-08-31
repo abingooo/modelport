@@ -144,6 +144,13 @@ export default defineConfig(({ mode }) => {
               return 'vendor-stripe'
             }
 
+            // Airwallex SDK prefetches its CDN scripts as a module side effect.
+            // Keep it out of the shared chunk so public pages do not contact the
+            // payment provider until the Airwallex checkout route is opened.
+            if (id.includes('/@airwallex/')) {
+              return 'vendor-airwallex'
+            }
+
             // 其他小型第三方库合并
             return 'vendor-misc'
           }

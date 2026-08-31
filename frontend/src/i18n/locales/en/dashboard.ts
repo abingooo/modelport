@@ -477,7 +477,12 @@ export default {
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: 'Zhipu GLM',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      qwen: 'Qwen',
+      glm: 'Zhipu AI (legacy)',
+      doubao: 'Doubao',
+      minimax: 'MiniMax',
+      mimo: 'Xiaomi MiMo'
     },
     // Check modes (how a monitor performs its checks)
     checkMode: {

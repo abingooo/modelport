@@ -288,7 +288,7 @@ func TestInstructionTranslationJobRetriesTransientFailureThenSucceeds(t *testing
 	}, adminID, InstructionSensitiveAccess{ActorID: adminID})
 	require.NoError(t, err)
 
-	first, ok, err := repository.ClaimTranslationJob(ctx, time.Now().UTC())
+	first, ok, err := repository.ClaimTranslationJob(ctx, job.CreatedAt.Add(time.Second))
 	require.NoError(t, err)
 	require.True(t, ok)
 	service.processInstructionTranslation(ctx, first, service.snapshot.Load().Runtime)

@@ -17,6 +17,11 @@ export const PROVIDER_ANTIGRAVITY: Provider = 'antigravity'
 export const PROVIDER_KIMI: Provider = 'kimi'
 export const PROVIDER_ZHIPU: Provider = 'zhipu'
 export const PROVIDER_DEEPSEEK: Provider = 'deepseek'
+export const PROVIDER_QWEN: Provider = 'qwen'
+export const PROVIDER_GLM: Provider = 'glm'
+export const PROVIDER_DOUBAO: Provider = 'doubao'
+export const PROVIDER_MINIMAX: Provider = 'minimax'
+export const PROVIDER_MIMO: Provider = 'mimo'
 
 export const DEFAULT_GROK_ENDPOINT = 'https://api.x.ai'
 export const DEFAULT_GROK_MODEL = 'grok-4.5'
@@ -42,10 +47,24 @@ export const PROVIDERS: readonly Provider[] = [
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
   PROVIDER_DEEPSEEK,
+  PROVIDER_QWEN,
+  PROVIDER_GLM,
+  PROVIDER_DOUBAO,
+  PROVIDER_MINIMAX,
+  PROVIDER_MIMO,
 ]
 
 /** 仅支持配额模式（无探活 adapter）的 provider。 */
 export const QUOTA_ONLY_PROVIDERS: readonly Provider[] = [PROVIDER_ANTIGRAVITY]
+
+/** 旧 ModelPort 仅保留探活 adapter，不具备 v0.1.183 账号配额集成。 */
+export const PROBE_ONLY_PROVIDERS: readonly Provider[] = [
+  PROVIDER_QWEN,
+  PROVIDER_GLM,
+  PROVIDER_DOUBAO,
+  PROVIDER_MINIMAX,
+  PROVIDER_MIMO,
+]
 
 export const CHECK_MODES: readonly CheckMode[] = [
   CHECK_MODE_PROBE,

@@ -5,6 +5,10 @@ package repository
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -216,4 +220,62 @@ func TestAESEncryptor_CrossInstance_DifferentKey_CannotDecrypt(t *testing.T) {
 
 	_, err = enc2.Decrypt(ct)
 	require.Error(t, err, "不同密钥的实例不应能解密对方的密文")
+}
+
+func TestAESEncryptor_ReadsLegacyModelPortVector(t *testing.T) {
+	manifest := loadAESCompatibilityManifest(t)
+	require.Equal(t, "custom-v0.1.176.2", manifest.Source.Tag)
+	require.Equal(t, "b6cb4d0c8b47d7561631ab61418e1b6fdeb379bc", manifest.Source.Commit)
+	vector := manifest.Vectors.SecretEncryptor
+	require.Equal(t, strings.Repeat("42", 32), vector.KeyHex)
+
+	encryptor, err := NewAESEncryptor(aesTestCfg(vector.KeyHex))
+	require.NoError(t, err)
+	plaintext, err := encryptor.Decrypt(vector.CiphertextBase64)
+	require.NoError(t, err)
+	require.Equal(t, vector.Plaintext, plaintext)
+
+	raw, err := base64.StdEncoding.DecodeString(vector.CiphertextBase64)
+	require.NoError(t, err)
+	nonce, err := hex.DecodeString(vector.NonceHex)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(raw), len(nonce))
+	require.Equal(t, nonce, raw[:len(nonce)])
+
+	wrongKeyEncryptor, err := NewAESEncryptor(aesTestCfg(aesHexKey(32, 0x43)))
+	require.NoError(t, err)
+	_, err = wrongKeyEncryptor.Decrypt(vector.CiphertextBase64)
+	require.Error(t, err)
+
+	tampered := append([]byte(nil), raw...)
+	tampered[len(tampered)-1] ^= 0x01
+	_, err = encryptor.Decrypt(base64.StdEncoding.EncodeToString(tampered))
+	require.Error(t, err)
+}
+
+type aesCompatibilityManifest struct {
+	Source struct {
+		Tag    string `json:"tag"`
+		Commit string `json:"commit"`
+	} `json:"source"`
+	Vectors struct {
+		SecretEncryptor struct {
+			KeyHex           string `json:"key_hex"`
+			Plaintext        string `json:"plaintext"`
+			NonceHex         string `json:"nonce_hex"`
+			CiphertextBase64 string `json:"ciphertext_base64"`
+		} `json:"secret_encryptor"`
+	} `json:"vectors"`
+}
+
+func loadAESCompatibilityManifest(t *testing.T) aesCompatibilityManifest {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	manifestPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "testdata", "modelport_crypto_compat_v1.json")
+	contents, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	var manifest aesCompatibilityManifest
+	require.NoError(t, json.Unmarshal(contents, &manifest))
+	return manifest
 }

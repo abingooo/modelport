@@ -25,7 +25,7 @@ import (
 )
 
 func init() {
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 }
 
 type openAICompatFailingWriter struct {

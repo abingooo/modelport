@@ -40,7 +40,7 @@ func TestCreateGeminiTestPayload_ImageModel(t *testing.T) {
 
 func TestProcessGeminiStream_EmitsImageEvent(t *testing.T) {
 	t.Parallel()
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 
 	ctx, recorder := newTestContext()
 	svc := &AccountTestService{}

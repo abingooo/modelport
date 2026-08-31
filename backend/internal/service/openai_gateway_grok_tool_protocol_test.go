@@ -201,7 +201,7 @@ func TestClearGrokResponsesClientToolMappingRemovesStaleContextState(t *testing.
 }
 
 func TestForwardGrokResponsesClientToolNameConflictReturns400(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 
 	body := []byte(`{
 		"model":"grok","stream":false,"input":"hello",
@@ -229,7 +229,7 @@ func TestForwardGrokResponsesClientToolNameConflictReturns400(t *testing.T) {
 }
 
 func TestForwardGrokResponsesMalformedToolSearchOutputReturns400BeforeUpstream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 
 	body := []byte(`{
 		"model":"grok","stream":false,
@@ -255,7 +255,7 @@ func TestForwardGrokResponsesMalformedToolSearchOutputReturns400BeforeUpstream(t
 }
 
 func TestForwardGrokResponsesOAuthRestoresClientToolsNonStreaming(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 
 	body := grokClientToolProtocolRequest(false)
 	recorder := httptest.NewRecorder()
@@ -315,7 +315,7 @@ func TestForwardGrokResponsesOAuthRestoresClientToolsNonStreaming(t *testing.T) 
 }
 
 func TestForwardGrokResponsesAPIKeyRestoresClientToolsFromSSEForNonStreamingRequest(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 
 	body := grokClientToolProtocolRequest(false)
 	recorder := httptest.NewRecorder()
@@ -353,7 +353,7 @@ func TestForwardGrokResponsesAPIKeyRestoresClientToolsFromSSEForNonStreamingRequ
 }
 
 func TestForwardGrokResponsesAPIKeyRestoresClientToolsStreaming(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	setGinModeForTest(gin.TestMode)
 
 	body := grokClientToolProtocolRequest(true)
 	recorder := httptest.NewRecorder()

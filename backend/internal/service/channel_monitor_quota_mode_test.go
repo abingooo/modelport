@@ -49,6 +49,7 @@ func (r *quotaModeRepoStub) Update(_ context.Context, m *ChannelMonitor) error {
 // newQuotaModeService 构造启用 V1 探活的 service（复用 retirement/duplicate 测试的 stub）。
 func newQuotaModeService(repo *quotaModeRepoStub) *ChannelMonitorService {
 	svc := NewChannelMonitorService(repo, &duplicateChannelMonitorEncryptor{})
+	svc.probeHTTPClient = newMonitorTestHTTPClient()
 	svc.SetRuntimeReader(channelMonitorRuntimeStub{rt: ChannelMonitorRuntime{
 		Enabled: true,
 		Mode:    ChannelMonitorModeV1,

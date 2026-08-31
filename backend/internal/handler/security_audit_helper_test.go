@@ -25,7 +25,7 @@ func TestCachesSecurityAuditCompletionSkipsWebSocketStages(t *testing.T) {
 	require.False(t, isSecurityAuditWebSocketStage("http"))
 }
 
-func TestRunSecurityAuditExcludesOnlyHTTPCompactFromInstructionAudit(t *testing.T) {
+func TestRunSecurityAuditExcludesCompactFromInstructionAuditAtEveryStage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	prompt := &turnCountingEngine{mode: securityaudit.ModeAsync}
 	instruction := &capturingInstructionEngine{}
@@ -52,8 +52,48 @@ func TestRunSecurityAuditExcludesOnlyHTTPCompactFromInstructionAudit(t *testing.
 	require.NotNil(t, decision)
 	require.True(t, decision.AllowNextStage)
 	require.Equal(t, int64(2), instruction.calls.Load())
-	require.False(t, instruction.lastRequest.InstructionAuditExcluded)
+	require.True(t, instruction.lastRequest.InstructionAuditExcluded)
 	require.Equal(t, int64(2), prompt.enqueues.Load())
+}
+
+func TestRunSecurityAuditMarksInstructionV2RouteExclusions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	subject := middleware2.AuthSubject{UserID: 7, Concurrency: 1}
+	tests := []struct {
+		name     string
+		method   string
+		path     string
+		stage    string
+		body     string
+		excluded bool
+	}{
+		{name: "responses http", method: http.MethodPost, path: "/v1/responses", stage: "http", body: `{"instructions":"ok"}`},
+		{name: "responses websocket response.create", method: http.MethodGet, path: "/v1/responses", stage: "first_turn", body: `{"type":"response.create","instructions":"ok"}`},
+		{name: "responses websocket control", method: http.MethodGet, path: "/v1/responses", stage: "subsequent_turn", body: `{"type":"session.update","session":{"instructions":"ok"}}`, excluded: true},
+		{name: "input tokens", method: http.MethodPost, path: "/v1/responses/input_tokens", stage: "http", body: `{"instructions":"ok"}`, excluded: true},
+		{name: "compact", method: http.MethodPost, path: "/v1/responses/compact", stage: "http", body: `{"instructions":"ok"}`, excluded: true},
+		{name: "live", method: http.MethodPost, path: "/v1/live", stage: "http", body: `{"instructions":"ok"}`, excluded: true},
+		{name: "chat", method: http.MethodPost, path: "/v1/chat/completions", stage: "http", body: `{"instructions":"ok"}`, excluded: true},
+		{name: "messages", method: http.MethodPost, path: "/v1/messages", stage: "http", body: `{"instructions":"ok"}`, excluded: true},
+		{name: "unknown stage", method: http.MethodPost, path: "/v1/responses", stage: "relay", body: `{"instructions":"ok"}`, excluded: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			instruction := &capturingInstructionEngine{}
+			coordinator := securityaudit.NewCoordinatorWithInstruction(nil, nil, instruction)
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(test.method, test.path, nil)
+			if test.stage != "http" {
+				c.Set(securityAuditWSTurnContextKey, 1)
+			}
+			decision := runSecurityAudit(c, nil, coordinator, nil, nil, subject,
+				"openai_responses", "gpt-test", []byte(test.body), test.stage)
+			require.NotNil(t, decision)
+			require.True(t, decision.AllowNextStage)
+			require.Equal(t, test.excluded, instruction.lastRequest.InstructionAuditExcluded)
+		})
+	}
 }
 
 func TestRunSecurityAuditDoesNotSkipSubsequentWebSocketTurns(t *testing.T) {

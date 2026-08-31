@@ -1,10 +1,10 @@
-# Sub2API Configuration File
-# Sub2API 配置文件
+# ModelPort Configuration File
+# ModelPort 配置文件
 #
 # Copy this file to /etc/sub2api/config.yaml and modify as needed
 # 复制此文件到 /etc/sub2api/config.yaml 并根据需要修改
 #
-# Documentation / 文档: https://github.com/Wei-Shaw/sub2api
+# Documentation / 文档: https://github.com/abingooo/modelport
 
 # =============================================================================
 # Server Configuration
@@ -82,7 +82,7 @@ server:
 # 填写浏览器访问使用的完整 Origin。
 webauthn:
   enabled: false
-  rp_display_name: "Sub2API"
+  rp_display_name: "ModelPort"
   # Example / 示例: "sub2api.example.com"
   rp_id: ""
   # Example / 示例: ["https://sub2api.example.com"]

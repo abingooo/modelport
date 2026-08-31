@@ -10,7 +10,6 @@ import type { InstructionClientProfile, InstructionGroupOption, InstructionScope
 const mocks = vi.hoisted(() => ({
   saveScopeSet: vi.fn(),
   deleteScopeSet: vi.fn(),
-  setClientPromptAudit: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
 }))
@@ -19,7 +18,6 @@ vi.mock('../v2Api', () => ({
   default: {
     saveScopeSet: mocks.saveScopeSet,
     deleteScopeSet: mocks.deleteScopeSet,
-    setClientPromptAudit: mocks.setClientPromptAudit,
   },
 }))
 vi.mock('@/stores', () => ({
@@ -57,7 +55,6 @@ function client(id: number, enabled = true): InstructionClientProfile {
     matchers: [],
     priority: id,
     enabled,
-    prompt_audit_enabled: false,
     built_in: false,
     immutable_internal: false,
     created_at: '2026-08-11T00:00:00Z',
@@ -184,10 +181,6 @@ describe('InstructionV2ScopePanel grouped client bindings', () => {
     Object.values(mocks).forEach((mock) => mock.mockReset())
     mocks.saveScopeSet.mockResolvedValue([])
     mocks.deleteScopeSet.mockResolvedValue(undefined)
-    mocks.setClientPromptAudit.mockImplementation(async (_id: number, enabled: boolean) => ({
-      ...client(_id),
-      prompt_audit_enabled: enabled,
-    }))
   })
 
   it('renders one card per group with every selected client', () => {
@@ -322,46 +315,11 @@ describe('InstructionV2ScopePanel grouped client bindings', () => {
     expect(wrapper.emitted('changed')).toHaveLength(1)
   })
 
-  it('persists the Prompt Audit supplement switch immediately and emits the saved profile', async () => {
+  it('does not show a per-client Prompt Audit supplement control', async () => {
     const wrapper = mountScopePanel([], [client(1)])
     await wrapper.findAll('button').find((button) => button.text().includes('admin.instructionAudit.v2.clientProfiles'))!.trigger('click')
 
-    await wrapper.get('[data-test="client-prompt-audit-1"]').trigger('click')
-    await flushPromises()
-
-    expect(mocks.setClientPromptAudit).toHaveBeenCalledOnce()
-    expect(mocks.setClientPromptAudit).toHaveBeenCalledWith(1, true)
-    expect(wrapper.emitted('client-updated')?.[0]?.[0]).toMatchObject({ id: 1, prompt_audit_enabled: true })
-    expect(mocks.showSuccess).toHaveBeenCalledWith('admin.instructionAudit.v2.promptAuditUpdated')
-  })
-
-  it('prevents duplicate Prompt Audit updates while persistence is pending and reports failures', async () => {
-    let rejectRequest: ((reason?: unknown) => void) | undefined
-    mocks.setClientPromptAudit.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectRequest = reject }))
-    const wrapper = mountScopePanel([], [client(1)])
-    await wrapper.findAll('button').find((button) => button.text().includes('admin.instructionAudit.v2.clientProfiles'))!.trigger('click')
-    const toggle = wrapper.get('[data-test="client-prompt-audit-1"]')
-
-    await toggle.trigger('click')
-    await toggle.trigger('click')
-    expect(mocks.setClientPromptAudit).toHaveBeenCalledOnce()
-    expect(toggle.attributes()).toHaveProperty('disabled')
-
-    rejectRequest?.(new Error('save failed'))
-    await flushPromises()
-    expect(mocks.showError).toHaveBeenCalledWith('save failed')
-    expect(wrapper.emitted('client-updated')).toBeUndefined()
-  })
-
-  it('pauses the Prompt Audit switch for disabled and internal client profiles', async () => {
-    const disabled = { ...client(1, false), prompt_audit_enabled: true }
-    const internal = { ...client(2), immutable_internal: true, prompt_audit_enabled: true }
-    const wrapper = mountScopePanel([], [disabled, internal])
-    await wrapper.findAll('button').find((button) => button.text().includes('admin.instructionAudit.v2.clientProfiles'))!.trigger('click')
-
-    expect(wrapper.get('[data-test="client-prompt-audit-1"]').attributes()).toHaveProperty('disabled')
-    expect(wrapper.get('[data-test="client-prompt-audit-2"]').attributes()).toHaveProperty('disabled')
-    expect(wrapper.text()).toContain('admin.instructionAudit.v2.promptAuditClientDisabled')
-    expect(wrapper.text()).toContain('admin.instructionAudit.v2.promptAuditInternalDisabled')
+    expect(wrapper.find('[data-test="client-prompt-audit-1"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('admin.instructionAudit.v2.promptAuditPatch')
   })
 })

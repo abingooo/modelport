@@ -1,6 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import HomeView from '../HomeView.vue'
+
+const testDirectory = dirname(fileURLToPath(import.meta.url))
+const homeViewSource = readFileSync(resolve(testDirectory, '../HomeView.vue'), 'utf8')
 
 const stores = vi.hoisted(() => ({
   auth: {
@@ -165,6 +171,16 @@ describe('HomeView graphic harbor', () => {
     expect(wrapper.find('.model-current').exists()).toBe(false)
     expect(wrapper.find('.lane-east').exists()).toBe(false)
     expect(wrapper.find('.lane-west').exists()).toBe(false)
+  })
+
+  it('reserves a visible footer band on compact mobile viewports', () => {
+    const mobileStyles = homeViewSource.match(
+      /@media \(max-width: 640px\) \{[\s\S]*?@media \(max-width: 380px\)/,
+    )?.[0]
+
+    expect(mobileStyles).toContain('height: max(500px, calc(100svh - 52px));')
+    expect(mobileStyles).toContain('min-height: 500px;')
+    expect(mobileStyles).not.toContain('min-height: 700px;')
   })
 
   it('preserves configured external home content', async () => {

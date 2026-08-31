@@ -2,6 +2,10 @@ package securityaudit
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -54,31 +58,88 @@ func TestInstructionHashRawCipherUsesDedicatedPurposeAndDigestAAD(t *testing.T) 
 }
 
 func TestInstructionEvidenceCipherReadsLegacyModelPortVectors(t *testing.T) {
+	manifest := loadInstructionCryptoCompatibilityManifest(t)
+	require.Equal(t, "custom-v0.1.176.2", manifest.Source.Tag)
+	require.Equal(t, "b6cb4d0c8b47d7561631ab61418e1b6fdeb379bc", manifest.Source.Commit)
+	require.Equal(t, strings.Repeat("42", 32), manifest.Vectors.Evidence.KeyHex)
+	require.Equal(t, manifest.Vectors.Evidence.KeyHex, manifest.Vectors.HashRaw.KeyHex)
 	cipher, err := NewInstructionEvidenceCipher(&config.Config{
-		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("42", 32), EncryptionKeyConfigured: true},
+		Totp: config.TotpConfig{EncryptionKey: manifest.Vectors.Evidence.KeyHex, EncryptionKeyConfigured: true},
+	})
+	require.NoError(t, err)
+	wrongKeyCipher, err := NewInstructionEvidenceCipher(&config.Config{
+		Totp: config.TotpConfig{EncryptionKey: strings.Repeat("43", 32), EncryptionKeyConfigured: true},
 	})
 	require.NoError(t, err)
 
-	evidenceDigest := "ac271b6c16370f9a830d0df6f1b4c12d4e6cbfe3a3474cbe33c7325f643554e5"
-	evidenceCiphertext, err := hex.DecodeString("9151d38f200b37b697a5718d99969943d423478e5bb494dd2f35c57516547381d06ed3a595805a278e3a3d1d4a17946939d189")
+	evidence := manifest.Vectors.Evidence
+	evidenceCiphertext, err := hex.DecodeString(evidence.CiphertextHex)
 	require.NoError(t, err)
-	plaintext, err := cipher.Decrypt("instructions", evidenceDigest, evidenceCiphertext)
+	evidenceNonce, err := hex.DecodeString(evidence.NonceHex)
 	require.NoError(t, err)
-	require.Equal(t, "legacy evidence fixture", plaintext)
-	_, err = cipher.Decrypt("input1", evidenceDigest, evidenceCiphertext)
+	require.GreaterOrEqual(t, len(evidenceCiphertext), len(evidenceNonce))
+	require.Equal(t, evidenceNonce, evidenceCiphertext[:len(evidenceNonce)])
+	plaintext, err := cipher.Decrypt(evidence.Source, evidence.Digest, evidenceCiphertext)
+	require.NoError(t, err)
+	require.Equal(t, evidence.Plaintext, plaintext)
+	_, err = cipher.Decrypt("input1", evidence.Digest, evidenceCiphertext)
+	require.Error(t, err)
+	_, err = wrongKeyCipher.Decrypt(evidence.Source, evidence.Digest, evidenceCiphertext)
 	require.Error(t, err)
 
-	hashDigest := "5beb50036a07c0e28ece6445a3b76b4f720cd29d251f6af2d16e0fd390ae537c"
-	hashCiphertext, err := hex.DecodeString("0e3e0fb32f4a95ff9d812f1f7fdfeabf34be5d0b8be4894f196cc69e16c084d7a009d4cfce81b9bb98ce9ab6f89e89")
+	hashRaw := manifest.Vectors.HashRaw
+	hashCiphertext, err := hex.DecodeString(hashRaw.CiphertextHex)
 	require.NoError(t, err)
-	plaintext, err = cipher.DecryptHashRaw(hashDigest, hashCiphertext)
+	hashNonce, err := hex.DecodeString(hashRaw.NonceHex)
 	require.NoError(t, err)
-	require.Equal(t, "legacy hash fixture", plaintext)
-	_, err = cipher.DecryptHashRaw(evidenceDigest, hashCiphertext)
+	require.GreaterOrEqual(t, len(hashCiphertext), len(hashNonce))
+	require.Equal(t, hashNonce, hashCiphertext[:len(hashNonce)])
+	plaintext, err = cipher.DecryptHashRaw(hashRaw.Digest, hashCiphertext)
+	require.NoError(t, err)
+	require.Equal(t, hashRaw.Plaintext, plaintext)
+	_, err = cipher.DecryptHashRaw(evidence.Digest, hashCiphertext)
+	require.Error(t, err)
+	_, err = wrongKeyCipher.DecryptHashRaw(hashRaw.Digest, hashCiphertext)
 	require.Error(t, err)
 
 	tampered := append([]byte(nil), hashCiphertext...)
 	tampered[len(tampered)-1] ^= 0x01
-	_, err = cipher.DecryptHashRaw(hashDigest, tampered)
+	_, err = cipher.DecryptHashRaw(hashRaw.Digest, tampered)
 	require.Error(t, err)
+}
+
+type instructionCryptoCompatibilityManifest struct {
+	Source struct {
+		Tag    string `json:"tag"`
+		Commit string `json:"commit"`
+	} `json:"source"`
+	Vectors struct {
+		Evidence struct {
+			KeyHex        string `json:"key_hex"`
+			Source        string `json:"source"`
+			Plaintext     string `json:"plaintext"`
+			Digest        string `json:"digest"`
+			NonceHex      string `json:"nonce_hex"`
+			CiphertextHex string `json:"ciphertext_hex"`
+		} `json:"evidence"`
+		HashRaw struct {
+			KeyHex        string `json:"key_hex"`
+			Plaintext     string `json:"plaintext"`
+			Digest        string `json:"digest"`
+			NonceHex      string `json:"nonce_hex"`
+			CiphertextHex string `json:"ciphertext_hex"`
+		} `json:"hash_raw"`
+	} `json:"vectors"`
+}
+
+func loadInstructionCryptoCompatibilityManifest(t *testing.T) instructionCryptoCompatibilityManifest {
+	t.Helper()
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+	manifestPath := filepath.Join(filepath.Dir(currentFile), "..", "..", "testdata", "modelport_crypto_compat_v1.json")
+	contents, err := os.ReadFile(manifestPath)
+	require.NoError(t, err)
+	var manifest instructionCryptoCompatibilityManifest
+	require.NoError(t, json.Unmarshal(contents, &manifest))
+	return manifest
 }

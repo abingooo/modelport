@@ -524,7 +524,7 @@ describe('KeyTestModal', () => {
       .mockResolvedValueOnce(jsonResponse({ data: [{ id: 'deepseek-chat' }] }))
       .mockResolvedValueOnce(jsonResponse({
         error: {
-          message: 'Rejected sk-user-specific-test-key-1234; Authorization: Bearer sk-upstream-secret-123456'
+          message: 'Rejected sk-user-specific-test-key-1234; Authorization: Bearer sk-upstream-secret-123456; {"upstream_host":"private-upstream.example","account_id":"acct-private-42","channel_id":"channel-private-7","route_id":"route-private-us"}'
         }
       }, 502, { 'X-Request-ID': '<script>secret</script>' }))
 
@@ -539,6 +539,10 @@ describe('KeyTestModal', () => {
     expect(wrapper.text()).toContain('[REDACTED]')
     expect(wrapper.text()).not.toContain('sk-user-specific-test-key-1234')
     expect(wrapper.text()).not.toContain('sk-upstream-secret-123456')
+    expect(wrapper.text()).not.toContain('private-upstream.example')
+    expect(wrapper.text()).not.toContain('acct-private-42')
+    expect(wrapper.text()).not.toContain('channel-private-7')
+    expect(wrapper.text()).not.toContain('route-private-us')
     expect(wrapper.text()).not.toContain('<script>')
   })
 

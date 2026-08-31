@@ -1,8 +1,9 @@
 #!/bin/bash
 #
-# Sub2API Installation Script
-# Sub2API 安装脚本
-# Usage: curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | bash
+# ModelPort legacy binary installation script
+# ModelPort 旧版二进制安装脚本
+# ModelPort 0.1.183.1 does not publish binary archives; Docker Compose is the
+# supported pre-built installation path. This script never downloads Sub2API.
 #
 
 set -e
@@ -31,11 +32,30 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-GITHUB_REPO="Wei-Shaw/sub2api"
+GITHUB_REPO="abingooo/modelport"
+MODELPORT_RELEASE="0.1.183.1"
+MODELPORT_IMAGE="ghcr.io/abingooo/modelport:custom-v0.1.183.1"
 INSTALL_DIR="/opt/sub2api"
-SERVICE_NAME="sub2api"
 SERVICE_USER="sub2api"
 CONFIG_DIR="/etc/sub2api"
+
+print_binary_distribution_help() {
+    cat <<EOF
+ModelPort ${MODELPORT_RELEASE} does not publish binary archives or checksums.
+The supported pre-built installation is Docker Compose with:
+  ${MODELPORT_IMAGE} (linux/amd64)
+
+This legacy script only supports removing an existing binary installation:
+  $0 uninstall [--purge] [-y|--yes]
+
+It never falls back to an upstream Sub2API release.
+EOF
+}
+
+binary_distribution_unsupported() {
+    print_binary_distribution_help >&2
+    exit 1
+}
 
 # Server configuration (will be set by user)
 SERVER_HOST="0.0.0.0"
@@ -63,7 +83,7 @@ declare -A MSG_ZH=(
     ["enter_choice"]="请输入选择 (默认: 1)"
 
     # Installation
-    ["install_title"]="Sub2API 安装脚本"
+    ["install_title"]="ModelPort 二进制安装脚本"
     ["run_as_root"]="请使用 root 权限运行 (使用 sudo)"
     ["detected_platform"]="检测到平台"
     ["unsupported_arch"]="不支持的架构"
@@ -91,11 +111,11 @@ declare -A MSG_ZH=(
     ["ready_for_setup"]="准备就绪，可以启动设置向导"
 
     # Completion
-    ["install_complete"]="Sub2API 安装完成！"
+    ["install_complete"]="ModelPort 安装完成！"
     ["install_dir"]="安装目录"
     ["next_steps"]="后续步骤"
     ["step1_check_services"]="确保 PostgreSQL 和 Redis 正在运行："
-    ["step2_start_service"]="启动 Sub2API 服务："
+    ["step2_start_service"]="启动 ModelPort 服务："
     ["step3_enable_autostart"]="设置开机自启："
     ["step4_open_wizard"]="在浏览器中打开设置向导："
     ["wizard_guide"]="设置向导将引导您完成："
@@ -109,7 +129,7 @@ declare -A MSG_ZH=(
     ["cmd_stop"]="停止服务"
 
     # Upgrade
-    ["upgrading"]="正在升级 Sub2API..."
+    ["upgrading"]="正在升级 ModelPort..."
     ["current_version"]="当前版本"
     ["stopping_service"]="正在停止服务..."
     ["backup_created"]="备份已创建"
@@ -125,11 +145,11 @@ declare -A MSG_ZH=(
     ["validating_version"]="正在验证版本..."
     ["available_versions"]="可用版本列表"
     ["fetching_versions"]="正在获取可用版本..."
-    ["not_installed"]="Sub2API 尚未安装，请先执行全新安装"
+    ["not_installed"]="ModelPort 尚未安装，请先执行全新安装"
     ["fresh_install_hint"]="用法"
 
     # Uninstall
-    ["uninstall_confirm"]="这将从系统中移除 Sub2API。"
+    ["uninstall_confirm"]="这将从系统中移除 ModelPort。"
     ["are_you_sure"]="确定要继续吗？(y/N)"
     ["uninstall_cancelled"]="卸载已取消"
     ["removing_files"]="正在移除文件..."
@@ -141,21 +161,21 @@ declare -A MSG_ZH=(
     ["install_lock_removed"]="安装锁文件已移除，重新安装时将进入设置向导"
     ["purge_prompt"]="是否同时删除配置目录？这将清除所有配置和数据 [y/N]: "
     ["removing_config_dir"]="正在移除配置目录..."
-    ["uninstall_complete"]="Sub2API 已卸载"
+    ["uninstall_complete"]="ModelPort 已卸载"
 
     # Help
     ["usage"]="用法"
     ["cmd_none"]="(无参数)"
-    ["cmd_install"]="安装 Sub2API"
+    ["cmd_install"]="安装 ModelPort"
     ["cmd_upgrade"]="升级到最新版本"
-    ["cmd_uninstall"]="卸载 Sub2API"
+    ["cmd_uninstall"]="卸载 ModelPort"
     ["cmd_install_version"]="安装/回退到指定版本"
     ["cmd_list_versions"]="列出可用版本"
     ["opt_version"]="指定要安装的版本号 (例如: v1.0.0)"
 
     # Server configuration
     ["server_config_title"]="服务器配置"
-    ["server_config_desc"]="配置 Sub2API 服务监听地址"
+    ["server_config_desc"]="配置 ModelPort 服务监听地址"
     ["server_host_prompt"]="服务器监听地址"
     ["server_host_hint"]="0.0.0.0 表示监听所有网卡，127.0.0.1 仅本地访问"
     ["server_port_prompt"]="服务器端口"
@@ -188,7 +208,7 @@ declare -A MSG_EN=(
     ["enter_choice"]="Enter your choice (default: 1)"
 
     # Installation
-    ["install_title"]="Sub2API Installation Script"
+    ["install_title"]="ModelPort Binary Installation Script"
     ["run_as_root"]="Please run as root (use sudo)"
     ["detected_platform"]="Detected platform"
     ["unsupported_arch"]="Unsupported architecture"
@@ -216,11 +236,11 @@ declare -A MSG_EN=(
     ["ready_for_setup"]="Ready for Setup Wizard"
 
     # Completion
-    ["install_complete"]="Sub2API installation completed!"
+    ["install_complete"]="ModelPort installation completed!"
     ["install_dir"]="Installation directory"
     ["next_steps"]="NEXT STEPS"
     ["step1_check_services"]="Make sure PostgreSQL and Redis are running:"
-    ["step2_start_service"]="Start Sub2API service:"
+    ["step2_start_service"]="Start ModelPort service:"
     ["step3_enable_autostart"]="Enable auto-start on boot:"
     ["step4_open_wizard"]="Open the Setup Wizard in your browser:"
     ["wizard_guide"]="The Setup Wizard will guide you through:"
@@ -234,7 +254,7 @@ declare -A MSG_EN=(
     ["cmd_stop"]="Stop"
 
     # Upgrade
-    ["upgrading"]="Upgrading Sub2API..."
+    ["upgrading"]="Upgrading ModelPort..."
     ["current_version"]="Current version"
     ["stopping_service"]="Stopping service..."
     ["backup_created"]="Backup created"
@@ -250,11 +270,11 @@ declare -A MSG_EN=(
     ["validating_version"]="Validating version..."
     ["available_versions"]="Available versions"
     ["fetching_versions"]="Fetching available versions..."
-    ["not_installed"]="Sub2API is not installed. Please run a fresh install first"
+    ["not_installed"]="ModelPort is not installed. Please run a fresh install first"
     ["fresh_install_hint"]="Usage"
 
     # Uninstall
-    ["uninstall_confirm"]="This will remove Sub2API from your system."
+    ["uninstall_confirm"]="This will remove ModelPort from your system."
     ["are_you_sure"]="Are you sure? (y/N)"
     ["uninstall_cancelled"]="Uninstall cancelled"
     ["removing_files"]="Removing files..."
@@ -266,21 +286,21 @@ declare -A MSG_EN=(
     ["install_lock_removed"]="Install lock removed. Setup wizard will appear on next install."
     ["purge_prompt"]="Also remove config directory? This will delete all config and data [y/N]: "
     ["removing_config_dir"]="Removing config directory..."
-    ["uninstall_complete"]="Sub2API has been uninstalled"
+    ["uninstall_complete"]="ModelPort has been uninstalled"
 
     # Help
     ["usage"]="Usage"
     ["cmd_none"]="(none)"
-    ["cmd_install"]="Install Sub2API"
+    ["cmd_install"]="Install ModelPort"
     ["cmd_upgrade"]="Upgrade to the latest version"
-    ["cmd_uninstall"]="Remove Sub2API"
+    ["cmd_uninstall"]="Remove ModelPort"
     ["cmd_install_version"]="Install/rollback to a specific version"
     ["cmd_list_versions"]="List available versions"
     ["opt_version"]="Specify version to install (e.g., v1.0.0)"
 
     # Server configuration
     ["server_config_title"]="Server Configuration"
-    ["server_config_desc"]="Configure Sub2API server listen address"
+    ["server_config_desc"]="Configure ModelPort server listen address"
     ["server_host_prompt"]="Server listen address"
     ["server_host_hint"]="0.0.0.0 listens on all interfaces, 127.0.0.1 for local only"
     ["server_port_prompt"]="Server port"
@@ -522,9 +542,9 @@ github_api_curl() {
             echo "UPDATE_GITHUB_TOKEN contains unsupported characters" >&2
             return 2
         fi
-        printf 'header = "Authorization: Bearer %s"\n' "$UPDATE_GITHUB_TOKEN" | UPDATE_GITHUB_TOKEN= GITHUB_TOKEN= GH_TOKEN= curl -q --globoff --config - "$@"
+        printf 'header = "Authorization: Bearer %s"\n' "$UPDATE_GITHUB_TOKEN" | UPDATE_GITHUB_TOKEN='' GITHUB_TOKEN='' GH_TOKEN='' curl -q --globoff --config - "$@"
     else
-        UPDATE_GITHUB_TOKEN= GITHUB_TOKEN= GH_TOKEN= curl -q --globoff "$@"
+        UPDATE_GITHUB_TOKEN='' GITHUB_TOKEN='' GH_TOKEN='' curl -q --globoff "$@"
     fi
 }
 
@@ -624,7 +644,7 @@ download_and_extract() {
 
     # Create temp directory
     TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT
+    trap 'rm -rf "$TEMP_DIR"' EXIT
 
     # Download archive
     if ! curl -sL "$download_url" -o "$TEMP_DIR/$archive_name"; then
@@ -635,8 +655,10 @@ download_and_extract() {
     # Download and verify checksum
     print_info "$(msg 'verifying_checksum')"
     if curl -sL "$checksum_url" -o "$TEMP_DIR/checksums.txt" 2>/dev/null; then
-        local expected_checksum=$(grep "$archive_name" "$TEMP_DIR/checksums.txt" | awk '{print $1}')
-        local actual_checksum=$(sha256sum "$TEMP_DIR/$archive_name" | awk '{print $1}')
+        local expected_checksum
+        local actual_checksum
+        expected_checksum=$(grep "$archive_name" "$TEMP_DIR/checksums.txt" | awk '{print $1}')
+        actual_checksum=$(sha256sum "$TEMP_DIR/$archive_name" | awk '{print $1}')
 
         if [ "$expected_checksum" != "$actual_checksum" ]; then
             print_error "$(msg 'checksum_failed')"
@@ -717,8 +739,8 @@ install_service() {
     # Create service file with configured host and port
     cat > /etc/systemd/system/sub2api.service << EOF
 [Unit]
-Description=Sub2API - AI API Gateway Platform
-Documentation=https://github.com/Wei-Shaw/sub2api
+Description=ModelPort - Unified Multi-Model API Gateway
+Documentation=https://github.com/abingooo/modelport
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
 
@@ -1071,6 +1093,20 @@ main() {
     # Restore positional arguments
     set -- "${positional_args[@]}"
 
+    # This release has no reviewed binary artifacts. Fail closed before any
+    # platform detection, GitHub API request, download, or service mutation.
+    case "${1:-}" in
+        uninstall|remove)
+            ;;
+        help|-h|--help)
+            print_binary_distribution_help
+            exit 0
+            ;;
+        *)
+            binary_distribution_unsupported
+            ;;
+    esac
+
     # Select language first
     select_language
 
@@ -1229,4 +1265,6 @@ main() {
     fi
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    main "$@"
+fi

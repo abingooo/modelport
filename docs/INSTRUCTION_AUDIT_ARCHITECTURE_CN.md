@@ -1,19 +1,25 @@
 # ModelPort 指令审核架构
 
-本文说明 ModelPort `0.1.170.13` 指令审核的执行边界、数据模型和运行保障。管理员操作见
+本文说明 ModelPort `0.1.183.1` 指令审核的执行边界、数据模型和运行保障。管理员操作见
 [`INSTRUCTION_AUDIT_ADMIN_GUIDE_CN.md`](./INSTRUCTION_AUDIT_ADMIN_GUIDE_CN.md)，需求与实现证据见
-[`0.1.170.13-evidence-matrix.md`](./releases/0.1.170.13-evidence-matrix.md)。
+[`0.1.183.1.md`](./releases/0.1.183.1.md)。
 
 ## 安全边界
 
-- 指令审核只处理 OpenAI Responses HTTP、SSE 和 WebSocket 请求；`/responses/compact` 明确排除。
-- 审核范围由 API Key 完成认证时得到的下游分组和检测到的客户端共同决定。模型、上游账号、平台和最终路由渠道不参与范围判定。
+- Instruction Audit V2 只处理 OpenAI Responses HTTP、SSE 和 WebSocket 请求；`/responses/compact` 明确排除。
+- Instruction Audit V2 的审核范围由 API Key 完成认证时得到的下游分组和检测到的客户端共同决定。模型、上游账号、平台和最终路由渠道不参与范围判定。
 - 未命中任何启用绑定的请求属于“不适用并放行”，不会生成 `group_not_allowed` 或 `client_not_allowed` 事件。
 - 指令审核的放行只结束本模块的判断，请求仍须经过鉴权、内容审核、限流、计费和上游策略。
 - User-Agent 只用于客户端分类，可以被调用方伪造；只有服务端可信上下文可以产生 `modelport_internal`。
 - 普通日志、通知邮件和错误响应不得包含请求原文、Bearer Token、API Key 或完整请求体。
 
-## 统一处理流程
+## 与上游 Prompt Audit 的关系
+
+- 最新上游 Prompt Audit 是 Prompt Audit 的唯一运行时配置源。Instruction Audit V2 不提供 per-client supplement 开关，也不通过 V2 配置改变 Prompt Audit 的运行范围。
+- Prompt Audit 覆盖所有适用的提示输入网关路由（至少包括 Chat、Responses、Messages、Embeddings、搜索、图片、视频、音频）以及现有 HTTP、SSE 和 WebSocket 接入链路；无提示路由必须由路由清单显式分类并写明理由。Instruction Audit V2 只审核 Responses 中适用的 `instructions` 与 `input[1]` 指令字段。
+- 同一 HTTP 请求或 WebSocket 轮次中，Prompt Audit 与 Instruction Audit V2 各最多执行一次。两条审核链独立得出结论，任一链放行都不能跳过或覆盖另一条。
+
+## Instruction Audit V2 统一处理流程
 
 ```text
 下游认证
@@ -57,7 +63,7 @@ HTTP 和 WebSocket 调用同一个解析、范围解析和判定核心。WebSock
 摘要命中 AND 下游分组允许 AND 客户端允许
 ```
 
-`instructions` 优先，未通过时再检查 `input[1]`；任一字段命中即可形成 `hash_pass`。用户白名单和严格空字段规则形成 `exception_pass`。
+按现行字段选择语义，先选择非空且有效的 `instructions`；只有该字段不存在或无效时才选择 `input[1]`。每个请求只对被选字段执行一次判定和摘要匹配，不把两个字段拆成两次独立审核；用户白名单和严格空字段规则形成 `exception_pass`。
 
 最终结果包括：
 
@@ -107,7 +113,7 @@ AI 输出必须符合严格结构：
 }
 ```
 
-系统按 `instructions`、`input[1]` 顺序独立审核。通过哪个字段，只为该字段创建摘要。AI 通过后，在同一数据库事务内写入事件、AI 来源、加密标准原文、精确 `(group_id, client_type)` 系统规则、规则关联和默认 24 小时临时授权；事务失败则强制形成 `ai_error`，不得先放行。
+系统按 `instructions`、`input[1]` 的现行优先级选择一个字段并审核；通过哪个字段，只为该字段创建摘要。AI 通过后，在同一数据库事务内写入事件、AI 来源、加密标准原文、精确 `(group_id, client_type)` 系统规则、规则关联和默认 24 小时临时授权；事务失败则强制形成 `ai_error`，不得先放行。
 
 哈希摘要身份与作用域授权分离。AI 使用 `ai:<group_id>:<client_type>` 唯一键维护专用系统规则集，临时来源、状态和到期时间保存在该规则集与哈希的关联上；命中既有人工或导入哈希时不会修改其全局状态和有效期。普通规则集保存、删除及普通分组绑定接口都会拒绝系统规则集，管理员只能通过精确作用域生命周期接口提升、禁用或永久撤销单个 `(rule_set, hash)` 关联。
 
@@ -115,7 +121,18 @@ Redis 提供单用户 RPM、单用户每日自动加库、全局每日自动加�
 
 ## 原文、翻译与访问审计
 
-事件证据和哈希标准原文分别使用从固定 `TOTP_ENCRYPTION_KEY` 派生的 AES-256-GCM 子密钥加密。摘要与密文必须来自同一份 UTF-8 字节，关联数据参与 AEAD 校验。手工创建必须提交原文并保存为 `manual` 来源；只有显式摘要导入可以不带原文并保存为 `import` 来源。旧哈希和摘要导入保持有效并标记为 `raw_content_unavailable`。
+事件证据使用从固定 `TOTP_ENCRYPTION_KEY` 经 evidence 路径派生的 AES-256-GCM 子密钥；哈希标准原文与 V2 content vault 共同使用原有 hash-raw 派生路径。数据库 BYTEA 保存原始二进制 `nonce || ciphertext || tag`，摘要与密文必须来自同一份 UTF-8 字节，关联数据参与 AEAD 校验。手工创建必须提交原文并保存为 `manual` 来源；只有显式摘要导入可以不带原文并保存为 `import` 来源。旧哈希和摘要导入保持有效并标记为 `raw_content_unavailable`。由指令审核/Prompt Audit 配置保存的凭据（Prompt Audit endpoint token、V2 AI 节点 API Key、AI/翻译 token）仍由现有 SecretEncryptor 使用固定根密钥直用 AES-256-GCM、无 AAD、标准 Base64 文本的 `nonce || ciphertext || tag` 格式；该格式与 evidence/hash-raw 路径相互独立，各调用方的失效节点排除、fail-closed 或跳过行为保持不变。Redis 中由 SecretEncryptor 加密的短期翻译结果沿用该格式，但仅按 TTL/任务生命周期保留，不作长期字节不变承诺。
+
+### Prompt Audit `full_prompt` 当前存储事实
+
+Prompt Audit 的全文字段不属于 Instruction Audit V2 的 evidence/hash-raw 密文路径。当前实现明确采用以下行为：
+
+- 迁移 `backend/migrations/182_prompt_audit_full_prompt.sql` 为 `prompt_audit_events` 增加 `full_prompt TEXT NOT NULL DEFAULT ''`；`ExtractPromptSnapshot`/`BuildFullPrompt` 生成未脱敏文本（去除 NUL，以 `65536` 个 rune 为截断阈值，超限追加 `…` 标记），事件写入路径保存 `snapshot.FullPrompt`。
+- `prompt_audit_jobs` 仍只保存脱敏元数据；`prompt_event_repository.go` 只在单事件详情查询读取 `full_prompt`，当前管理 API 和前端详情页可以显示，列表接口不返回该列。当前 Prompt Audit 详情路由只继承管理端认证，不应把本节相邻的 Instruction Audit V2 敏感授权/TOTP 规则推定为已有门控；是否增加额外门控仍属独立待决策事项。
+- 该明文字段当前没有沿用 evidence/hash-raw 的加密保护；本版本冻结其现状，不新增/删除字段，不自行改变脱敏、留存或访问门控。事件删除沿用现有事件删除流程。
+- 历史 OpenSpec/验证材料曾要求完整提示词不得进入 PostgreSQL、管理 API 或前端，这与当前代码和集成测试相冲突。该矛盾属于独立隐私/产品决策，不能在本版本中假定已经解决；后续任何不落库、加密、脱敏、访问控制或留存期修复都必须另行授权并配套迁移、备份及 API 兼容方案。
+
+`0.1.183.1` 的密码学兼容边界以仓库确认实现为准，生产实际配置须在只读审计中核对：证据/hash-raw 路径继续使用 32 字节根密钥、HMAC-SHA256 purpose 派生、原有 purpose/AAD、`nonce || ciphertext || tag` 布局、版本与密码学失败语义；上述 SecretEncryptor 凭据继续使用固定根密钥直用、无 AAD 的标准 Base64 格式。本次重建、迁移和发布过程中不得隐式轮换生产现有密钥、改变或升级/降级算法或参数、增加未经论证的回退密钥、批量解密/重加密或读写转换；任何独立运维轮换或密码学升级须另行授权。必要的结构桥接只能逐字节复制并校验摘要、长度和关联身份，且不得重写仍在有效保留期的记录。只有一次性、可丢弃的非生产空数据库或 CI 可沿用上游临时密钥行为；生产初始化必须在首次启动和任何敏感数据写入前配置固定密钥。TOTP、step-up、敏感访问、原文保留以及协议/路由覆盖属于独立契约，分别按功能和安全要求验收；它们不是改变指令审核加密强度的例外，但不得降低未授权访问防护。
 
 - 列表接口不返回原文。
 - 查看、复制、翻译，以及把事件原文加入候选哈希或规则集，必须同时满足：有效真人管理员 JWT 会话、当前有效的“指令敏感内容”授权和 TOTP step-up；Admin API Key 明确拒绝。
@@ -123,10 +140,10 @@ Redis 提供单用户 RPM、单用户每日自动加库、全局每日自动加�
 - 迁移 `213` 只在授权表为空时为最早创建的有效管理员建立一次 `migration_bootstrap` 授权；后续授权变更保留授予人、原因、来源和时间。
 - AI 精确作用域的提升、禁用、撤销及其他不读取原文的配置操作要求 TOTP step-up，但不以敏感原文授权代替配置权限边界。
 - 每次敏感读取或复制记录操作者、授权 ID、认证方式、授权结果、资源、动作、请求 ID、IP、User-Agent、结果和时间。
-- 原文到期后删除密文并保留摘要；数据库备份中的历史密文继续遵循备份保留周期。
+- Instruction Audit V2 原文到期后删除其证据密文并保留摘要；Prompt Audit 的 `full_prompt` 不属于该密文路径，随现有事件删除流程处理，数据库备份中的历史数据继续遵循备份保留周期。
 - 翻译只由管理员主动触发，按 UTF-8 安全边界分段，在后台执行。
 - 翻译任务绑定创建任务时的敏感授权；授权撤销后不能继续取得原文或译文。
-- 译文使用加密 Redis 短期保存，不进入普通日志；外部翻译默认关闭并先脱敏明显凭据、令牌和邮箱。
+- 译文使用现有 SecretEncryptor 以固定根密钥直用 AES-256-GCM、无 AAD、标准 Base64(`nonce || ciphertext || tag`) 在 Redis 短期保存，不进入普通日志；缺失/过期、解密或存储失败保持现有 `result_expired`、`result_unavailable` 和敏感访问审计语义。外部翻译默认关闭并先脱敏明显凭据、令牌和邮箱。
 
 ## 持久化、统计与保留
 
@@ -150,7 +167,7 @@ Redis 提供单用户 RPM、单用户每日自动加库、全局每日自动加�
 
 ## 数据库迁移
 
-`0.1.170.13` 只通过新增迁移扩展现有数据：
+下列旧 ModelPort 迁移建立了本指南涉及的运行保障；`0.1.183.1` 通过兼容桥保留这些数据和行为，不重放旧迁移，也不重写既有密文：
 
 | 迁移 | 内容 |
 | --- | --- |
@@ -167,5 +184,9 @@ Redis 提供单用户 RPM、单用户每日自动加库、全局每日自动加�
 | `214` | 扩展通知 outbox 状态，持久化区分通知意图准备失败的 `enqueue_failed` |
 | `215` | 将旧工作集预算提升到至少请求体上限的 3 倍，并在数据库约束中固定该下限 |
 | `216` | 持久化事件写入失败和统计丢失累计计数，并将旧 `expired` 原文状态统一收敛为 `raw_content_unavailable` |
+| `217` | 建立 Instruction Audit V2 的配置、客户端作用域、哈希、风险项、事件和 AI 节点 |
+| `219` | 建立 V2 的全局可信/风险判定、内容保险库和多节点复核流程 |
+| `220` | 为 V2 哈希、风险项和复核任务补充来源用户快照 |
+| `234` | 在当前上游迁移序列中直接声明最终兼容结构，并保留旧 ModelPort 数据与密文字节 |
 
-迁移不会重建用户、API Key、余额、订阅、用量、分组或既有指令审核表。旧事件保持 `blocked` 的历史含义，旧规则和绑定保持原有生效范围。`211-216` 均设计为可重复执行；是否在目标数据库副本上完整保留数据及第二次执行无变化，仍必须作为发布门禁实际验证，不能只依赖迁移文本审查。
+当前迁移不会重建用户、API Key、余额、订阅、用量、分组或既有指令审核表。旧事件保持 `blocked` 的历史含义，旧规则和绑定保持原有生效范围。归档的 `204-220` 只用于历史 checksum 与来源审计，不得在新数据库手工重放；当前 Runner 和 `234` 兼容桥必须分别在空数据库、Sub2API `v0.1.183` 数据库和旧 ModelPort 数据库副本上验证完整保留数据且第二次执行无变化，不能只依赖迁移文本审查。

@@ -1,8 +1,12 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Sub2API Logo" width="128" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/branding/modelport-mark-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="frontend/public/branding/modelport-mark-light.png" />
+  <img src="frontend/public/branding/modelport-mark-light.png" alt="ModelPort 标志" width="112" />
+</picture>
 
-# Sub2API
+# ModelPort
 
 [![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
@@ -10,9 +14,9 @@
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
-<a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="Wei-Shaw%2Fsub2api | Trendshift" width="250" height="55"/></a>
-
 **AI API 网关平台 - 订阅配额分发管理**
+
+ModelPort `0.1.183.1` 基于 [Sub2API `v0.1.183`](https://github.com/Wei-Shaw/sub2api/tree/v0.1.183) 重建，在保留上游许可证与归属的同时，由 [`abingooo/modelport`](https://github.com/abingooo/modelport) 发布 ModelPort 专属产品与发行产物。
 
 [English](README.md) | 中文 | [日本語](README_JA.md)
 
@@ -28,7 +32,9 @@
 - **📖 免责声明**：本项目仅供技术学习与研究使用，作者不对因使用本项目导致的账户封禁、服务中断、数据丢失或其他任何直接或间接损失承担责任。
 - **🚫 无商业授权**：本项目从未授权任何个人或组织基于本项目开展任何形式的商业化运营。任何以本项目名义或基于本项目从事的商业行为均与本项目及其开发者无关，由此产生的一切纠纷、损失和法律责任由行为主体自行承担。
 
-## ❤️ 赞助商
+## ❤️ 上游赞助商
+
+以下名单继承自 Sub2API 上游项目，相关合作关系和链接归属于 Sub2API；保留这些内容用于上游归属说明，不代表其赞助 ModelPort。
 
 > [想出现在这里？](mailto:support@sub2api.org)
 
@@ -174,7 +180,7 @@
 
 ## 项目概述
 
-Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的 API 配额。用户通过平台生成的 API Key 调用上游 AI 服务，平台负责鉴权、计费、负载均衡和请求转发。
+ModelPort 是基于 Sub2API 构建的多模型 AI API 网关。用户通过平台生成的 API Key 调用上游 AI 服务，ModelPort 负责鉴权、计费、负载均衡、请求转发、免费分组、抽奖、指令审核和 API 密钥连通性测试。
 
 ## 核心功能
 
@@ -210,7 +216,7 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 
 ## Nginx 反向代理注意事项
 
-通过 Nginx 反向代理 Sub2API（或 CRS 服务）并搭配 Codex CLI 使用时，需要在 Nginx 配置的 `http` 块中添加：
+通过 Nginx 反向代理 ModelPort（或兼容的 Sub2API/CRS 服务）并搭配 Codex CLI 使用时，需要在 Nginx 配置的 `http` 块中添加：
 
 ```nginx
 underscores_in_headers on;
@@ -222,76 +228,9 @@ Nginx 默认会丢弃名称中含下划线的请求头（如 `session_id`），�
 
 ## 部署方式
 
-### 方式一：脚本安装（推荐）
+ModelPort `0.1.183.1` 仅发布不可变的 `linux/amd64` OCI 镜像，不发布 GoReleaser 二进制压缩包，也不发布可变的 `latest` 镜像。因此，本版本唯一受支持的预构建安装方式是 Docker Compose。保留的 `sub2api` service、系统用户、数据库和二进制名称均为升级兼容标识。
 
-一键安装脚本，自动从 GitHub Releases 下载预编译的二进制文件。
-
-#### 前置条件
-
-- Linux 服务器（amd64 或 arm64）
-- PostgreSQL 15+（已安装并运行）
-- Redis 7+（已安装并运行）
-- Root 权限
-
-#### 安装步骤
-
-```bash
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
-```
-
-脚本会自动：
-1. 检测系统架构
-2. 下载最新版本
-3. 安装二进制文件到 `/opt/sub2api`
-4. 创建 systemd 服务
-5. 配置系统用户和权限
-
-#### 安装后配置
-
-```bash
-# 1. 启动服务
-sudo systemctl start sub2api
-
-# 2. 设置开机自启
-sudo systemctl enable sub2api
-
-# 3. 在浏览器中打开设置向导
-# http://你的服务器IP:8080
-```
-
-设置向导将引导你完成：
-- 数据库配置
-- Redis 配置
-- 管理员账号创建
-
-#### 升级
-
-可以直接在 **管理后台** 左上角点击 **检测更新** 按钮进行在线升级。
-
-网页升级功能支持：
-- 自动检测新版本
-- 一键下载并应用更新
-- 支持回滚
-
-#### 常用命令
-
-```bash
-# 查看状态
-sudo systemctl status sub2api
-
-# 查看日志
-sudo journalctl -u sub2api -f
-
-# 重启服务
-sudo systemctl restart sub2api
-
-# 卸载
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash -s -- uninstall -y
-```
-
----
-
-### 方式二：Docker Compose（推荐）
+### 方式一：Docker Compose（推荐）
 
 使用 Docker Compose 部署，包含 PostgreSQL 和 Redis 容器。
 
@@ -306,10 +245,10 @@ curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install
 
 ```bash
 # 创建部署目录
-mkdir -p sub2api-deploy && cd sub2api-deploy
+mkdir -p modelport-deploy && cd modelport-deploy
 
 # 下载并运行部署准备脚本
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/abingooo/modelport/main/deploy/docker-deploy.sh | bash
 
 # 启动服务
 docker compose up -d
@@ -331,8 +270,8 @@ docker compose logs -f sub2api
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
+git clone https://github.com/abingooo/modelport.git
+cd modelport/deploy
 
 # 2. 复制环境配置文件
 cp .env.example .env
@@ -425,10 +364,12 @@ docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
 #### 升级
 
 ```bash
-# 拉取最新镜像并重建容器
+# 拉取当前配置的不可变 ModelPort 镜像并重建容器
 docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
+
+ModelPort 不发布 `latest`。升级到新版本必须通过经过审查的 ModelPort 发布/站内更新流程，修改镜像引用属于需要运维人员明确确认的操作。
 
 #### 轻松迁移（本地目录版）
 
@@ -438,14 +379,14 @@ docker compose -f docker-compose.local.yml up -d
 # 源服务器
 docker compose -f docker-compose.local.yml down
 cd ..
-tar czf sub2api-complete.tar.gz sub2api-deploy/
+tar czf modelport-complete.tar.gz modelport-deploy/
 
 # 传输到新服务器
-scp sub2api-complete.tar.gz user@new-server:/path/
+scp modelport-complete.tar.gz user@new-server:/path/
 
 # 新服务器
-tar xzf sub2api-complete.tar.gz
-cd sub2api-deploy/
+tar xzf modelport-complete.tar.gz
+cd modelport-deploy/
 docker compose -f docker-compose.local.yml up -d
 ```
 
@@ -468,23 +409,13 @@ rm -rf data/ postgres_data/ redis_data/
 
 ---
 
-### 方式三：Apple container（macOS）
+### 方式二：Apple container（macOS）
 
-Apple 芯片 Mac 在 macOS 26 上可使用 Apple `container` 1.1.0 或更高版本运行完整的 Sub2API、PostgreSQL 和 Redis：
-
-```bash
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
-./apple-container.sh init
-./apple-container.sh up
-./apple-container.sh status
-```
-
-该方式面向本地开发和人工运维，不提供持续重启监管；生产部署仍推荐 Docker Compose。生命周期命令、持久化、升级和运行时限制见 [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md)。
+当前 ModelPort 正式镜像仅支持 `linux/amd64`，而 Apple 芯片上的 Apple `container` 原生运行 `linux/arm64` 工作负载，因此 `0.1.183.1` 暂不支持使用预构建 ModelPort 镜像运行该流程，也不得改用上游 Sub2API 镜像代替。准确的支持边界及保留的开发工具见 [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md)。
 
 ---
 
-### 方式四：源码编译
+### 方式三：源码编译
 
 从源码编译安装，适合开发或定制需求。
 
@@ -499,8 +430,8 @@ cd sub2api/deploy
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api
+git clone https://github.com/abingooo/modelport.git
+cd modelport
 
 # 2. 安装 pnpm（如果还没有安装）
 npm install -g pnpm
@@ -761,13 +692,13 @@ sub2api/
     └── install.sh            # 一键安装脚本
 ```
 
-## Star History
+## ModelPort Star History
 
-<a href="https://star-history.dera.page/#Wei-Shaw/sub2api&Date">
+<a href="https://star-history.dera.page/#abingooo/modelport&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date" />
+   <img alt="ModelPort Star History Chart" src="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date" />
  </picture>
 </a>
 

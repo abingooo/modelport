@@ -86,21 +86,6 @@
             </div>
             <p v-else class="text-xs text-gray-400">{{ client.immutable_internal ? t('admin.instructionAudit.v2.internalIdentityOnly') : t('admin.instructionAudit.v2.fallbackClient') }}</p>
           </div>
-          <div class="flex items-center justify-between gap-3 rounded-md border border-gray-200 bg-gray-50/60 px-3 py-2.5 dark:border-dark-600 dark:bg-dark-800/60">
-            <div class="min-w-0">
-              <p class="text-xs font-medium text-gray-800 dark:text-gray-200">{{ t('admin.instructionAudit.v2.promptAuditPatch') }}</p>
-              <p class="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400">
-                {{ client.immutable_internal ? t('admin.instructionAudit.v2.promptAuditInternalDisabled') : !client.enabled ? t('admin.instructionAudit.v2.promptAuditClientDisabled') : t('admin.instructionAudit.v2.promptAuditPatchHint') }}
-              </p>
-            </div>
-            <Toggle
-              :model-value="client.prompt_audit_enabled === true"
-              :disabled="client.immutable_internal || !client.enabled || clientPromptAuditPending.includes(client.id)"
-              :aria-label="t('admin.instructionAudit.v2.promptAuditToggle', { name: client.name })"
-              :data-test="`client-prompt-audit-${client.id}`"
-              @update:model-value="setClientPromptAudit(client, $event)"
-            />
-          </div>
           <footer class="mt-auto flex items-center justify-between gap-3 border-t border-gray-100 pt-3 text-xs dark:border-dark-700">
             <span class="text-gray-500 dark:text-gray-400">{{ t('admin.instructionAudit.v2.priority') }} {{ client.priority }}</span>
             <span :class="client.enabled ? 'text-primary-700 dark:text-primary-300' : 'text-gray-400'">{{ client.enabled ? t('common.enabled') : t('common.disabled') }}</span>
@@ -258,7 +243,6 @@ import { computed, defineComponent, h, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import Toggle from '@/components/common/Toggle.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores'
 import { extractApiErrorMessage } from '@/utils/apiError'
@@ -284,13 +268,11 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{
   (event: 'changed'): void
-  (event: 'client-updated', value: InstructionClientProfile): void
 }>()
 const { t } = useI18n()
 const appStore = useAppStore()
 const activeSection = ref<Section>('scopes')
 const saving = ref(false)
-const clientPromptAuditPending = ref<number[]>([])
 const scopeGroupToDelete = ref<ScopeGroup | null>(null)
 const clientToDelete = ref<InstructionClientProfile | null>(null)
 const allowlistToDelete = ref<InstructionUserAllowlistEntry | null>(null)
@@ -439,20 +421,6 @@ async function saveClient() {
     appStore.showError(extractApiErrorMessage(caught, t('common.error')))
   } finally {
     saving.value = false
-  }
-}
-
-async function setClientPromptAudit(client: InstructionClientProfile, enabled: boolean) {
-  if (client.immutable_internal || !client.enabled || clientPromptAuditPending.value.includes(client.id)) return
-  clientPromptAuditPending.value = [...clientPromptAuditPending.value, client.id]
-  try {
-    const updated = await instructionAuditV2API.setClientPromptAudit(client.id, enabled)
-    emit('client-updated', updated)
-    appStore.showSuccess(t('admin.instructionAudit.v2.promptAuditUpdated'))
-  } catch (caught) {
-    appStore.showError(extractApiErrorMessage(caught, t('common.error')))
-  } finally {
-    clientPromptAuditPending.value = clientPromptAuditPending.value.filter((id) => id !== client.id)
   }
 }
 

@@ -900,8 +900,8 @@ onBeforeUnmount(() => {
   }
 
   .hero-section {
-    height: max(700px, calc(100svh - 52px));
-    min-height: 700px;
+    height: max(500px, calc(100svh - 52px));
+    min-height: 500px;
   }
 
   .hero-layout {

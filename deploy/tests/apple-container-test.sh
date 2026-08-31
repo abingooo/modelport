@@ -27,6 +27,35 @@ assert_missing() {
     [[ ! -e "$1" ]] || fail "Expected path to be absent: $1"
 }
 
+assert_contains() {
+    grep -Fq "$2" "$1" || fail "Expected $1 to contain: $2"
+}
+
+set_env_value() {
+    local key=$1
+    local value=$2
+    local temp_file="${ENV_FILE}.tmp"
+
+    awk -v wanted="${key}" -v replacement="${value}" '
+        BEGIN { replaced = 0 }
+        {
+            separator = index($0, "=")
+            key = separator == 0 ? "" : substr($0, 1, separator - 1)
+            if (key == wanted) {
+                if (!replaced) { print wanted "=" replacement }
+                replaced = 1
+                next
+            }
+            print
+        }
+        END {
+            if (!replaced) { print wanted "=" replacement }
+        }
+    ' "${ENV_FILE}" >"${temp_file}"
+    chmod 600 "${temp_file}"
+    mv "${temp_file}" "${ENV_FILE}"
+}
+
 export FAKE_CONTAINER_STATE="${STATE_DIR}"
 export PATH="${TEST_DIR}/fixtures/bin:${PATH}"
 export SUB2API_ENV_FILE="${ENV_FILE}"
@@ -43,6 +72,20 @@ if "${SCRIPT}" up >/dev/null 2>&1; then
 fi
 chmod 600 "${ENV_FILE}"
 
+if "${SCRIPT}" up >"${TEST_ROOT}/default-image.stdout" 2>"${TEST_ROOT}/default-image.stderr"; then
+    fail "up accepted the formal linux/amd64 image for Apple linux/arm64"
+fi
+assert_contains "${TEST_ROOT}/default-image.stderr" "ModelPort 0.1.183.1 publishes only linux/amd64"
+assert_missing "${STATE_DIR}/system-running"
+
+set_env_value APPLE_CONTAINER_SUB2API_IMAGE "weishaw/sub2api:arm64"
+if "${SCRIPT}" up >"${TEST_ROOT}/upstream-image.stdout" 2>"${TEST_ROOT}/upstream-image.stderr"; then
+    fail "up accepted an upstream Sub2API ARM64 image"
+fi
+assert_contains "${TEST_ROOT}/upstream-image.stderr" "Upstream Sub2API images are not valid ModelPort artifacts"
+assert_missing "${STATE_DIR}/system-running"
+
+set_env_value APPLE_CONTAINER_SUB2API_IMAGE "ghcr.io/abingooo/modelport:reviewed-arm64-test"
 "${SCRIPT}" up
 assert_exists "${STATE_DIR}/containers/sub2api-apple"
 assert_exists "${STATE_DIR}/containers/sub2api-apple-postgres"

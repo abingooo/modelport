@@ -8432,9 +8432,14 @@
                   </label>
                   <input
                     v-model="form.smtp_from_name"
+                    data-testid="smtp-from-name-input"
                     type="text"
                     class="input"
-                    :placeholder="t('admin.settings.smtp.fromNamePlaceholder')"
+                    :placeholder="
+                      t('admin.settings.smtp.fromNamePlaceholder', {
+                        siteName: form.site_name || appStore.siteName || DEFAULT_SITE_NAME,
+                      })
+                    "
                   />
                 </div>
               </div>
@@ -8773,6 +8778,7 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
+import { useRoute, useRouter } from "vue-router";
 import { adminAPI } from "@/api";
 import {
   appendAuthSourceDefaultsToUpdateRequest,
@@ -8855,6 +8861,8 @@ const appStore = useAppStore();
 // 关闭 step-up 开关是敏感操作：后端返回 STEP_UP_REQUIRED 时弹 TOTP 码重试
 const settingsStepUp = useStepUp();
 const adminSettingsStore = useAdminSettingsStore();
+const route = useRoute();
+const router = useRouter();
 const isZhLocale = computed(() => locale.value.startsWith("zh"));
 const instructionAuditOverview = ref<InstructionV2Config | null>(null);
 const instructionAuditLoading = ref(false);
@@ -8866,14 +8874,14 @@ function localText(zh: string, en: string): string {
 
 const paymentGuideHref = computed(() =>
   locale.value.startsWith("zh")
-    ? "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md"
-    : "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT.md",
+    ? "https://github.com/abingooo/modelport/blob/main/docs/PAYMENT_CN.md"
+    : "https://github.com/abingooo/modelport/blob/main/docs/PAYMENT.md",
 );
 
 const paymentMethodsHref = computed(() =>
   locale.value.startsWith("zh")
-    ? "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md#支持的支付方式"
-    : "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT.md#supported-payment-methods",
+    ? "https://github.com/abingooo/modelport/blob/main/docs/PAYMENT_CN.md#支持的支付方式"
+    : "https://github.com/abingooo/modelport/blob/main/docs/PAYMENT.md#supported-payment-methods",
 );
 
 type SettingsTab =
@@ -8886,7 +8894,6 @@ type SettingsTab =
   | "payment"
   | "email"
   | "backup";
-const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
   { key: "general" as SettingsTab, icon: "home" as const },
   { key: "agreement" as SettingsTab, icon: "document" as const },
@@ -8899,6 +8906,23 @@ const settingsTabs = [
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 
+function normalizeSettingsTab(value: unknown): SettingsTab {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return typeof candidate === "string" &&
+    settingsTabs.some((tab) => tab.key === candidate)
+    ? (candidate as SettingsTab)
+    : "general";
+}
+
+const activeTab = ref<SettingsTab>(normalizeSettingsTab(route.query.tab));
+
+watch(
+  () => route.query.tab,
+  (tab) => {
+    activeTab.value = normalizeSettingsTab(tab);
+  },
+);
+
 const settingsTabKeyboardActions = {
   ArrowLeft: -1,
   ArrowUp: -1,
@@ -8910,6 +8934,9 @@ const settingsTabKeyboardActions = {
 
 function selectSettingsTab(tab: SettingsTab): void {
   activeTab.value = tab;
+  if (route.query.tab !== tab) {
+    void router.replace({ query: { ...route.query, tab } });
+  }
 }
 
 function focusSettingsTab(tab: SettingsTab): void {

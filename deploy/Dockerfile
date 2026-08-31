@@ -83,10 +83,14 @@ RUN VERSION_VALUE="${VERSION}" && \
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
-# Labels
-LABEL maintainer="Wei-Shaw <github.com/Wei-Shaw>"
-LABEL description="Sub2API - AI API Gateway Platform"
-LABEL org.opencontainers.image.source="https://github.com/Wei-Shaw/sub2api"
+# ModelPort release identity. Runtime paths and the service user retain the
+# upstream sub2api name for deployment compatibility.
+LABEL maintainer="ModelPort Maintainers"
+LABEL description="ModelPort - Unified Multi-Model API Gateway"
+LABEL org.opencontainers.image.title="ModelPort"
+LABEL org.opencontainers.image.description="ModelPort - Unified Multi-Model API Gateway"
+LABEL org.opencontainers.image.authors="ModelPort Maintainers"
+LABEL org.opencontainers.image.source="https://github.com/abingooo/modelport"
 
 # Install runtime dependencies
 RUN apk add --no-cache \

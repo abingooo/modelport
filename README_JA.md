@@ -1,8 +1,12 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Sub2API Logo" width="128" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/branding/modelport-mark-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="frontend/public/branding/modelport-mark-light.png" />
+  <img src="frontend/public/branding/modelport-mark-light.png" alt="ModelPort ロゴ" width="112" />
+</picture>
 
-# Sub2API
+# ModelPort
 
 [![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
@@ -10,9 +14,9 @@
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
-<a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="Wei-Shaw%2Fsub2api | Trendshift" width="250" height="55"/></a>
-
 **サブスクリプションクォータ配分のための AI API ゲートウェイプラットフォーム**
+
+ModelPort `0.1.183.1` は [Sub2API `v0.1.183`](https://github.com/Wei-Shaw/sub2api/tree/v0.1.183) を基盤として再構築されています。上流のライセンスと帰属を維持しつつ、ModelPort 固有の製品およびリリース成果物は [`abingooo/modelport`](https://github.com/abingooo/modelport) から公開されます。
 
 [English](README.md) | [中文](README_CN.md) | 日本語
 
@@ -27,7 +31,9 @@
 - **📖 免責事項**：本プロジェクトは技術的な学習および研究の目的でのみ提供されます。本プロジェクトの使用により生じたアカウントの停止、サービスの中断、データの損失、その他一切の直接的または間接的な損害について、作者は一切の責任を負いません。
 - **🚫 商用利用の非許諾**：本プロジェクトの開発者は、いかなる個人または組織に対しても、本プロジェクトを利用したいかなる形態の商業運営も一切許諾していません。本プロジェクトの名義で、または本プロジェクトに基づいて行われる商業行為はすべて本プロジェクトおよびその開発者とは無関係であり、それにより生じる一切の紛争、損失、法的責任は行為者自身が負うものとします。
 
-## ❤️ スポンサー
+## ❤️ 上流プロジェクトのスポンサー
+
+以下のスポンサー一覧は Sub2API 上流プロジェクトから継承したものです。関係およびリンクは Sub2API に帰属し、ModelPort へのスポンサー提供を意味するものではありません。
 
 > [こちらに掲載しませんか？](mailto:support@sub2api.org)
 
@@ -173,7 +179,7 @@
 
 ## 概要
 
-Sub2API は、AI 製品のサブスクリプションから API クォータを配分・管理するために設計された AI API ゲートウェイプラットフォームです。ユーザーはプラットフォームが生成した API キーを通じて上流の AI サービスにアクセスでき、プラットフォームは認証、課金、負荷分散、リクエスト転送を処理します。
+ModelPort は Sub2API を基盤とするマルチモデル AI API ゲートウェイです。プラットフォームが生成した API キーを通じて上流の AI サービスにアクセスでき、ModelPort は認証、課金、負荷分散、リクエスト転送、無料グループ、抽選、指示監査、API キー接続テストを処理します。
 
 ## 機能
 
@@ -209,7 +215,7 @@ Sub2API を拡張・統合するコミュニティプロジェクト:
 
 ## Nginx リバースプロキシに関する注意
 
-Sub2API（または CRS）を Nginx でリバースプロキシし、Codex CLI と組み合わせて使用する場合、Nginx の `http` ブロックに以下の設定を追加してください:
+ModelPort（または互換性のある Sub2API/CRS）を Nginx でリバースプロキシし、Codex CLI と組み合わせて使用する場合、Nginx の `http` ブロックに以下の設定を追加してください:
 
 ```nginx
 underscores_in_headers on;
@@ -221,76 +227,9 @@ Nginx はデフォルトでアンダースコアを含むヘッダー（例: `se
 
 ## デプロイ
 
-### 方法1: スクリプトによるインストール（推奨）
+ModelPort `0.1.183.1` は不変の `linux/amd64` OCI イメージのみを公開し、GoReleaser バイナリアーカイブや可変の `latest` イメージは公開しません。そのため、このリリースでサポートされるビルド済みインストール方法は Docker Compose のみです。`sub2api` の service、システムユーザー、データベース、バイナリ名はアップグレード互換性のために維持されています。
 
-GitHub Releases からビルド済みバイナリをダウンロードするワンクリックインストールスクリプトです。
-
-#### 前提条件
-
-- Linux サーバー（amd64 または arm64）
-- PostgreSQL 15+（インストール済みかつ稼働中）
-- Redis 7+（インストール済みかつ稼働中）
-- root 権限
-
-#### インストール手順
-
-```bash
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
-```
-
-スクリプトは以下を実行します:
-1. システムアーキテクチャの検出
-2. 最新リリースのダウンロード
-3. バイナリを `/opt/sub2api` にインストール
-4. systemd サービスの作成
-5. システムユーザーと権限の設定
-
-#### インストール後の作業
-
-```bash
-# 1. サービスを起動
-sudo systemctl start sub2api
-
-# 2. 起動時の自動起動を有効化
-sudo systemctl enable sub2api
-
-# 3. ブラウザでセットアップウィザードを開く
-# http://YOUR_SERVER_IP:8080
-```
-
-セットアップウィザードでは以下の設定を行います:
-- データベース設定
-- Redis 設定
-- 管理者アカウントの作成
-
-#### アップグレード
-
-**管理ダッシュボード**の左上にある**アップデートを確認**ボタンをクリックすることで、ダッシュボードから直接アップグレードできます。
-
-Web インターフェースでは以下が可能です:
-- 新しいバージョンの自動確認
-- ワンクリックでのアップデートのダウンロードと適用
-- 必要に応じたロールバック
-
-#### よく使うコマンド
-
-```bash
-# ステータスを確認
-sudo systemctl status sub2api
-
-# ログを表示
-sudo journalctl -u sub2api -f
-
-# サービスを再起動
-sudo systemctl restart sub2api
-
-# アンインストール
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash -s -- uninstall -y
-```
-
----
-
-### 方法2: Docker Compose（推奨）
+### 方法1: Docker Compose（推奨）
 
 PostgreSQL と Redis のコンテナを含む Docker Compose でデプロイします。
 
@@ -305,10 +244,10 @@ PostgreSQL と Redis のコンテナを含む Docker Compose でデプロイし�
 
 ```bash
 # デプロイ用ディレクトリを作成
-mkdir -p sub2api-deploy && cd sub2api-deploy
+mkdir -p modelport-deploy && cd modelport-deploy
 
 # デプロイ準備スクリプトをダウンロードして実行
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/abingooo/modelport/main/deploy/docker-deploy.sh | bash
 
 # サービスを起動
 docker compose up -d
@@ -330,8 +269,8 @@ docker compose logs -f sub2api
 
 ```bash
 # 1. リポジトリをクローン
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
+git clone https://github.com/abingooo/modelport.git
+cd modelport/deploy
 
 # 2. 環境設定ファイルをコピー
 cp .env.example .env
@@ -412,10 +351,12 @@ docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
 #### アップグレード
 
 ```bash
-# 最新イメージをプルしてコンテナを再作成
+# 設定済みの不変 ModelPort イメージをプルしてコンテナを再作成
 docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
+
+ModelPort は `latest` を公開しません。新しいリリースへの移行は、レビュー済みの ModelPort リリース／サイト内更新フローでのみ実施してください。イメージ参照の変更は運用者による明示的な操作です。
 
 #### 簡単な移行（ローカルディレクトリバージョン）
 
@@ -425,14 +366,14 @@ docker compose -f docker-compose.local.yml up -d
 # 移行元サーバーにて
 docker compose -f docker-compose.local.yml down
 cd ..
-tar czf sub2api-complete.tar.gz sub2api-deploy/
+tar czf modelport-complete.tar.gz modelport-deploy/
 
 # 新しいサーバーに転送
-scp sub2api-complete.tar.gz user@new-server:/path/
+scp modelport-complete.tar.gz user@new-server:/path/
 
 # 移行先サーバーにて
-tar xzf sub2api-complete.tar.gz
-cd sub2api-deploy/
+tar xzf modelport-complete.tar.gz
+cd modelport-deploy/
 docker compose -f docker-compose.local.yml up -d
 ```
 
@@ -455,23 +396,13 @@ rm -rf data/ postgres_data/ redis_data/
 
 ---
 
-### 方法3: Apple container（macOS）
+### 方法2: Apple container（macOS）
 
-Apple シリコン搭載 Mac と macOS 26 では、Apple `container` 1.1.0 以降を使用して Sub2API、PostgreSQL、Redis の完全なスタックを実行できます:
-
-```bash
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
-./apple-container.sh init
-./apple-container.sh up
-./apple-container.sh status
-```
-
-これはローカル開発および手動運用向けです。本番環境では引き続き Docker Compose を推奨します。ライフサイクル、永続化、アップグレード、制限については [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md) を参照してください。
+現在の正式な ModelPort イメージは `linux/amd64` のみですが、Apple シリコン上の Apple `container` はネイティブ `linux/arm64` ワークロードを実行します。このため `0.1.183.1` のビルド済み ModelPort イメージはこのフローではサポートされず、上流の Sub2API イメージで代用してはいけません。正確なサポート範囲は [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md) を参照してください。
 
 ---
 
-### 方法4: ソースからビルド
+### 方法3: ソースからビルド
 
 開発やカスタマイズのためにソースコードからビルドして実行します。
 
@@ -486,8 +417,8 @@ cd sub2api/deploy
 
 ```bash
 # 1. リポジトリをクローン
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api
+git clone https://github.com/abingooo/modelport.git
+cd modelport
 
 # 2. pnpm をインストール（未インストールの場合）
 npm install -g pnpm
@@ -717,13 +648,13 @@ sub2api/
     └── install.sh            # ワンクリックインストールスクリプト
 ```
 
-## スター履歴
+## ModelPort スター履歴
 
-<a href="https://star-history.dera.page/#Wei-Shaw/sub2api&Date">
+<a href="https://star-history.dera.page/#abingooo/modelport&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date" />
+   <img alt="ModelPort Star History Chart" src="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date" />
  </picture>
 </a>
 

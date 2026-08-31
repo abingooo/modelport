@@ -482,7 +482,12 @@ export default {
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: '智谱 GLM',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      qwen: '通义千问',
+      glm: '智谱 AI（旧标识）',
+      doubao: '豆包',
+      minimax: 'MiniMax',
+      mimo: '小米 MiMo'
     },
     // 检查模式（监控条目的工作方式）
     checkMode: {

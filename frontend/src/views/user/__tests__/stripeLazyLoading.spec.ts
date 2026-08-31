@@ -30,4 +30,14 @@ describe('Stripe lazy-loading contract', () => {
     expect(viteConfig.slice(stripeRule, miscFallback)).toContain("return 'vendor-stripe'")
     expect(stripeRule).toBeLessThan(miscFallback)
   })
+
+  it('keeps Airwallex out of the shared vendor chunk', () => {
+    const viteConfig = readFrontendFile('vite.config.ts')
+    const airwallexRule = viteConfig.indexOf("id.includes('/@airwallex/')")
+    const miscFallback = viteConfig.indexOf("return 'vendor-misc'")
+
+    expect(airwallexRule).toBeGreaterThan(-1)
+    expect(viteConfig.slice(airwallexRule, miscFallback)).toContain("return 'vendor-airwallex'")
+    expect(airwallexRule).toBeLessThan(miscFallback)
+  })
 })

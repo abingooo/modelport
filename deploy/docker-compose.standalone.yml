@@ -1,7 +1,7 @@
 # =============================================================================
-# Sub2API Docker Compose - Standalone Configuration
+# ModelPort Docker Compose - Standalone Configuration
 # =============================================================================
-# This configuration runs only the Sub2API application.
+# This configuration runs only the ModelPort application.
 # PostgreSQL and Redis must be provided externally.
 #
 # Usage:
@@ -12,7 +12,8 @@
 
 services:
   sub2api:
-    image: weishaw/sub2api:latest
+    image: ${MODELPORT_IMAGE:-ghcr.io/abingooo/modelport:custom-v0.1.183.1}
+    platform: linux/amd64
     container_name: sub2api
     restart: unless-stopped
     security_opt:

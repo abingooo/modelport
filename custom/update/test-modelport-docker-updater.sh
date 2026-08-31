@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-script_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+script_dir="$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)"
 temporary_dir="$(mktemp -d)"
 trap 'rm -rf "${temporary_dir}"' EXIT
 
@@ -12,11 +12,12 @@ previous_digest='sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 previous_image_ref='ghcr.io/abingooo/modelport:custom-v0.1.176.2'
 printf '%s\n' "MODELPORT_IMAGE=${previous_image_ref}" 'SECRET=preserved' > "${deploy_dir}/.env"
 chmod 0600 "${deploy_dir}/.env"
-printf '%s\n' 'services:' '  sub2api:' '    image: ${MODELPORT_IMAGE}' > "${deploy_dir}/docker-compose.yml"
+printf '%s\n' 'services:' '  sub2api:' "    image: \${MODELPORT_IMAGE}" > "${deploy_dir}/docker-compose.yml"
 printf '%s\n' 'services:' '  sub2api:' '    volumes:' '      - ./data:/app/data' > "${deploy_dir}/modelport-compose.override.yml"
 
 digest='sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 revision='0123456789abcdef0123456789abcdef01234567'
+tag_object_sha='89abcdef89abcdef89abcdef89abcdef89abcdef'
 image_id='sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
 previous_image_id='sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
 previous_version='0.1.176.2'
@@ -104,7 +105,24 @@ case "$*" in
       "${MODELPORT_TEST_VERSION}" "${MODELPORT_TEST_REVISION}" "${MODELPORT_TEST_RELEASE_IMMUTABLE}"
     ;;
   *api.github.com/repos/abingooo/modelport/git/ref/tags/*)
-    printf '{"object":{"type":"commit","sha":"%s"}}\n' "${MODELPORT_TEST_TAG_REVISION}"
+    tag_ref_count=1
+    [ "${MODELPORT_TEST_TAG_REF_DUPLICATE}" = true ] && tag_ref_count=2
+    while [ "${tag_ref_count}" -gt 0 ]; do
+      printf '{"ref":"%s","object":{"type":"%s","sha":"%s"}}\n' \
+        "${MODELPORT_TEST_TAG_REF_NAME}" "${MODELPORT_TEST_TAG_REF_TYPE}" \
+        "${MODELPORT_TEST_TAG_OBJECT_SHA}"
+      tag_ref_count=$((tag_ref_count - 1))
+    done
+    ;;
+  *api.github.com/repos/abingooo/modelport/git/tags/*)
+    tag_object_count=1
+    [ "${MODELPORT_TEST_TAG_OBJECT_DUPLICATE}" = true ] && tag_object_count=2
+    while [ "${tag_object_count}" -gt 0 ]; do
+      printf '{"sha":"%s","tag":"%s","object":{"type":"%s","sha":"%s"}}\n' \
+        "${MODELPORT_TEST_TAG_OBJECT_SELF_SHA}" "${MODELPORT_TEST_TAG_NAME}" \
+        "${MODELPORT_TEST_TAG_TARGET_TYPE}" "${MODELPORT_TEST_TAG_REVISION}"
+      tag_object_count=$((tag_object_count - 1))
+    done
     ;;
   *api/v1/settings/public*)
     if using_previous_image; then
@@ -155,7 +173,15 @@ run_update() {
     MODELPORT_TEST_LABEL_VERSION='' \
     MODELPORT_TEST_SOURCE='' \
     MODELPORT_TEST_RELEASE_IMMUTABLE=true \
+    MODELPORT_TEST_TAG_REF_NAME=refs/tags/custom-v0.1.183.1 \
+    MODELPORT_TEST_TAG_REF_TYPE=tag \
+    MODELPORT_TEST_TAG_OBJECT_SHA="${tag_object_sha}" \
+    MODELPORT_TEST_TAG_REF_DUPLICATE=false \
+    MODELPORT_TEST_TAG_OBJECT_SELF_SHA="${tag_object_sha}" \
+    MODELPORT_TEST_TAG_NAME=custom-v0.1.183.1 \
+    MODELPORT_TEST_TAG_TARGET_TYPE=commit \
     MODELPORT_TEST_TAG_REVISION="${revision}" \
+    MODELPORT_TEST_TAG_OBJECT_DUPLICATE=false \
     MODELPORT_TEST_COSIGN_MODE=success \
     MODELPORT_TEST_IMAGE_ID="${image_id}" \
     MODELPORT_TEST_PREVIOUS_DIGEST="${previous_digest}" \
@@ -201,6 +227,7 @@ grep -q 'compose --env-file .* -f .*docker-compose.yml -f .*modelport-compose.ov
 grep -qx 'temporary -rw-------' "${temporary_dir}/modes.log"
 grep -qx 'env -rw-------' "${temporary_dir}/modes.log"
 grep -qx 'backup -rw-------' "${temporary_dir}/modes.log"
+# shellcheck disable=SC2046 # Split the stable ls fields to inspect the mode.
 set -- $(LC_ALL=C ls -ld "${deploy_dir}/.env")
 [ "$1" = '-rw-------' ] || { echo 'Updated env permissions are not private' >&2; exit 1; }
 test ! -e "${deploy_dir}/data/update-request"
@@ -225,9 +252,72 @@ test -f "${deploy_dir}/data/update-request.failed"
 rm -f "${deploy_dir}/data/update-request.failed"
 printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
 expect_update_failure \
-  'Mismatched Git tag revision' \
-  "Git tag custom-v0.1.183.1 does not point to ${revision}" \
+  'Mismatched annotated tag revision' \
+  "Annotated Git tag custom-v0.1.183.1 does not resolve uniquely to ${revision}" \
   MODELPORT_TEST_TAG_REVISION=89abcdef0123456789abcdef0123456789abcdef
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Wrong Git tag ref' \
+  'Git tag ref refs/tags/custom-v0.1.183.1 is not the expected annotated tag' \
+  MODELPORT_TEST_TAG_REF_NAME=refs/tags/custom-v0.1.183.2
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Lightweight Git tag ref' \
+  'Git tag ref refs/tags/custom-v0.1.183.1 is not the expected annotated tag' \
+  MODELPORT_TEST_TAG_REF_TYPE=commit
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Ambiguous Git tag ref response' \
+  'Git tag ref refs/tags/custom-v0.1.183.1 is not the expected annotated tag' \
+  MODELPORT_TEST_TAG_REF_DUPLICATE=true
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Mismatched annotated tag identity' \
+  "Annotated Git tag custom-v0.1.183.1 does not resolve uniquely to ${revision}" \
+  MODELPORT_TEST_TAG_OBJECT_SELF_SHA=abcdef0123456789abcdef0123456789abcdef01
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Wrong annotated tag name' \
+  "Annotated Git tag custom-v0.1.183.1 does not resolve uniquely to ${revision}" \
+  MODELPORT_TEST_TAG_NAME=custom-v0.1.183.2
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Annotated tag with non-commit target' \
+  "Annotated Git tag custom-v0.1.183.1 does not resolve uniquely to ${revision}" \
+  MODELPORT_TEST_TAG_TARGET_TYPE=tree
+grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
+test -f "${deploy_dir}/data/update-request.failed"
+
+rm -f "${deploy_dir}/data/update-request.failed"
+printf '%s\n' '0.1.183.1' > "${deploy_dir}/data/update-request"
+expect_update_failure \
+  'Ambiguous annotated tag response' \
+  "Annotated Git tag custom-v0.1.183.1 does not resolve uniquely to ${revision}" \
+  MODELPORT_TEST_TAG_OBJECT_DUPLICATE=true
 grep -qx "MODELPORT_IMAGE=ghcr.io/abingooo/modelport@${digest}" "${deploy_dir}/.env"
 test -f "${deploy_dir}/data/update-request.failed"
 

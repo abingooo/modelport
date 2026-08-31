@@ -120,6 +120,7 @@ func TestInstructionAuditAdminRoutesExposeGroupAndClientScopes(t *testing.T) {
 	}
 	require.NotContains(t, routes, `instructionAudit.GET("/rule-sets"`)
 	require.NotContains(t, routes, `instructionAudit.GET("/group-bindings"`)
+	require.NotContains(t, routes, `/client-profiles/:id/prompt-audit`)
 }
 
 func TestInstructionAuditRoutesRemoveModuleSpecificSensitiveAuthorization(t *testing.T) {

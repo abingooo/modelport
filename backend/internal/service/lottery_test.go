@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -288,6 +290,36 @@ func TestLotterySchedulerGivesEachCampaignAnIndependentTimeout(t *testing.T) {
 
 	require.Equal(t, []int64{11, 12}, calls)
 	require.NoError(t, ctxError, "a timed-out campaign must not cancel later campaigns")
+}
+
+func TestLotterySchedulerLogsRepositoryFailures(t *testing.T) {
+	previousLogger := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	listService := NewLotteryService(&lotteryRepositoryStub{
+		listDueCampaigns: func(context.Context, time.Time, int) ([]int64, error) {
+			return nil, errors.New("list due sentinel")
+		},
+	}, nil, nil)
+	listService.drawDueCampaignsWithTimeouts(time.Second, time.Second)
+	require.Contains(t, logs.String(), "lottery.scheduler.list_due_failed")
+	require.Contains(t, logs.String(), "list due sentinel")
+
+	logs.Reset()
+	drawService := NewLotteryService(&lotteryRepositoryStub{
+		listDueCampaigns: func(context.Context, time.Time, int) ([]int64, error) {
+			return []int64{73}, nil
+		},
+		drawScheduled: func(context.Context, int64, *int64, time.Time, LotteryRandomSource) (*LotteryDrawResult, error) {
+			return nil, errors.New("draw sentinel")
+		},
+	}, nil, nil)
+	drawService.drawDueCampaignsWithTimeouts(time.Second, time.Second)
+	require.Contains(t, logs.String(), "lottery.scheduler.draw_failed")
+	require.Contains(t, logs.String(), "campaign_id=73")
+	require.Contains(t, logs.String(), "draw sentinel")
 }
 
 func TestLotteryBalanceRewardInvalidationDoesNotReuseCancelledRequestContext(t *testing.T) {

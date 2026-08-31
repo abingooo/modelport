@@ -1,8 +1,12 @@
 <div align="center">
 
-<img src="assets/logo.svg" alt="Sub2API Logo" width="128" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="frontend/public/branding/modelport-mark-dark.png" />
+  <source media="(prefers-color-scheme: light)" srcset="frontend/public/branding/modelport-mark-light.png" />
+  <img src="frontend/public/branding/modelport-mark-light.png" alt="ModelPort Logo" width="112" />
+</picture>
 
-# Sub2API
+# ModelPort
 
 [![Go](https://img.shields.io/badge/Go-1.27.0-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
@@ -10,9 +14,9 @@
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://www.docker.com/)
 
-<a href="https://trendshift.io/repositories/21823" target="_blank"><img src="https://trendshift.io/api/badge/repositories/21823" alt="Wei-Shaw%2Fsub2api | Trendshift" width="250" height="55"/></a>
-
 **AI API Gateway Platform for Subscription Quota Distribution**
+
+ModelPort `0.1.183.1` is rebuilt on [Sub2API `v0.1.183`](https://github.com/Wei-Shaw/sub2api/tree/v0.1.183). It preserves the upstream license and attribution while publishing ModelPort-specific product and release assets from [`abingooo/modelport`](https://github.com/abingooo/modelport).
 
 English | [中文](README_CN.md) | [日本語](README_JA.md)
 
@@ -27,7 +31,9 @@ Please read the following carefully before using this project:
 - **📖 Disclaimer**: This project is provided for technical learning and research purposes only. The authors assume no liability for account bans, service interruptions, data loss, or any other direct or indirect damages resulting from the use of this project.
 - **🚫 No Commercial Authorization**: The developers of this project have never authorized any individual or organization to conduct any form of commercial operation based on this project. Any commercial activity conducted in the name of or based on this project is unrelated to this project and its developers, and all resulting disputes, losses, and legal liabilities shall be borne solely by the party conducting such activity.
 
-## ❤️ Sponsors
+## ❤️ Upstream Sponsors
+
+The following sponsor list is inherited from the Sub2API upstream project. These relationships and links belong to Sub2API and are retained as upstream attribution; they do not imply sponsorship of ModelPort.
 
 > [Want to appear here?](mailto:support@sub2api.org)
 
@@ -171,7 +177,7 @@ Please read the following carefully before using this project:
 
 ## Overview
 
-Sub2API is an AI API gateway platform designed to distribute and manage API quotas from AI product subscriptions. Users can access upstream AI services through platform-generated API Keys, while the platform handles authentication, billing, load balancing, and request forwarding.
+ModelPort is a multi-model AI API gateway built on Sub2API. Users access upstream AI services through platform-generated API Keys, while ModelPort handles authentication, billing, load balancing, request forwarding, free groups, lottery campaigns, instruction auditing, and API key connectivity tests.
 
 ## Features
 
@@ -208,7 +214,7 @@ Community projects that extend or integrate with Sub2API:
 
 ## Nginx Reverse Proxy Note
 
-When using Nginx as a reverse proxy for Sub2API (or CRS) with Codex CLI, add the following to the `http` block in your Nginx configuration:
+When using Nginx as a reverse proxy for ModelPort (or a compatible Sub2API/CRS deployment) with Codex CLI, add the following to the `http` block in your Nginx configuration:
 
 ```nginx
 underscores_in_headers on;
@@ -220,76 +226,9 @@ Nginx drops headers containing underscores by default (e.g. `session_id`), which
 
 ## Deployment
 
-### Method 1: Script Installation (Recommended)
+ModelPort `0.1.183.1` publishes an immutable `linux/amd64` OCI image and does not publish GoReleaser binary archives or a mutable `latest` image. Docker Compose is therefore the supported pre-built installation path for this release. The retained `sub2api` service, user, database, and binary names are compatibility identifiers.
 
-One-click installation script that downloads pre-built binaries from GitHub Releases.
-
-#### Prerequisites
-
-- Linux server (amd64 or arm64)
-- PostgreSQL 15+ (installed and running)
-- Redis 7+ (installed and running)
-- Root privileges
-
-#### Installation Steps
-
-```bash
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
-```
-
-The script will:
-1. Detect your system architecture
-2. Download the latest release
-3. Install binary to `/opt/sub2api`
-4. Create systemd service
-5. Configure system user and permissions
-
-#### Post-Installation
-
-```bash
-# 1. Start the service
-sudo systemctl start sub2api
-
-# 2. Enable auto-start on boot
-sudo systemctl enable sub2api
-
-# 3. Open Setup Wizard in browser
-# http://YOUR_SERVER_IP:8080
-```
-
-The Setup Wizard will guide you through:
-- Database configuration
-- Redis configuration
-- Admin account creation
-
-#### Upgrade
-
-You can upgrade directly from the **Admin Dashboard** by clicking the **Check for Updates** button in the top-left corner.
-
-The web interface will:
-- Check for new versions automatically
-- Download and apply updates with one click
-- Support rollback if needed
-
-#### Useful Commands
-
-```bash
-# Check status
-sudo systemctl status sub2api
-
-# View logs
-sudo journalctl -u sub2api -f
-
-# Restart service
-sudo systemctl restart sub2api
-
-# Uninstall
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash -s -- uninstall -y
-```
-
----
-
-### Method 2: Docker Compose (Recommended)
+### Method 1: Docker Compose (Recommended)
 
 Deploy with Docker Compose, including PostgreSQL and Redis containers.
 
@@ -304,10 +243,10 @@ Use the automated deployment script for easy setup:
 
 ```bash
 # Create deployment directory
-mkdir -p sub2api-deploy && cd sub2api-deploy
+mkdir -p modelport-deploy && cd modelport-deploy
 
 # Download and run deployment preparation script
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/abingooo/modelport/main/deploy/docker-deploy.sh | bash
 
 # Start services
 docker compose up -d
@@ -329,8 +268,8 @@ If you prefer manual setup:
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
+git clone https://github.com/abingooo/modelport.git
+cd modelport/deploy
 
 # 2. Copy environment configuration
 cp .env.example .env
@@ -411,10 +350,12 @@ docker compose -f docker-compose.local.yml logs sub2api | grep "admin password"
 #### Upgrade
 
 ```bash
-# Pull latest image and recreate container
+# Pull the configured immutable ModelPort image and recreate the container
 docker compose -f docker-compose.local.yml pull
 docker compose -f docker-compose.local.yml up -d
 ```
+
+ModelPort does not publish `latest`. Move to a newer release only through the reviewed ModelPort release/update flow; changing an image reference is an explicit operator action.
 
 #### Easy Migration (Local Directory Version)
 
@@ -424,14 +365,14 @@ When using `docker-compose.local.yml`, migrate to a new server easily:
 # On source server
 docker compose -f docker-compose.local.yml down
 cd ..
-tar czf sub2api-complete.tar.gz sub2api-deploy/
+tar czf modelport-complete.tar.gz modelport-deploy/
 
 # Transfer to new server
-scp sub2api-complete.tar.gz user@new-server:/path/
+scp modelport-complete.tar.gz user@new-server:/path/
 
 # On new server
-tar xzf sub2api-complete.tar.gz
-cd sub2api-deploy/
+tar xzf modelport-complete.tar.gz
+cd modelport-deploy/
 docker compose -f docker-compose.local.yml up -d
 ```
 
@@ -454,23 +395,13 @@ rm -rf data/ postgres_data/ redis_data/
 
 ---
 
-### Method 3: Apple container (macOS)
+### Method 2: Apple container (macOS)
 
-Apple-silicon Macs running macOS 26 can run the full Sub2API, PostgreSQL, and Redis stack with Apple `container` 1.1.0 or newer:
-
-```bash
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
-./apple-container.sh init
-./apple-container.sh up
-./apple-container.sh status
-```
-
-This is an operator-managed local workflow; Docker Compose remains the recommended production path. See [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md) for lifecycle commands, persistence, upgrades, and runtime limitations.
+The current formal ModelPort release is `linux/amd64` only, while Apple `container` runs native `linux/arm64` workloads on Apple silicon. The pre-built ModelPort image is therefore not supported by this workflow in `0.1.183.1`; do not substitute the upstream Sub2API image. See [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md) for the exact support boundary and retained development tooling.
 
 ---
 
-### Method 4: Build from Source
+### Method 3: Build from Source
 
 Build and run from source code for development or customization.
 
@@ -485,8 +416,8 @@ Build and run from source code for development or customization.
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api
+git clone https://github.com/abingooo/modelport.git
+cd modelport
 
 # 2. Install pnpm (if not already installed)
 npm install -g pnpm
@@ -877,13 +808,13 @@ sub2api/
     └── install.sh            # One-click installation script
 ```
 
-## Star History
+## ModelPort Star History
 
-<a href="https://star-history.dera.page/#Wei-Shaw/sub2api&Date">
+<a href="https://star-history.dera.page/#abingooo/modelport&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date" />
+   <img alt="ModelPort Star History Chart" src="https://star-history.dera.page/svg?repos=abingooo/modelport&type=Date" />
  </picture>
 </a>
 

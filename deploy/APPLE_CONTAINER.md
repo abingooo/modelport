@@ -1,10 +1,10 @@
-# Apple container Deployment
+# Apple container Deployment Boundary
 
-Sub2API can run as a native three-service stack with Apple's `container` CLI. This workflow runs the published Sub2API, PostgreSQL, and Redis OCI images without Docker Desktop or a Docker-compatible daemon.
+This helper can run a native three-service stack with Apple's `container` CLI when a compatible ModelPort `linux/arm64` image is available. ModelPort `0.1.183.1` publishes only `linux/amd64`, so the formal image cannot run in this native Apple-silicon workflow. Do not substitute the upstream Sub2API image, because that would omit ModelPort behavior.
 
 ## Support Level
 
-Apple `container` support is intended for local development and operator-managed deployments on a Mac. Docker Compose remains the recommended production deployment path.
+Apple `container` support is retained as development tooling for a future ModelPort ARM64 release. It is not a supported installation path for `0.1.183.1`. Docker Compose on `linux/amd64` remains the supported production deployment path.
 
 Apple `container` 1.1 does not provide restart policies, automatic startup, workload health scheduling, a Docker API socket, or full Compose orchestration. `apple-container.sh` supplies ordered startup and readiness checks when you invoke it, but it is not a continuously running supervisor.
 
@@ -22,26 +22,29 @@ Install Apple `container` from its [official releases](https://github.com/apple/
 container --version
 ```
 
-## Quick Start
+## Future ARM64 Workflow Reference
+
+Do not use this sequence with the current `custom-v0.1.183.1` image. The helper rejects the formal image before `up`, `restart`, or `pull` can change runtime state because that image is `linux/amd64` only. It also rejects known upstream Sub2API image references. The commands below apply only after `APPLE_CONTAINER_SUB2API_IMAGE` is set to a separately reviewed ModelPort `linux/arm64` artifact.
 
 ```bash
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
+git clone https://github.com/abingooo/modelport.git
+cd modelport/deploy
 
 # Creates .env with random PostgreSQL, JWT, and TOTP secrets.
 ./apple-container.sh init
 
-# Review optional settings before startup.
+# Set APPLE_CONTAINER_SUB2API_IMAGE to a reviewed ModelPort linux/arm64 image,
+# then review the remaining settings before startup.
 nano .env
 
-# Creates volumes/network/containers, waits for dependencies, and starts Sub2API.
+# Creates volumes/network/containers, waits for dependencies, and starts ModelPort.
 ./apple-container.sh up
 
 # Verifies PostgreSQL, Redis, and the application endpoint.
 ./apple-container.sh status
 ```
 
-Open `http://localhost:8080`. If `ADMIN_PASSWORD` is empty, retrieve the generated password with:
+For a future supported ARM64 artifact, open `http://localhost:8080`. If `ADMIN_PASSWORD` is empty, retrieve the generated password with:
 
 ```bash
 ./apple-container.sh logs app
@@ -97,10 +100,10 @@ export SUB2API_ENV_FILE=/absolute/path/to/sub2api.env
 ./apple-container.sh up
 ```
 
-Apple-specific image overrides are available:
+Apple-specific image overrides are available. The formal image shown below is the generated default, but it is intentionally rejected by active Apple workflow commands in this release because it has no `linux/arm64` manifest. Replace it only with a separately reviewed ModelPort ARM64 artifact; never use an upstream Sub2API image.
 
 ```dotenv
-APPLE_CONTAINER_SUB2API_IMAGE=weishaw/sub2api:latest
+APPLE_CONTAINER_SUB2API_IMAGE=ghcr.io/abingooo/modelport:custom-v0.1.183.1
 APPLE_CONTAINER_POSTGRES_IMAGE=postgres:18-alpine
 APPLE_CONTAINER_REDIS_IMAGE=redis:8-alpine
 ```
@@ -175,7 +178,7 @@ To restore these backups into an existing stack, first ensure the image versions
 
 # Remove only the app container so a helper can mount its named volume.
 container delete sub2api-apple
-SUB2API_IMAGE=weishaw/sub2api:latest # Match APPLE_CONTAINER_SUB2API_IMAGE in .env.
+SUB2API_IMAGE="${APPLE_CONTAINER_SUB2API_IMAGE:?set a reviewed ModelPort linux/arm64 image}" # Compatibility variable.
 container run --rm --name sub2api-apple-data-restore \
   --entrypoint /bin/sh \
   --volume sub2api-apple-data:/restore \
@@ -217,5 +220,5 @@ container system start
 - Health probes run during `up`, `restart`, and `status`; Apple `container` does not continuously schedule them.
 - Docker Compose, Testcontainers, Buildx, and tools requiring `/var/run/docker.sock` cannot use this runtime directly.
 - Named volume backup and restore must be tested before using this workflow for important data.
-- The script targets native `linux/arm64` images. The normal Sub2API release publishes an arm64 variant.
+- The script targets native `linux/arm64` images. ModelPort `0.1.183.1` does not publish one, so this workflow remains unsupported for the current release.
 - Runtime environment values, including credentials, are retained in Apple container configuration and are visible to users who can inspect the local runtime.

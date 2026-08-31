@@ -1,0 +1,34 @@
+#!/bin/sh
+set -eu
+
+if command -v sha256sum >/dev/null 2>&1; then
+  output="$(sha256sum)" || {
+    echo 'Could not calculate SHA-256 with sha256sum' >&2
+    exit 1
+  }
+elif command -v shasum >/dev/null 2>&1; then
+  output="$(shasum -a 256)" || {
+    echo 'Could not calculate SHA-256 with shasum -a 256' >&2
+    exit 1
+  }
+else
+  echo 'SHA-256 tool unavailable: install sha256sum or shasum' >&2
+  exit 1
+fi
+
+digest=''
+read -r digest _remainder <<EOF
+${output}
+EOF
+[ "${#digest}" -eq 64 ] || {
+  echo 'SHA-256 tool returned an invalid digest length' >&2
+  exit 1
+}
+case "${digest}" in
+  *[!0-9a-f]*)
+    echo 'SHA-256 tool returned a non-lowercase-hex digest' >&2
+    exit 1
+    ;;
+esac
+
+printf '%s\n' "${digest}"

@@ -112,7 +112,8 @@ func TestInstructionV2ServiceUsesAuthenticatedGroupAndClientScope(t *testing.T) 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			decision := service.EvaluateInstruction(context.Background(), Request{
-				Protocol:        instructionAuditProtocol,
+				Protocol: instructionAuditProtocol,
+				Endpoint: "/v1/responses", Stage: "http",
 				GroupID:         instructionV2TestInt64Pointer(test.groupID),
 				UserAgent:       test.userAgent,
 				Model:           test.model,
@@ -128,110 +129,40 @@ func TestInstructionV2ServiceUsesAuthenticatedGroupAndClientScope(t *testing.T) 
 	}
 }
 
-func TestInstructionV2PromptAuditRouteUsesWholeGroupAndProfileSwitch(t *testing.T) {
+func TestInstructionV2ServiceBypassesOutOfScopeRoutesBeforeParsing(t *testing.T) {
 	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeEnforce)
-	other := snapshot.ProfilesByKey[InstructionClientOther]
-	other.profile.PromptAuditEnabled = true
-	snapshot.ProfilesByKey[InstructionClientOther] = other
+	snapshot.Config.AllowEmptyFields = false
 	service.snapshot.Store(snapshot)
 
-	route := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	})
-	require.True(t, route.Eligible, "a client-specific V2 scope makes its whole group eligible for the patch")
-	require.Equal(t, InstructionClientOther, route.ClientProfileKey)
-	require.Equal(t, int64(1), route.InstructionConfigVersion)
-	require.Equal(t, PromptAuditModelContractVersion, route.ModelContractVersion)
-
-	for _, request := range []Request{
-		{Protocol: "openai_responses", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0"},
-		{Protocol: "responses_websocket", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0"},
-		{Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(99), UserAgent: "curl/8.0"},
-	} {
-		require.False(t, service.ResolvePromptAuditRoute(request).Eligible)
+	tests := []struct {
+		name  string
+		path  string
+		stage string
+		body  string
+	}{
+		{name: "compact", path: "/v1/responses/compact", stage: "http", body: `{"instructions":"untrusted"}`},
+		{name: "input tokens", path: "/v1/responses/input_tokens", stage: "http", body: `{"instructions":"untrusted"}`},
+		{name: "live", path: "/v1/live", stage: "http", body: `{"instructions":"untrusted"}`},
+		{name: "chat", path: "/v1/chat/completions", stage: "http", body: `{"instructions":"untrusted"}`},
+		{name: "messages", path: "/v1/messages", stage: "http", body: `{"instructions":"untrusted"}`},
+		{name: "unknown stage", path: "/v1/responses", stage: "relay", body: `{"instructions":"untrusted"}`},
+		{name: "websocket control frame", path: "/v1/responses", stage: "subsequent_turn", body: `{"type":"session.update","session":{"instructions":"untrusted"}}`},
 	}
 
-	other.profile.Enabled = false
-	snapshot.ProfilesByKey[InstructionClientOther] = other
-	service.snapshot.Store(snapshot)
-	require.False(t, service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	}).Eligible, "disabling a profile preserves its flag but makes it runtime-ineligible")
-
-	snapshot.Config.EffectiveMode = InstructionV2ModeOff
-	other.profile.Enabled = true
-	snapshot.ProfilesByKey[InstructionClientOther] = other
-	service.snapshot.Store(snapshot)
-	require.False(t, service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	}).Eligible)
-}
-
-func TestInstructionV2PromptAuditRouteDistinguishesUnavailableFromScopeMiss(t *testing.T) {
-	service, snapshot := newInstructionV2TestService(t, InstructionV2ModeEnforce)
-	other := snapshot.ProfilesByKey[InstructionClientOther]
-	other.profile.PromptAuditEnabled = true
-	snapshot.ProfilesByKey[InstructionClientOther] = other
-	service.snapshot.Store(snapshot)
-
-	freshMiss := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(99), UserAgent: "curl/8.0",
-	})
-	require.False(t, freshMiss.Eligible)
-	require.False(t, freshMiss.InstructionConfigUnavailable)
-
-	service.snapshot.Store(nil)
-	missing := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	})
-	require.False(t, missing.Eligible)
-	require.True(t, missing.InstructionConfigUnavailable)
-
-	for _, excluded := range []Request{
-		{Protocol: "openai_responses", GroupID: instructionV2TestInt64Pointer(8)},
-		{Protocol: "anthropic_messages", TrustedInternalClient: true, GroupID: instructionV2TestInt64Pointer(8)},
-		{Protocol: "anthropic_messages"},
-	} {
-		route := service.ResolvePromptAuditRoute(excluded)
-		require.False(t, route.Eligible)
-		require.False(t, route.InstructionConfigUnavailable)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision := service.EvaluateInstruction(context.Background(), Request{
+				Protocol:        instructionAuditProtocol,
+				Endpoint:        test.path,
+				Stage:           test.stage,
+				GroupID:         instructionV2TestInt64Pointer(7),
+				InstructionBody: []byte(test.body),
+			})
+			require.True(t, decision.Allow)
+			require.False(t, decision.Applicable)
+			require.Empty(t, decision.Reason)
+		})
 	}
-
-	service.snapshot.Store(snapshot)
-	service.lastLoadFailureAt = time.Now().Add(-instructionV2SnapshotMaxStale + time.Second)
-	withinGrace := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	})
-	require.True(t, withinGrace.Eligible)
-	require.False(t, withinGrace.InstructionConfigUnavailable)
-
-	service.lastLoadFailureAt = time.Now().Add(-instructionV2SnapshotMaxStale - time.Second)
-
-	staleHit := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	})
-	require.False(t, staleHit.Eligible)
-	require.True(t, staleHit.InstructionConfigUnavailable)
-
-	staleMiss := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(99), UserAgent: "curl/8.0",
-	})
-	require.False(t, staleMiss.Eligible)
-	require.True(t, staleMiss.InstructionConfigUnavailable)
-
-	snapshot.Config.EffectiveMode = InstructionV2ModeOff
-	service.snapshot.Store(snapshot)
-	staleOff := service.ResolvePromptAuditRoute(Request{
-		Protocol: "anthropic_messages", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	})
-	require.False(t, staleOff.Eligible)
-	require.True(t, staleOff.InstructionConfigUnavailable)
-
-	responses := service.ResolvePromptAuditRoute(Request{
-		Protocol: "openai_responses", GroupID: instructionV2TestInt64Pointer(8), UserAgent: "curl/8.0",
-	})
-	require.False(t, responses.Eligible)
-	require.False(t, responses.InstructionConfigUnavailable)
 }
 
 func TestInstructionV2ServiceChecksHashBeforeAI(t *testing.T) {
@@ -243,7 +174,8 @@ func TestInstructionV2ServiceChecksHashBeforeAI(t *testing.T) {
 	service.snapshot.Store(snapshot)
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol:        instructionAuditProtocol,
+		Protocol: instructionAuditProtocol,
+		Endpoint: "/v1/responses", Stage: "http",
 		GroupID:         instructionV2TestInt64Pointer(7),
 		UserAgent:       "curl/8.0",
 		InstructionBody: []byte(`{"input":[{}, {"content":[{"type":"input_text","text":"trusted input1"}]}]}`),
@@ -261,7 +193,8 @@ func TestInstructionV2ServiceAllowsConfiguredExceptionsBeforeAI(t *testing.T) {
 	service.snapshot.Store(snapshot)
 
 	allowlisted := service.EvaluateInstruction(context.Background(), Request{
-		Protocol:        instructionAuditProtocol,
+		Protocol: instructionAuditProtocol,
+		Endpoint: "/v1/responses", Stage: "http",
 		UserID:          77,
 		GroupID:         instructionV2TestInt64Pointer(7),
 		InstructionBody: []byte(`{`),
@@ -271,7 +204,8 @@ func TestInstructionV2ServiceAllowsConfiguredExceptionsBeforeAI(t *testing.T) {
 	require.Equal(t, "user_allowlist", allowlisted.Reason)
 
 	empty := service.EvaluateInstruction(context.Background(), Request{
-		Protocol:        instructionAuditProtocol,
+		Protocol: instructionAuditProtocol,
+		Endpoint: "/v1/responses", Stage: "http",
 		GroupID:         instructionV2TestInt64Pointer(7),
 		InstructionBody: []byte(`{"input":[]}`),
 	})
@@ -304,7 +238,7 @@ func TestInstructionV2ServiceRiskHashTakesPrecedence(t *testing.T) {
 	service.snapshot.Store(snapshot)
 
 	decision := service.EvaluateInstruction(context.Background(), Request{
-		Protocol: instructionAuditProtocol, GroupID: instructionV2TestInt64Pointer(7),
+		Protocol: instructionAuditProtocol, Endpoint: "/v1/responses", Stage: "http", GroupID: instructionV2TestInt64Pointer(7),
 		InstructionBody: []byte(`{"instructions":"same content"}`),
 	})
 
@@ -395,7 +329,7 @@ func TestInstructionV2ServiceReusesReviewJobBeforeSyncAI(t *testing.T) {
 			mock.ExpectClose()
 
 			decision := service.EvaluateInstruction(context.Background(), Request{
-				Protocol: instructionAuditProtocol, RequestID: "reuse-review-request",
+				Protocol: instructionAuditProtocol, Endpoint: "/v1/responses", Stage: "http", RequestID: "reuse-review-request",
 				GroupID:         instructionV2TestInt64Pointer(7),
 				InstructionBody: []byte(`{"instructions":"reuse review field"}`),
 			})

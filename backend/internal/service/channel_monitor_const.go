@@ -51,6 +51,10 @@ const (
 	providerGrokPath = "/v1/chat/completions"
 	// providerZhipuPath 智谱 OpenAI 兼容 Chat Completions 路径（前缀与官方不同）。
 	providerZhipuPath = "/api/paas/v4/chat/completions"
+	// Legacy ModelPort provider paths. The stored provider identifiers remain
+	// unchanged; only their probe request paths are restored.
+	providerQwenPath   = "/compatible-mode/v1/chat/completions"
+	providerDoubaoPath = "/api/v3/chat/completions"
 	// providerOpenAIResponsesPath OpenAI Responses API 路径。
 	providerOpenAIResponsesPath = "/v1/responses"
 	// providerAnthropicPath Anthropic Messages 路径。
@@ -69,6 +73,12 @@ const (
 	MonitorProviderKimi        = "kimi"
 	MonitorProviderZhipu       = "zhipu"
 	MonitorProviderDeepseek    = "deepseek"
+	// Legacy ModelPort providers retained for channel-monitor probes only.
+	MonitorProviderQwen    = "qwen"
+	MonitorProviderGLM     = "glm"
+	MonitorProviderDoubao  = "doubao"
+	MonitorProviderMiniMax = "minimax"
+	MonitorProviderMiMo    = "mimo"
 
 	// MonitorCheckMode 检测模式（channel_monitors.check_mode）。
 	//   probe       - LLM 探活（默认，原有行为）
@@ -151,10 +161,10 @@ var (
 		"CHANNEL_MONITOR_NOT_FOUND", "channel monitor not found",
 	)
 	ErrChannelMonitorInvalidProvider = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_INVALID_PROVIDER", "provider must be one of openai/anthropic/gemini/grok/antigravity/kimi/zhipu/deepseek",
+		"CHANNEL_MONITOR_INVALID_PROVIDER", "unsupported channel monitor provider",
 	)
 	ErrChannelMonitorInvalidCheckMode = infraerrors.BadRequest(
-		"CHANNEL_MONITOR_INVALID_CHECK_MODE", "check_mode must be one of probe/quota/quota_probe; antigravity only supports quota",
+		"CHANNEL_MONITOR_INVALID_CHECK_MODE", "selected provider does not support the requested check_mode",
 	)
 	ErrChannelMonitorAccountRequired = infraerrors.BadRequest(
 		"CHANNEL_MONITOR_ACCOUNT_REQUIRED", "account_id is required for quota-based check_mode",

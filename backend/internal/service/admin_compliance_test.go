@@ -63,6 +63,10 @@ func TestAdminComplianceStatusRequiresAckWhenMissing(t *testing.T) {
 	require.Equal(t, AdminComplianceVersion, status.Version)
 	require.Equal(t, AdminComplianceAckPhraseZH, status.AckPhraseZH)
 	require.Equal(t, AdminComplianceDocumentPathZH, status.DocumentPathZH)
+	require.Equal(t, "https://github.com/abingooo/modelport/blob/main/docs/legal/admin-compliance.zh.md", status.DocumentURLZH)
+	require.Equal(t, "https://github.com/abingooo/modelport/blob/main/docs/legal/admin-compliance.en.md", status.DocumentURLEN)
+	require.Equal(t, "v2026.06.10", status.Version)
+	require.Contains(t, status.AckPhraseZH, "Sub2API")
 }
 
 func TestAcceptAdminComplianceRejectsWrongPhrase(t *testing.T) {

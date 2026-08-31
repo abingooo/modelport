@@ -1,14 +1,14 @@
-# Sub2API Deployment Files
+# ModelPort Deployment Files
 
-This directory contains files for deploying Sub2API on Linux servers and Apple-silicon Macs.
+This directory contains ModelPort deployment files. ModelPort `0.1.183.1` is based on Sub2API `v0.1.183`; technical identifiers such as the `sub2api` service, user, data paths, and environment variables remain unchanged for compatibility.
 
 ## Deployment Methods
 
 | Method | Best For | Setup Wizard |
 |--------|----------|--------------|
 | **Docker Compose** | Quick setup, all-in-one | Not needed (auto-setup) |
-| **Apple container** | Native local stack on macOS 26 | Not needed (auto-setup) |
-| **Binary Install** | Production servers, systemd | Web-based wizard |
+| **Apple container** | Retained development tooling; no supported ModelPort ARM64 image in `0.1.183.1` | Not supported for this release |
+| **Binary Install** | Legacy compatibility only; no binary assets in `0.1.183.1` | Not supported for this release |
 
 ## Files
 
@@ -20,8 +20,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 | `apple-container.sh` | Native Apple `container` lifecycle script |
 | `APPLE_CONTAINER.md` | Apple `container` deployment and operations guide |
 | `.env.example` | Container environment variables template |
-| `DOCKER.md` | Docker Hub documentation |
-| `install.sh` | One-click binary installation script |
+| `DOCKER.md` | ModelPort GHCR image documentation |
+| `install.sh` | Legacy binary installer retained for compatibility; it only queries ModelPort Releases |
 | `install-datamanagementd.sh` | datamanagementd 一键安装脚本 |
 | `sub2api.service` | Systemd service unit file |
 | `sub2api-datamanagementd.service` | datamanagementd systemd service unit file |
@@ -33,16 +33,9 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 ## Apple container Deployment
 
-Apple-silicon Macs running macOS 26 can run the complete Sub2API, PostgreSQL, and Redis stack with Apple `container` 1.1.0 or newer:
+The Apple `container` helper is retained for development and future ARM64 releases. ModelPort `0.1.183.1` publishes only `linux/amd64`, so it cannot run natively on Apple silicon and must not fall back to an upstream Sub2API image.
 
-```bash
-./apple-container.sh init
-./apple-container.sh up
-./apple-container.sh status
-./apple-container.sh logs app -f
-```
-
-The script uses Apple named volumes, starts dependencies in order, and performs live readiness checks. It does not provide a continuous restart supervisor; run `./apple-container.sh up` after a host reboot. Docker Compose remains the recommended production deployment path.
+Do not run `up`, `restart`, or `pull` with the current formal image. The helper rejects that `linux/amd64` image before creating or pulling workloads, and it also rejects known upstream Sub2API image references. When a separately reviewed ModelPort ARM64 image is published, the retained script can use Apple named volumes, start dependencies in order, and perform live readiness checks. It does not provide a continuous restart supervisor. Docker Compose on `linux/amd64` remains the supported production deployment path for this release.
 
 See [APPLE_CONTAINER.md](./APPLE_CONTAINER.md) for configuration, upgrades, persistence, networking behavior, and limitations.
 
@@ -56,10 +49,10 @@ Use the automated preparation script for the easiest setup:
 
 ```bash
 # Download and run the preparation script
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/abingooo/modelport/main/deploy/docker-deploy.sh | bash
 
 # Or download first, then run
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh -o docker-deploy.sh
+curl -sSL https://raw.githubusercontent.com/abingooo/modelport/main/deploy/docker-deploy.sh -o docker-deploy.sh
 chmod +x docker-deploy.sh
 ./docker-deploy.sh
 ```
@@ -115,8 +108,8 @@ If you prefer manual control:
 
 ```bash
 # Clone repository
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
+git clone https://github.com/abingooo/modelport.git
+cd modelport/deploy
 
 # Configure environment
 cp .env.example .env
@@ -392,43 +385,13 @@ GEMINI_OAUTH_CLIENT_SECRET=GOCSPX-your-client-secret
 
 ---
 
-## Binary Installation
+## Legacy Binary Installation
 
-For production servers using systemd.
+ModelPort `0.1.183.1` does not publish GoReleaser binary archives or `checksums.txt`, so binary installation is not a supported distribution path for this release. Use the ModelPort Docker Compose image instead. The retained `install.sh` fails closed for install, update, rollback, and release-list commands; it keeps only help and uninstall support for existing legacy installations and never downloads from the Sub2API repository.
 
-### One-Line Installation
+Release metadata and supported assets are published only at [ModelPort Releases](https://github.com/abingooo/modelport/releases). Do not use the upstream Sub2API installer for a ModelPort deployment.
 
-```bash
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
-```
-
-### Manual Installation
-
-1. Download the latest release from [GitHub Releases](https://github.com/Wei-Shaw/sub2api/releases)
-2. Extract and copy the binary to `/opt/sub2api/`
-3. Copy `sub2api.service` to `/etc/systemd/system/`
-4. Run:
-   ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable sub2api
-   sudo systemctl start sub2api
-   ```
-5. Open the Setup Wizard in your browser to complete configuration
-
-### Commands
-
-```bash
-# Install
-sudo ./install.sh
-
-# Upgrade
-sudo ./install.sh upgrade
-
-# Uninstall
-sudo ./install.sh uninstall
-```
-
-### Service Management
+### Existing Legacy Service Management
 
 ```bash
 # Start the service

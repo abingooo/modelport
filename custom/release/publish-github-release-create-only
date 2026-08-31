@@ -1,0 +1,608 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+umask 077
+
+readonly API_VERSION='2022-11-28'
+
+REPOSITORY=''
+TAG=''
+CANDIDATE_SHA=''
+RELEASE_NAME=''
+BODY_PATH=''
+declare -a INPUT_ASSETS=()
+
+TEMP_DIR=''
+OWNER_NONCE=''
+TAG_MESSAGE=''
+TAG_OBJECT_SHA=''
+# Set before the ref POST so an ambiguous response can still be reconciled by
+# the identity-aware rollback path.
+TAG_REF_ATTEMPTED=0
+RELEASE_ID=''
+RELEASE_NODE_ID=''
+RELEASE_CREATED=0
+RELEASE_PUBLISHED=0
+RELEASE_HTML_URL=''
+RELEASE_UPLOAD_URL=''
+OWNED_ASSETS_JSON=''
+API_STATUS=''
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  custom/release/publish-github-release-create-only \
+    --repository owner/repository \
+    --tag custom-vX.Y.Z.N \
+    --candidate-sha 40-lowercase-hex \
+    --name 'ModelPort X.Y.Z.N' \
+    --body /absolute/or/relative/release-notes.md \
+    --asset /path/to/asset [--asset /path/to/asset ...]
+
+GH_TOKEN is required. The command creates an annotated Git tag, a draft
+release, and create-only assets. It verifies every remote asset before making
+the release public. Existing tags, releases, or asset names fail closed.
+EOF
+}
+
+fail() {
+  printf 'Create-only GitHub release failed: %s\n' "$1" >&2
+  exit 1
+}
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+sha256_file() {
+  if command_exists sha256sum; then
+    sha256sum -- "$1" | awk '{print $1}'
+  else
+    shasum -a 256 -- "$1" | awk '{print $1}'
+  fi
+}
+
+file_size() {
+  wc -c < "$1" | tr -d '[:space:]'
+}
+
+api_request() {
+  local method="$1"
+  local url="$2"
+  local response_path="$3"
+  local body_path="${4:-}"
+  local content_type="${5:-application/vnd.github+json}"
+  local curl_status=0
+  local -a curl_args=(
+    --config -
+    --silent
+    --show-error
+    --request "$method"
+    --header "Content-Type: $content_type"
+    --connect-timeout 15
+    --max-time 180
+    --proto '=https'
+    --output "$response_path"
+    --write-out '%{http_code}'
+  )
+
+  if [[ -n "$body_path" ]]; then
+    curl_args+=(--data-binary "@$body_path")
+  fi
+
+  API_STATUS=''
+  set +e
+  API_STATUS="$({
+    printf 'header = "Accept: application/vnd.github+json"\n'
+    printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN"
+    printf 'header = "X-GitHub-Api-Version: %s"\n' "$API_VERSION"
+  } | curl "${curl_args[@]}" "$url")"
+  curl_status=$?
+  set -e
+
+  [[ "$curl_status" -eq 0 && "$API_STATUS" =~ ^[0-9]{3}$ ]]
+}
+
+download_asset() {
+  local asset_id="$1"
+  local output_path="$2"
+  local status=''
+  local curl_status=0
+
+  set +e
+  status="$({
+    printf 'header = "Accept: application/octet-stream"\n'
+    printf 'header = "Authorization: Bearer %s"\n' "$GH_TOKEN"
+    printf 'header = "X-GitHub-Api-Version: %s"\n' "$API_VERSION"
+  } | curl --config - --silent --show-error --location \
+      --connect-timeout 15 --max-time 300 \
+      --proto '=https' --proto-redir '=https' \
+      --output "$output_path" \
+      --write-out '%{http_code}' \
+      "$GITHUB_API_URL/repos/$REPOSITORY/releases/assets/$asset_id")"
+  curl_status=$?
+  set -e
+
+  [[ "$curl_status" -eq 0 && "$status" == 200 ]]
+}
+
+release_identity_is_owned_draft() {
+  local release_path="$1"
+  jq -e \
+    --argjson id "$RELEASE_ID" \
+    --arg node_id "$RELEASE_NODE_ID" \
+    --arg tag "$TAG" \
+    --arg candidate "$CANDIDATE_SHA" \
+    --arg name "$RELEASE_NAME" \
+    --rawfile body "$BODY_PATH" '
+      .id == $id and .node_id == $node_id and .tag_name == $tag and
+      .target_commitish == $candidate and .name == $name and .body == $body and
+      .draft == true and .prerelease == false and (.immutable // false) == false
+    ' "$release_path" >/dev/null
+}
+
+release_identity_is_owned_published_immutable() {
+  local release_path="$1"
+  jq -e \
+    --argjson id "$RELEASE_ID" \
+    --arg node_id "$RELEASE_NODE_ID" \
+    --arg tag "$TAG" \
+    --arg candidate "$CANDIDATE_SHA" \
+    --arg name "$RELEASE_NAME" \
+    --arg html_url "$RELEASE_HTML_URL" \
+    --rawfile body "$BODY_PATH" '
+      .id == $id and .node_id == $node_id and .tag_name == $tag and
+      .target_commitish == $candidate and .name == $name and .body == $body and
+      .html_url == $html_url and .draft == false and .prerelease == false and
+      .immutable == true
+    ' "$release_path" >/dev/null
+}
+
+release_assets_are_owned() {
+  local assets_path="$1"
+  jq -e --slurpfile owned "$OWNED_ASSETS_JSON" '
+    # GitHub limits this endpoint to 100 entries per page.  A full page may
+    # hide additional (possibly foreign) assets on the next page, so never
+    # delete a draft until the response is demonstrably complete.
+    . as $remote_assets |
+    type == "array" and length < 100 and
+    length == ($owned[0] | length) and
+    all($remote_assets[]; . as $remote |
+      any($owned[0][];
+        .id == $remote.id and .node_id == $remote.node_id and
+        .name == $remote.name and .size == $remote.size and
+        $remote.state == "uploaded")) and
+    all($owned[0][]; . as $owned_asset |
+      any($remote_assets[];
+        .id == $owned_asset.id and .node_id == $owned_asset.node_id and
+        .name == $owned_asset.name and .size == $owned_asset.size))
+  ' "$assets_path" >/dev/null
+}
+
+rollback_release() {
+  local response="$TEMP_DIR/rollback-release.json"
+  local assets="$TEMP_DIR/rollback-assets.json"
+  local delete_response="$TEMP_DIR/rollback-release-delete.json"
+
+  [[ "$RELEASE_CREATED" -eq 1 && -n "$RELEASE_ID" ]] || return 0
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID" "$response"; then
+    printf 'Rollback refused: could not query the created Release identity\n' >&2
+    return 1
+  fi
+  if [[ "$API_STATUS" == 404 ]]; then
+    RELEASE_CREATED=0
+    return 0
+  fi
+  if [[ "$API_STATUS" != 200 ]] || ! release_identity_is_owned_draft "$response"; then
+    printf 'Rollback refused: the created Release is no longer the owned draft\n' >&2
+    return 1
+  fi
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" \
+      "$assets"; then
+    printf 'Rollback refused: could not query the created Release assets\n' >&2
+    return 1
+  fi
+  if [[ "$API_STATUS" != 200 ]] || ! release_assets_are_owned "$assets"; then
+    printf 'Rollback refused: the draft contains an asset not owned by this run\n' >&2
+    return 1
+  fi
+  if ! api_request DELETE \
+      "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID" "$delete_response"; then
+    printf 'Rollback failed: could not delete the exact owned draft Release\n' >&2
+    return 1
+  fi
+  if [[ "$API_STATUS" != 204 ]]; then
+    printf 'Rollback failed: deleting the exact owned draft returned HTTP %s\n' "$API_STATUS" >&2
+    return 1
+  fi
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID" "$response" || \
+      [[ "$API_STATUS" != 404 ]]; then
+    printf 'Rollback incomplete: draft Release deletion could not be verified\n' >&2
+    return 1
+  fi
+  RELEASE_CREATED=0
+}
+
+rollback_tag_ref() {
+  local release_by_tag="$TEMP_DIR/rollback-release-by-tag.json"
+  local ref_response="$TEMP_DIR/rollback-tag-ref.json"
+  local tag_response="$TEMP_DIR/rollback-tag-object.json"
+  local delete_response="$TEMP_DIR/rollback-tag-delete.json"
+
+  [[ "$TAG_REF_ATTEMPTED" -eq 1 && -n "$TAG_OBJECT_SHA" ]] || return 0
+
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/releases/tags/$TAG" "$release_by_tag"; then
+    printf 'Tag rollback refused: could not establish whether a Release uses the tag\n' >&2
+    return 1
+  fi
+  case "$API_STATUS" in
+    404) ;;
+    200)
+      printf 'Tag rollback refused: a Release currently uses the tag\n' >&2
+      return 1
+      ;;
+    *)
+      printf 'Tag rollback refused: Release lookup returned HTTP %s\n' "$API_STATUS" >&2
+      return 1
+      ;;
+  esac
+
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/git/ref/tags/$TAG" "$ref_response"; then
+    printf 'Tag rollback refused: could not query the tag ref identity\n' >&2
+    return 1
+  fi
+  if [[ "$API_STATUS" == 404 ]]; then
+    TAG_REF_ATTEMPTED=0
+    return 0
+  fi
+  if [[ "$API_STATUS" != 200 ]] || ! jq -e \
+      --arg ref "refs/tags/$TAG" --arg object "$TAG_OBJECT_SHA" '
+        .ref == $ref and .object.type == "tag" and .object.sha == $object
+      ' "$ref_response" >/dev/null; then
+    printf 'Tag rollback refused: the tag ref no longer has the owned identity\n' >&2
+    return 1
+  fi
+
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/git/tags/$TAG_OBJECT_SHA" "$tag_response"; then
+    printf 'Tag rollback refused: could not query the annotated tag identity\n' >&2
+    return 1
+  fi
+  if [[ "$API_STATUS" != 200 ]] || ! jq -e \
+      --arg tag "$TAG" --arg message "$TAG_MESSAGE" --arg candidate "$CANDIDATE_SHA" \
+      --arg object "$TAG_OBJECT_SHA" '
+        .sha == $object and .tag == $tag and .message == $message and
+        .object.type == "commit" and .object.sha == $candidate
+      ' "$tag_response" >/dev/null; then
+    printf 'Tag rollback refused: the annotated tag object identity did not match\n' >&2
+    return 1
+  fi
+
+  if ! api_request DELETE \
+      "$GITHUB_API_URL/repos/$REPOSITORY/git/refs/tags/$TAG" "$delete_response"; then
+    printf 'Tag rollback failed: could not delete the exact owned tag ref\n' >&2
+    return 1
+  fi
+  if [[ "$API_STATUS" != 204 ]]; then
+    printf 'Tag rollback failed: deleting the exact owned tag returned HTTP %s\n' "$API_STATUS" >&2
+    return 1
+  fi
+  if ! api_request GET \
+      "$GITHUB_API_URL/repos/$REPOSITORY/git/ref/tags/$TAG" "$ref_response" || \
+      [[ "$API_STATUS" != 404 ]]; then
+    printf 'Tag rollback incomplete: tag deletion could not be verified\n' >&2
+    return 1
+  fi
+  TAG_REF_ATTEMPTED=0
+}
+
+cleanup_temp_dir() {
+  if [[ -n "$TEMP_DIR" && -d "$TEMP_DIR" && \
+        "$TEMP_DIR" == /tmp/modelport-github-release.* ]]; then
+    rm -rf -- "$TEMP_DIR"
+    TEMP_DIR=''
+  fi
+}
+
+on_exit() {
+  local status=$?
+  local rollback_failed=0
+  trap - EXIT
+  set +e
+  if [[ "$status" -ne 0 && "$RELEASE_PUBLISHED" -ne 1 ]]; then
+    if ! rollback_release; then
+      rollback_failed=1
+    fi
+    if [[ "$RELEASE_CREATED" -eq 0 ]]; then
+      if ! rollback_tag_ref; then
+        rollback_failed=1
+      fi
+    else
+      printf 'Tag rollback skipped because the draft Release was not safely removed\n' >&2
+    fi
+  fi
+  cleanup_temp_dir
+  if [[ "$rollback_failed" -ne 0 ]]; then
+    printf 'Create-only GitHub release rollback was incomplete; retained resources require identity-aware review\n' >&2
+  fi
+  exit "$status"
+}
+
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --repository)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      REPOSITORY="$2"
+      shift 2
+      ;;
+    --tag)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      TAG="$2"
+      shift 2
+      ;;
+    --candidate-sha)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      CANDIDATE_SHA="$2"
+      shift 2
+      ;;
+    --name)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      RELEASE_NAME="$2"
+      shift 2
+      ;;
+    --body)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      BODY_PATH="$2"
+      shift 2
+      ;;
+    --asset)
+      [[ $# -ge 2 ]] || { usage; exit 2; }
+      INPUT_ASSETS+=("$2")
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage
+      printf 'Unknown option: %s\n' "$1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+for dependency in curl jq openssl awk wc tr stat dirname basename mktemp chmod cp rm mv; do
+  command_exists "$dependency" || fail "required command is unavailable: $dependency"
+done
+if ! command_exists sha256sum && ! command_exists shasum; then
+  fail 'sha256sum or shasum is required'
+fi
+
+[[ "$REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'invalid repository'
+[[ "$TAG" =~ ^custom-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail 'invalid release tag'
+[[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail 'invalid candidate commit'
+[[ -n "$RELEASE_NAME" ]] || fail 'release name is required'
+case "$RELEASE_NAME$BODY_PATH" in
+  *$'\n'*|*$'\r'*) fail 'release name and body path must not contain control characters' ;;
+esac
+[[ -f "$BODY_PATH" && ! -L "$BODY_PATH" && -r "$BODY_PATH" ]] || \
+  fail 'release body must be a readable regular non-symbolic-link file'
+[[ "${#INPUT_ASSETS[@]}" -gt 0 && "${#INPUT_ASSETS[@]}" -le 100 ]] || \
+  fail 'between 1 and 100 release assets are required'
+[[ -n "${GH_TOKEN:-}" && "$GH_TOKEN" =~ ^[A-Za-z0-9_=-]+$ ]] || \
+  fail 'GH_TOKEN is missing or contains unsafe characters'
+GITHUB_API_URL="${GITHUB_API_URL:-https://api.github.com}"
+[[ "$GITHUB_API_URL" == 'https://api.github.com' ]] || \
+  fail 'only the public GitHub API endpoint is allowed for this release'
+
+BODY_PATH="$(cd -P -- "$(dirname -- "$BODY_PATH")" && pwd)/$(basename -- "$BODY_PATH")"
+TEMP_DIR="$(mktemp -d /tmp/modelport-github-release.XXXXXX)"
+chmod 0700 "$TEMP_DIR"
+mkdir "$TEMP_DIR/assets"
+OWNED_ASSETS_JSON="$TEMP_DIR/owned-assets.json"
+printf '[]\n' > "$OWNED_ASSETS_JSON"
+
+declare -a ASSET_NAMES=()
+declare -a ASSET_PATHS=()
+declare -a ASSET_SHA256=()
+declare -a ASSET_SIZES=()
+
+for input_asset in "${INPUT_ASSETS[@]}"; do
+  case "$input_asset" in
+    *$'\n'*|*$'\r'*) fail 'asset paths must not contain control characters' ;;
+  esac
+  [[ -f "$input_asset" && ! -L "$input_asset" && -r "$input_asset" ]] || \
+    fail "release asset is not a readable regular non-symbolic-link file: $input_asset"
+  asset_name="$(basename -- "$input_asset")"
+  [[ "$asset_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || \
+    fail "release asset has an unsafe name: $asset_name"
+  for existing_name in "${ASSET_NAMES[@]-}"; do
+    [[ "$existing_name" != "$asset_name" ]] || fail "duplicate release asset name: $asset_name"
+  done
+  stable_asset="$TEMP_DIR/assets/$asset_name"
+  source_sha256_before="$(sha256_file "$input_asset")" || fail "could not hash release asset: $asset_name"
+  cp -- "$input_asset" "$stable_asset" || fail "could not stage release asset: $asset_name"
+  chmod 0400 "$stable_asset"
+  source_sha256_after="$(sha256_file "$input_asset")" || fail "could not re-hash release asset: $asset_name"
+  stable_sha256="$(sha256_file "$stable_asset")" || fail "could not hash staged release asset: $asset_name"
+  [[ "$source_sha256_before" == "$source_sha256_after" && \
+     "$source_sha256_before" == "$stable_sha256" ]] || \
+    fail "release asset changed while it was staged: $asset_name"
+  stable_size="$(file_size "$stable_asset")"
+  [[ "$stable_size" =~ ^[0-9]+$ && "$stable_size" -gt 0 ]] || \
+    fail "release asset is empty or has an invalid size: $asset_name"
+  ASSET_NAMES+=("$asset_name")
+  ASSET_PATHS+=("$stable_asset")
+  ASSET_SHA256+=("$stable_sha256")
+  ASSET_SIZES+=("$stable_size")
+done
+
+OWNER_NONCE="$(openssl rand -hex 16)" || fail 'could not generate the release ownership nonce'
+TAG_MESSAGE="ModelPort $TAG
+
+modelport-release-owner:$OWNER_NONCE
+candidate:$CANDIDATE_SHA"
+
+tag_object_request="$TEMP_DIR/tag-object-request.json"
+tag_object_response="$TEMP_DIR/tag-object-response.json"
+jq -n --arg tag "$TAG" --arg message "$TAG_MESSAGE" --arg object "$CANDIDATE_SHA" \
+  '{tag:$tag,message:$message,object:$object,type:"commit"}' > "$tag_object_request"
+if ! api_request POST "$GITHUB_API_URL/repos/$REPOSITORY/git/tags" \
+    "$tag_object_response" "$tag_object_request"; then
+  fail 'could not create the annotated tag object'
+fi
+[[ "$API_STATUS" == 201 ]] || fail "annotated tag creation returned HTTP $API_STATUS"
+TAG_OBJECT_SHA="$(jq -er \
+  --arg tag "$TAG" --arg message "$TAG_MESSAGE" --arg candidate "$CANDIDATE_SHA" '
+    select(.tag == $tag and .message == $message and
+      .object.type == "commit" and .object.sha == $candidate and
+      (.sha | test("^[0-9a-f]{40}$"))) | .sha
+  ' "$tag_object_response")" || fail 'annotated tag response identity was invalid'
+
+tag_ref_request="$TEMP_DIR/tag-ref-request.json"
+tag_ref_response="$TEMP_DIR/tag-ref-response.json"
+jq -n --arg ref "refs/tags/$TAG" --arg sha "$TAG_OBJECT_SHA" \
+  '{ref:$ref,sha:$sha}' > "$tag_ref_request"
+# The server may commit the ref and lose the response. Mark the operation as
+# attempted first so EXIT rollback can query and remove only our exact ref.
+TAG_REF_ATTEMPTED=1
+if ! api_request POST "$GITHUB_API_URL/repos/$REPOSITORY/git/refs" \
+    "$tag_ref_response" "$tag_ref_request"; then
+  fail 'could not create the release tag ref'
+fi
+[[ "$API_STATUS" == 201 ]] || fail "release tag already exists or could not be created (HTTP $API_STATUS)"
+jq -e --arg ref "refs/tags/$TAG" --arg object "$TAG_OBJECT_SHA" '
+  .ref == $ref and .object.type == "tag" and .object.sha == $object
+' "$tag_ref_response" >/dev/null || fail 'created tag ref did not point to the owned tag object'
+
+release_request="$TEMP_DIR/release-request.json"
+release_response="$TEMP_DIR/release-response.json"
+jq -n \
+  --arg tag "$TAG" \
+  --arg candidate "$CANDIDATE_SHA" \
+  --arg name "$RELEASE_NAME" \
+  --rawfile body "$BODY_PATH" '
+    {tag_name:$tag,target_commitish:$candidate,name:$name,body:$body,
+      draft:true,prerelease:false,generate_release_notes:false,make_latest:"false"}
+  ' > "$release_request"
+if ! api_request POST "$GITHUB_API_URL/repos/$REPOSITORY/releases" \
+    "$release_response" "$release_request"; then
+  fail 'could not create the draft Release'
+fi
+[[ "$API_STATUS" == 201 ]] || fail "release already exists or could not be created (HTTP $API_STATUS)"
+RELEASE_ID="$(jq -er 'select((.id | type) == "number" and .id > 0) | .id' \
+  "$release_response")" || fail 'draft Release response ID was invalid'
+RELEASE_NODE_ID="$(jq -er \
+  'select((.node_id | type) == "string" and (.node_id | length) > 0) | .node_id' \
+  "$release_response")" || fail 'draft Release response node ID was invalid'
+RELEASE_CREATED=1
+release_identity_is_owned_draft "$release_response" || \
+  fail 'draft Release response identity was invalid'
+RELEASE_HTML_URL="https://github.com/$REPOSITORY/releases/tag/$TAG"
+RELEASE_UPLOAD_URL="$(jq -er '.upload_url | sub("\\{\\?name,label\\}$"; "")' \
+  "$release_response")" || fail 'draft Release upload URL was invalid'
+[[ "$RELEASE_UPLOAD_URL" == "https://uploads.github.com/repos/$REPOSITORY/releases/$RELEASE_ID/assets" ]] || \
+  fail 'draft Release upload URL did not match the created Release'
+
+for ((asset_index=0; asset_index<${#ASSET_NAMES[@]}; asset_index++)); do
+  asset_name="${ASSET_NAMES[$asset_index]}"
+  stable_asset="${ASSET_PATHS[$asset_index]}"
+  stable_sha256="${ASSET_SHA256[$asset_index]}"
+  stable_size="${ASSET_SIZES[$asset_index]}"
+  asset_response="$TEMP_DIR/asset-$asset_index-response.json"
+  if ! api_request POST "$RELEASE_UPLOAD_URL?name=$asset_name" \
+      "$asset_response" "$stable_asset" 'application/octet-stream'; then
+    fail "could not upload release asset: $asset_name"
+  fi
+  [[ "$API_STATUS" == 201 ]] || \
+    fail "release asset already exists or could not be created: $asset_name (HTTP $API_STATUS)"
+  asset_id="$(jq -er \
+    --arg name "$asset_name" --argjson size "$stable_size" '
+      select((.id | type) == "number" and .id > 0 and
+        (.node_id | type) == "string" and (.node_id | length) > 0 and
+        .name == $name and .size == $size and .state == "uploaded") | .id
+    ' "$asset_response")" || fail "uploaded asset response identity was invalid: $asset_name"
+  asset_node_id="$(jq -er '.node_id' "$asset_response")"
+  owned_assets_next="$TEMP_DIR/owned-assets-next.json"
+  jq \
+    --argjson id "$asset_id" \
+    --arg node_id "$asset_node_id" \
+    --arg name "$asset_name" \
+    --argjson size "$stable_size" \
+    --arg sha256 "$stable_sha256" \
+    '. + [{id:$id,node_id:$node_id,name:$name,size:$size,sha256:$sha256}]' \
+    "$OWNED_ASSETS_JSON" > "$owned_assets_next"
+  mv "$owned_assets_next" "$OWNED_ASSETS_JSON"
+done
+
+release_check="$TEMP_DIR/release-check.json"
+assets_check="$TEMP_DIR/assets-check.json"
+if ! api_request GET "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID" "$release_check" || \
+   [[ "$API_STATUS" != 200 ]] || ! release_identity_is_owned_draft "$release_check"; then
+  fail 'draft Release identity changed before publication'
+fi
+if ! api_request GET \
+    "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID/assets?per_page=100" \
+    "$assets_check" || [[ "$API_STATUS" != 200 ]]; then
+  fail 'could not list the staged Release assets'
+fi
+release_assets_are_owned "$assets_check" || \
+  fail 'remote Release asset set did not match the owned uploads'
+
+for ((asset_index=0; asset_index<${#ASSET_NAMES[@]}; asset_index++)); do
+  asset_name="${ASSET_NAMES[$asset_index]}"
+  expected_sha256="${ASSET_SHA256[$asset_index]}"
+  asset_id="$(jq -er --arg name "$asset_name" '.[] | select(.name == $name) | .id' \
+    "$OWNED_ASSETS_JSON")"
+  downloaded_asset="$TEMP_DIR/downloaded-$asset_index"
+  download_asset "$asset_id" "$downloaded_asset" || \
+    fail "could not download the staged Release asset: $asset_name"
+  downloaded_sha256="$(sha256_file "$downloaded_asset")" || \
+    fail "could not hash the staged Release asset: $asset_name"
+  [[ "$downloaded_sha256" == "$expected_sha256" ]] || \
+    fail "staged Release asset content did not match: $asset_name"
+done
+
+publish_request="$TEMP_DIR/publish-request.json"
+publish_response="$TEMP_DIR/publish-response.json"
+jq -n '{draft:false,prerelease:false,make_latest:"false"}' > "$publish_request"
+if ! api_request PATCH "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID" \
+    "$publish_response" "$publish_request"; then
+  fail 'could not publish the verified draft Release'
+fi
+[[ "$API_STATUS" == 200 ]] || fail "publishing the verified draft returned HTTP $API_STATUS"
+release_identity_is_owned_published_immutable "$publish_response" || \
+  fail 'published Release response was not the owned immutable Release'
+
+published_release_check="$TEMP_DIR/published-release-check.json"
+if ! api_request GET "$GITHUB_API_URL/repos/$REPOSITORY/releases/$RELEASE_ID" \
+    "$published_release_check"; then
+  fail 'could not verify the published immutable Release'
+fi
+[[ "$API_STATUS" == 200 ]] || \
+  fail "published Release verification returned HTTP $API_STATUS"
+release_identity_is_owned_published_immutable "$published_release_check" || \
+  fail 'published Release final verification was not the owned immutable Release'
+RELEASE_PUBLISHED=1
+
+jq -n \
+  --arg url "$RELEASE_HTML_URL" \
+  --arg tag "$TAG" \
+  --arg candidate "$CANDIDATE_SHA" \
+  --arg tag_object "$TAG_OBJECT_SHA" \
+  --argjson release_id "$RELEASE_ID" \
+  --slurpfile assets "$OWNED_ASSETS_JSON" '
+    {url:$url,tag:$tag,candidate_revision:$candidate,
+      annotated_tag_object:$tag_object,release_id:$release_id,assets:$assets[0]}
+  '

@@ -61,7 +61,9 @@ func (d *PgDumper) Restore(ctx context.Context, data io.Reader) error {
 		"-p", fmt.Sprintf("%d", d.cfg.Port),
 		"-U", d.cfg.User,
 		"-d", d.cfg.DBName,
+		"--no-psqlrc",
 		"--single-transaction",
+		"--set=ON_ERROR_STOP=1",
 	}
 
 	cmd := exec.CommandContext(ctx, "psql", args...)
@@ -76,7 +78,8 @@ func (d *PgDumper) Restore(ctx context.Context, data io.Reader) error {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%v: %s", err, string(output))
+		_ = output // psql may include failed COPY rows and other sensitive data.
+		return fmt.Errorf("psql restore failed: %w", err)
 	}
 	return nil
 }

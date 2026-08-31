@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source": {
+    "tag": "custom-v0.1.176.2",
+    "tag_object": "57e4e1f0a305a594250949e5dea870df1c7b4071",
+    "commit": "b6cb4d0c8b47d7561631ab61418e1b6fdeb379bc",
+    "instruction_evidence_cipher_blob": "394380b0e8ae929c0c4a21e61bf98a489b5f00f9",
+    "instruction_evidence_cipher_sha256": "bc54ec2adcb9e4452f2cf3bf16e7d07b67c7a4d1aad22bd379bd5d892bcade26",
+    "aes_encryptor_blob": "924e3698125a5d4512bd8fe709b86b12e00ba3a6",
+    "aes_encryptor_sha256": "8965d6d89a8c7209a18a5dd9feb264d28249db1ec8be230fe2bb5173e68a69c7"
+  },
+  "generator": {
+    "generated_at": "2026-08-31T06:45:31Z",
+    "go_version": "go1.27.0 darwin/arm64",
+    "command": "/bin/sh backend/scripts/verify-modelport-crypto-compat-vectors.sh",
+    "harness_blob": "b0f8e25635c55c1f3fb29d705045e71ddb967947",
+    "harness_sha256": "f8b1dbe4373ca0594dc632ba1e7ea25e1131692594cb49ba9fb41e9067fac154",
+    "key_id": "modelport-compat-fixture-0x42-32-bytes",
+    "evidence_layout": "raw nonce || ciphertext || tag with historical purpose and AAD",
+    "secret_encryptor_layout": "base64(nonce || ciphertext || tag) without AAD"
+  },
+  "vectors": {
+    "evidence": {
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "source": "instructions",
+      "plaintext": "legacy evidence fixture",
+      "digest": "ac271b6c16370f9a830d0df6f1b4c12d4e6cbfe3a3474cbe33c7325f643554e5",
+      "nonce_hex": "000102030405060708090a0b",
+      "ciphertext_hex": "000102030405060708090a0bd8fe4c1db3359076f7f1e76de60ff38749e200ad999ec796c56ad91eb0b3a7d4563e3540fe799c"
+    },
+    "hash_raw": {
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "plaintext": "legacy hash fixture",
+      "digest": "5beb50036a07c0e28ece6445a3b76b4f720cd29d251f6af2d16e0fd390ae537c",
+      "nonce_hex": "0c0d0e0f1011121314151617",
+      "ciphertext_hex": "0c0d0e0f101112131415161785b1153ba18f1b2f8f5dc212089decbc320379057f5cec9ccddbb4acb4169c15573887"
+    },
+    "secret_encryptor": {
+      "key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+      "plaintext": "legacy secret fixture",
+      "nonce_hex": "18191a1b1c1d1e1f20212223",
+      "ciphertext_base64": "GBkaGxwdHh8gISIjwZkyQ3iSHFR4qY+kCQ4a7Q2fDyoyFMYoGloTCNgGZ2WxOMgn7A=="
+    }
+  }
+}

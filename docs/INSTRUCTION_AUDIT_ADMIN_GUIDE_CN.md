@@ -1,18 +1,18 @@
 # ModelPort 指令审核管理员指南
 
-本文适用于 ModelPort `0.1.170.13`。架构与安全不变量见
+本文适用于 ModelPort `0.1.183.1`。架构与安全不变量见
 [`INSTRUCTION_AUDIT_ARCHITECTURE_CN.md`](./INSTRUCTION_AUDIT_ARCHITECTURE_CN.md)，发布验收证据见
-[`0.1.170.13-evidence-matrix.md`](./releases/0.1.170.13-evidence-matrix.md)。
+[`0.1.183.1.md`](./releases/0.1.183.1.md)。
 
 ## 上线前检查
 
-1. 备份 PostgreSQL、Redis 持久化数据、应用配置和固定加密密钥。
-2. 确认所有实例使用同一个固定 `TOTP_ENCRYPTION_KEY`，格式为 64 位十六进制值。更换或丢失该密钥会导致既有证据、哈希原文和已保存服务凭据无法解密。
+1. 备份 PostgreSQL、按实际持久化/权威性确认的必要 Redis 数据、应用配置和固定加密密钥；临时缓存不作为强制恢复数据。
+2. 确认所有实例使用同一个固定 `TOTP_ENCRYPTION_KEY`，格式为 64 位十六进制值。更换或丢失该密钥会导致既有证据、哈希原文和已保存服务凭据无法解密；本次迁移、上游适配和接口适配均不是隐式轮换密钥或改变加密行为的例外，独立运维轮换须另行授权。证据/哈希原文使用 purpose 派生与 AAD；Prompt Audit endpoint token、V2 AI 节点 API Key 及 AI/翻译 token 使用现有根密钥直用、无 AAD 的标准 Base64(`nonce || ciphertext || tag`) 格式；Redis 短期翻译结果沿用该格式但按 TTL 生命周期处理；各类都必须保持兼容。
 3. 确认 Redis 可用。配置失效通知、AI 配额和翻译结果依赖 Redis。
 4. 将 CDN、Nginx、`SERVER_MAX_REQUEST_BODY_SIZE`、`GATEWAY_MAX_BODY_SIZE` 和 WebSocket 帧上限逐层核对。希望由应用记录超限事件时，外层上限必须高于指令审核上限；默认 64 MiB 时可沿用仓库基线的 256 MiB 外层硬限制。
 5. 确认至少一名有效管理员已启用 TOTP，并在“敏感内容访问授权”中显示为有效持有人。普通管理员身份不自动获得原文读取权限。
 6. 确认运行配置中的工作集预算至少是请求体上限的 3 倍。默认 64 MiB 请求体和 256 MiB 预算为 4 倍；若计划降低到 192 MiB，必须先完成满尺寸 HTTP、WebSocket 和并发压测。
-7. 在数据库副本依次执行迁移 `204-216` 两次，第二次不得产生额外结构或数据变化，并核对升级前后的事件、哈希、规则、证据、通知、访问审计和运行计数器数量。
+7. 分别在空数据库、Sub2API `v0.1.183` 数据库和旧 ModelPort 数据库的隔离副本中运行当前迁移 Runner 两次。第二次不得产生额外结构或数据变化，并核对升级前后的事件、哈希、规则、证据、通知、访问审计、V2 数据和运行计数器数量；不得手工重放已归档的旧 ModelPort 迁移。
 
 ## 推荐启用顺序
 
@@ -24,6 +24,13 @@
 6. 检查“规则有效分组”与预期一致，至少存在一个有效绑定。
 7. 检查所有原因策略。升级后的默认动作均应维持与旧版一致的拦截行为。
 8. 打开总开关，先使用测试 API Key 验证命中、未命中和通知，再逐步扩大分组范围。
+
+## 与 Prompt Audit 的配置边界
+
+- Prompt Audit 只在上游 Prompt Audit 管理页配置；该配置是 Prompt Audit 的唯一运行时来源。
+- Instruction Audit V2 页面不再提供 per-client supplement。V2 的分组和客户端范围只决定 Responses `instructions` 与 `input[1]` 指令审核，不改变 Prompt Audit 范围。
+- Prompt Audit 覆盖所有适用的提示输入网关路由（至少包括 Chat、Responses、Messages、Embeddings、搜索、图片、视频、音频）以及现有 HTTP、SSE 和 WebSocket 接入链路；无提示路由由路由清单显式分类并说明理由。同一请求或 WebSocket 轮次中，它与 Instruction Audit V2 各最多运行一次。
+- 两条审核链独立生效。任一链显示放行，只表示该链通过，不能用于绕过另一条审核链。
 
 ## 运行配置
 
@@ -138,11 +145,13 @@ AI 异常、超时、配额不足、低置信度或事务失败都不会默认�
 4. 页面显示分段进度；可重试任务会保持处理中，成功、部分失败和最终失败分别展示。
 5. 原文和译文并排显示，译文不覆盖原文、不改变摘要和审核结论。
 
-译文只在加密 Redis 中按 TTL 短期保存。普通日志不会记录原文或译文。外部翻译前会脱敏明显的 Bearer Token、API Key、令牌和邮箱，但管理员仍应只使用受信任服务。创建任务时会记录授权 ID；授权被撤销后，旧页面或旧任务 ID 不能继续取得敏感结果。
+译文只在加密 Redis 中按 TTL 短期保存，沿用固定根密钥直用 AES-256-GCM、无 AAD、标准 Base64(`nonce || ciphertext || tag`) 格式；缺失、过期或解密失败继续按现有 `result_expired`、`result_unavailable` 和敏感访问审计语义处理。普通日志不会记录原文或译文。外部翻译前会脱敏明显的 Bearer Token、API Key、令牌和邮箱，但管理员仍应只使用受信任服务。创建任务时会记录授权 ID；授权被撤销后，旧页面或旧任务 ID 不能继续取得敏感结果。
 
 ## 日志和统计
 
 审核日志默认优先展示拦截、策略放行和 AI 结果，也可筛选所有结果。可按事件编号、统一搜索、时间、分组、用户、模型、客户端、最终结果、原因、字段结果和通知状态定位。
+
+本指南前文“经 TOTP 保护的加密原文”专指 Instruction Audit V2 的 evidence/hash-raw 密文。Prompt Audit 是独立的事件路径：当前实现会把未脱敏的 `full_prompt`（去除 NUL，以 `65536` 个 rune 为截断阈值，超限追加 `…` 标记）写入 `prompt_audit_events`，单事件管理详情/API/UI 可以读取；staging job 和列表接口不包含该列。当前 Prompt Audit 详情路由只继承管理端认证，不应把 V2 的敏感授权/TOTP 规则理解为已有门控；是否增加额外门控仍属待单独授权的隐私/产品决策。该字段当前没有沿用 V2 的密文保护，本版本冻结这一现状，不自行增加加密、删除、脱敏或留存变更。历史 OpenSpec/验证材料关于“完整提示词不得进入 PostgreSQL、管理 API 或前端”的要求与实现及集成测试冲突，属于待单独授权的隐私/产品决策。
 
 事件详情提供：
 
@@ -189,7 +198,8 @@ AI 异常、超时、配额不足、低置信度或事务失败都不会默认�
 
 - 哈希命中、策略放行、AI 放行、用户白名单和空字段例外均形成正确结果。
 - 未绑定分组保持不适用；绑定但配置失效的分组默认拒绝。
-- HTTP、SSE 和 WebSocket 使用相同规则；compact 端点保持排除。
+- Instruction Audit V2 的 Responses HTTP、SSE 和 WebSocket 使用相同规则；compact 端点保持排除。
+- Prompt Audit 分别覆盖 Chat、Responses、Messages 以及现有 HTTP、SSE、WebSocket 路径，且页面中没有 V2 per-client supplement；验证同一请求或 WebSocket 轮次内两条审核链各最多执行一次、任一链放行不绕过另一条。
 - 分别验证 1、16、32、42、64、65 MiB；默认配置下 42 MiB 合法请求应完成审核，65 MiB 应形成 `request_too_large`，随后由 HTTP/WS 硬限制终止。
 - 分别验证默认 256 MiB 工作集预算和允许的最低 3 倍配置；记录 HTTP、WebSocket、并发等待、超时和进程内存结果。
 - AI 错误、翻译错误和邮件错误均不会造成意外放行或阻塞正常返回。

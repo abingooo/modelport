@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +73,9 @@ type channelMonitorRuntimeReader interface {
 type ChannelMonitorService struct {
 	repo      ChannelMonitorRepository
 	encryptor SecretEncryptor
+	// probeHTTPClient defaults to the SSRF-safe monitor client. Tests may inject
+	// a localhost-capable client without mutating package-global state.
+	probeHTTPClient *http.Client
 	// settings is optional; when nil, RunCheck fails closed for active probes
 	// (mode defaults to v2 / retired) so tests without settings never hit upstream.
 	settings channelMonitorRuntimeReader
@@ -94,7 +98,7 @@ const ChannelMonitorDuplicateOperationIDMetadataKey = "sub2api:duplicate_operati
 
 // NewChannelMonitorService 创建渠道监控服务实例。
 func NewChannelMonitorService(repo ChannelMonitorRepository, encryptor SecretEncryptor) *ChannelMonitorService {
-	return &ChannelMonitorService{repo: repo, encryptor: encryptor}
+	return &ChannelMonitorService{repo: repo, encryptor: encryptor, probeHTTPClient: monitorHTTPClient}
 }
 
 // SetRuntimeReader injects the settings reader used to gate active probes.
@@ -715,7 +719,7 @@ func (s *ChannelMonitorService) runChecksConcurrent(ctx context.Context, m *Chan
 	for i, model := range models {
 		i, model := i, model
 		eg.Go(func() error {
-			r := runCheckForModel(ctx, m.Provider, m.Endpoint, m.APIKey, model, opts)
+			r := runCheckForModelWithHTTPClient(ctx, m.Provider, m.Endpoint, m.APIKey, model, opts, s.probeHTTPClient)
 			r.PingLatencyMs = pingMs
 			mu.Lock()
 			results[i] = r

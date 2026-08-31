@@ -202,7 +202,6 @@ func registerInstructionAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers)
 		instructionAudit.GET("/client-profiles", h.Admin.InstructionAudit.ListClientProfiles)
 		instructionAudit.POST("/client-profiles", h.Admin.InstructionAudit.SaveClientProfile)
 		instructionAudit.PUT("/client-profiles/:id", h.Admin.InstructionAudit.SaveClientProfile)
-		instructionAudit.PUT("/client-profiles/:id/prompt-audit", h.Admin.InstructionAudit.UpdateClientProfilePromptAudit)
 		instructionAudit.DELETE("/client-profiles/:id", h.Admin.InstructionAudit.DeleteClientProfile)
 
 		instructionAudit.GET("/user-allowlist", h.Admin.InstructionAudit.ListUserAllowlist)

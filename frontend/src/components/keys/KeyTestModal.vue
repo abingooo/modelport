@@ -1013,6 +1013,8 @@ function sanitizeDisplayText(value: string) {
     .replace(/(bearer\s+)[a-z0-9._~+/=-]+/gi, '$1[REDACTED]')
     .replace(/((?:x-api-key|api[_-]?key)\s*[:=]\s*)[^\s,;]+/gi, '$1[REDACTED]')
     .replace(/\b(?:sk|rk|pk|key)-[a-z0-9._-]{8,}\b/gi, '[REDACTED]')
+    .replace(/(["']?(?:(?:account|channel|route)(?:[_-]?id)?|(?:upstream|base|proxy)[_-]?(?:url|host))["']?\s*[:=]\s*["']?)[^\s,;"'}]+/gi, '$1[REDACTED]')
+    .replace(/\b(?:https?|wss?):\/\/[^\s,;]+/gi, '[REDACTED_URL]')
     .trim()
   return sanitized.slice(0, MAX_DISPLAY_ERROR_LENGTH)
 }

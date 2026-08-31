@@ -10,6 +10,8 @@
 - 对应 `docs/releases/<version>.md` 必须存在且已经完成审阅。
 - `ghcr.io/abingooo/modelport` 必须允许匿名拉取，否则公开发布验证会失败。
 - GitHub 仓库必须预先启用 Immutable Releases；工作流只读检查该设置，不会代替仓库所有者修改。该 REST 检查要求 `admin:read`，内置令牌无权时需配置最小权限的 `MODELPORT_RELEASE_ADMIN_TOKEN` Repository Secret。
+- GitHub Environment `modelport-production-release` 必须禁止管理员绕过、启用 `prevent_self_review` 并配置至少一名 required reviewer，同时保存 `MODELPORT_PRODUCTION_RESTORE_ATTESTATION_SHA256` 与 `MODELPORT_PRODUCTION_RESTORE_ATTESTATION_BINDING_SHA256`。前者是仓库外已批准、已加密生产恢复证明的 SHA-256；后者是该哈希、本次版本、40 位候选提交、上游提交和 UTC 时间组成的无末尾换行规范 JSON 的 SHA-256。两者都不是生产报告内容、路径、凭据或数据统计。仓库外证明必须明确覆盖 PostgreSQL、Redis、持久资产/外部存储三类证据；独立 reviewer 必须逐项核对工作流输入与证明原文。质量、GHCR 写入和 GitHub Release 写入三个作业都直接使用该 Environment，并在各自写入前重新验证绑定与 24 小时时效，不能用已成功的上游作业绕过重跑审批。
+- 手动触发时必须输入获批证明 SHA-256、证明记录的 UTC 时间，并确认工作流只发布公开产物、不会更新生产。证明时间不得早于候选提交、不得位于未来，且触发时不得超过 24 小时。缺少三类真实恢复证据时不得创建或更新上述批准值。
 - 正式版本号使用四段数字，Git 标签和镜像版本标签使用 `custom-v<version>`。
 
 ## 不可变发布
@@ -20,7 +22,7 @@
 
 ## 生产边界
 
-发布工作流只写 GitHub Release 和 GHCR，不包含生产服务器凭据，也不调用生产更新、重启、回退、镜像拉取或站内更新接口。公开验证完成后任务必须停止，由用户在 ModelPort 管理站内确认并发起更新。
+发布工作流只写 GitHub Release 和 GHCR，不包含生产服务器凭据，也不调用生产更新、重启、回退、镜像拉取或站内更新接口。公开的 `production-restore-attestation.json` 只记录批准证明的 SHA-256、版本、候选提交、上游提交、UTC 时间、固定范围和“仓库外加密存储”标识；生产报告本身不得进入仓库、Actions artifact 或 Release。公开验证完成后任务必须停止，由用户在 ModelPort 管理站内确认并发起更新。
 
 站内按钮只负责写入一行四段版本请求。宿主更新器从对应 Release 读取 digest，核对镜像标签、revision 和 source 后把 Compose 镜像固定为 digest。安装或替换宿主更新器、systemd 单元以及 Compose 适配文件是独立的运维动作，不随容器发布自动执行，必须另行确认。
 
@@ -37,6 +39,7 @@ GitHub Release 必须同时包含：
 - `manifest-digest.txt`
 - `release-revision.txt`
 - `release-metadata.json`
+- `production-restore-attestation.json`
 - `release-assets.sha256`
 - `modelport-sbom.spdx.json`
 - `modelport-docker-updater`
@@ -44,4 +47,4 @@ GitHub Release 必须同时包含：
 - `modelport-update.path`
 - `modelport-compose.override.yml`
 
-公开验证作业必须确认 Release 非草稿、非预发布且不可变，Git 标签指向预期提交，所有资产校验和正确，版本标签与 SHA 标签解析到同一 digest，镜像 OCI 标签匹配，并且 Cosign 签名可由本工作流的 `production` 分支身份验证。
+公开验证作业必须确认 Release 非草稿、非预发布且不可变，Git 标签指向预期提交，所有资产校验和正确，恢复证明 SHA-256/版本/候选提交/上游提交/UTC/范围与批准绑定完全一致，版本标签与 SHA 标签解析到同一 digest，镜像 OCI 标签匹配，并且 Cosign 签名可由本工作流的 `production` 分支身份验证。

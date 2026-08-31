@@ -75,6 +75,11 @@ import {
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
   PROVIDER_DEEPSEEK,
+  PROVIDER_QWEN,
+  PROVIDER_GLM,
+  PROVIDER_DOUBAO,
+  PROVIDER_MINIMAX,
+  PROVIDER_MIMO,
 } from '@/constants/channelMonitor'
 
 defineProps<{
@@ -104,6 +109,11 @@ const providerFilterOptions = computed(() => [
   { value: PROVIDER_KIMI, label: t('monitorCommon.providers.kimi') },
   { value: PROVIDER_ZHIPU, label: t('monitorCommon.providers.zhipu') },
   { value: PROVIDER_DEEPSEEK, label: t('monitorCommon.providers.deepseek') },
+  { value: PROVIDER_QWEN, label: t('monitorCommon.providers.qwen') },
+  { value: PROVIDER_GLM, label: t('monitorCommon.providers.glm') },
+  { value: PROVIDER_DOUBAO, label: t('monitorCommon.providers.doubao') },
+  { value: PROVIDER_MINIMAX, label: t('monitorCommon.providers.minimax') },
+  { value: PROVIDER_MIMO, label: t('monitorCommon.providers.mimo') },
 ])
 
 const enabledFilterOptions = computed(() => [

@@ -6,6 +6,7 @@ import MonitorFormDialog from '@/components/admin/monitor/MonitorFormDialog.vue'
 import {
   DEFAULT_GROK_ENDPOINT,
   DEFAULT_GROK_MODEL,
+  PROBE_ONLY_PROVIDERS,
   PROVIDERS,
   PROVIDER_GROK,
 } from '@/constants/channelMonitor'
@@ -88,7 +89,7 @@ function mountDialog() {
   })
 }
 
-describe('channel monitor Grok provider', () => {
+describe('channel monitor provider compatibility', () => {
   beforeEach(() => {
     listTemplates.mockReset().mockResolvedValue({ items: [] })
     accountsList.mockReset().mockResolvedValue({ items: [] })
@@ -101,7 +102,7 @@ describe('channel monitor Grok provider', () => {
 
     expect(PROVIDERS).toContain(PROVIDER_GROK)
     const providerButtons = wrapper.findAll('[data-testid^="monitor-provider-"]')
-    expect(providerButtons).toHaveLength(8)
+    expect(providerButtons).toHaveLength(PROVIDERS.length)
     expect(providerButtons[0].element.parentElement?.className).toContain('grid-cols-2')
     expect(providerButtons[0].element.parentElement?.className).toContain('sm:grid-cols-4')
 
@@ -151,5 +152,26 @@ describe('channel monitor Grok provider', () => {
     await grokButton.trigger('click')
     expect((endpoint.element as HTMLInputElement).value).toBe(DEFAULT_GROK_ENDPOINT)
     expect((model.element as HTMLInputElement).value).toBe('grok-custom')
+  })
+
+  it('keeps legacy providers visible and limits them to probe checks', async () => {
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    for (const provider of PROBE_ONLY_PROVIDERS) {
+      const providerButton = wrapper.get(`[data-testid="monitor-provider-${provider}"]`)
+      expect(providerButton.text()).toContain(`monitorCommon.providers.${provider}`)
+
+      await providerButton.trigger('click')
+
+      const probeButton = wrapper.get('[data-testid="monitor-check-mode-probe"]')
+      const quotaButton = wrapper.get('[data-testid="monitor-check-mode-quota"]')
+      const quotaProbeButton = wrapper.get('[data-testid="monitor-check-mode-quota_probe"]')
+
+      expect((probeButton.element as HTMLButtonElement).disabled).toBe(false)
+      expect(probeButton.attributes('aria-pressed')).toBe('true')
+      expect((quotaButton.element as HTMLButtonElement).disabled).toBe(true)
+      expect((quotaProbeButton.element as HTMLButtonElement).disabled).toBe(true)
+    }
   })
 })

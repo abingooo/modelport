@@ -24,6 +24,7 @@ import (
 
 type grokQuotaHandlerAccountRepo struct {
 	service.AccountRepository
+	mu      sync.RWMutex
 	account *service.Account
 	updates map[int64]map[string]any
 }
@@ -36,11 +37,32 @@ func (r *grokQuotaHandlerAccountRepo) GetByID(_ context.Context, id int64) (*ser
 }
 
 func (r *grokQuotaHandlerAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.updates == nil {
 		r.updates = make(map[int64]map[string]any)
 	}
-	r.updates[id] = updates
+	// Keep the recorded input independent from any caller-owned map.
+	copyUpdates := make(map[string]any, len(updates))
+	for key, value := range updates {
+		copyUpdates[key] = value
+	}
+	r.updates[id] = copyUpdates
 	return nil
+}
+
+func (r *grokQuotaHandlerAccountRepo) snapshotUpdate(id int64) map[string]any {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	updates := r.updates[id]
+	if updates == nil {
+		return nil
+	}
+	copyUpdates := make(map[string]any, len(updates))
+	for key, value := range updates {
+		copyUpdates[key] = value
+	}
+	return copyUpdates
 }
 
 type grokQuotaHandlerUpstream struct {
@@ -159,7 +181,10 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	}
 	require.True(t, responsesProbeSeen)
 	require.True(t, modelsSyncSeen)
-	require.NotNil(t, repo.updates[42])
+	require.Eventually(t, func() bool {
+		return repo.snapshotUpdate(42) != nil
+	}, time.Second, 10*time.Millisecond)
+	require.NotNil(t, repo.snapshotUpdate(42))
 }
 
 func TestGrokOAuthHandlerResetQuotaReturnsUnsupported(t *testing.T) {

@@ -56,7 +56,15 @@ type CheckOptions struct {
 // 不返回 error：所有失败都包装进 CheckResult.Status=error/failed。
 //
 // opts 承载模板 / 监控快照带来的自定义配置。nil 等同于 "off + 无 extra headers"。
+//
+//nolint:unused // 保留包级兼容入口，测试和旧的内部调用方可直接使用默认客户端。
 func runCheckForModel(ctx context.Context, provider, endpoint, apiKey, model string, opts *CheckOptions) *CheckResult {
+	return runCheckForModelWithHTTPClient(ctx, provider, endpoint, apiKey, model, opts, monitorHTTPClient)
+}
+
+// runCheckForModelWithHTTPClient is the injectable form used by the service and
+// tests. A nil client still falls back to the SSRF-safe production client.
+func runCheckForModelWithHTTPClient(ctx context.Context, provider, endpoint, apiKey, model string, opts *CheckOptions, httpClient *http.Client) *CheckResult {
 	res := &CheckResult{
 		Model:     model,
 		Status:    MonitorStatusError,
@@ -67,7 +75,7 @@ func runCheckForModel(ctx context.Context, provider, endpoint, apiKey, model str
 	mode := bodyOverrideMode(opts)
 
 	start := time.Now()
-	respText, rawBody, statusCode, err := callProvider(ctx, provider, endpoint, apiKey, model, challenge.Prompt, opts)
+	respText, rawBody, statusCode, err := callProviderWithHTTPClient(ctx, provider, endpoint, apiKey, model, challenge.Prompt, opts, httpClient)
 	latency := time.Since(start)
 	latencyMs := int(latency / time.Millisecond)
 	res.LatencyMs = &latencyMs
@@ -175,6 +183,11 @@ var providerAdapters = map[string]providerAdapter{
 	MonitorProviderKimi:     providerKimiChatAdapter,
 	MonitorProviderZhipu:    providerZhipuChatAdapter,
 	MonitorProviderDeepseek: providerDeepseekChatAdapter,
+	MonitorProviderQwen:     providerQwenChatAdapter,
+	MonitorProviderGLM:      providerZhipuChatAdapter,
+	MonitorProviderDoubao:   providerDoubaoChatAdapter,
+	MonitorProviderMiniMax:  providerOpenAIChatAdapter,
+	MonitorProviderMiMo:     providerOpenAIChatAdapter,
 	MonitorProviderAnthropic: {
 		buildPath: func(string) string { return providerAnthropicPath },
 		buildBody: func(model, prompt string) ([]byte, error) {
@@ -225,6 +238,12 @@ var providerZhipuChatAdapter = newOpenAICompatibleChatAdapter(providerZhipuPath)
 
 //nolint:gochecknoglobals // 适配器表是只读静态数据，初始化后不变更。
 var providerDeepseekChatAdapter = newOpenAICompatibleChatAdapter(providerOpenAIPath)
+
+//nolint:gochecknoglobals // read-only provider adapter.
+var providerQwenChatAdapter = newOpenAICompatibleChatAdapter(providerQwenPath)
+
+//nolint:gochecknoglobals // read-only provider adapter.
+var providerDoubaoChatAdapter = newOpenAICompatibleChatAdapter(providerDoubaoPath)
 
 func newOpenAICompatibleChatAdapter(path string) providerAdapter {
 	return providerAdapter{
@@ -279,7 +298,13 @@ func providerAdapterFor(provider, apiMode string) (providerAdapter, string, bool
 //   - rawBody: 完整响应体的字符串形式（已被 monitorResponseMaxBytes 截断），用于错误路径保留上游真实回包
 //   - status: HTTP 状态码
 //   - err: 网络 / 序列化错误
+//
+//nolint:unused // 保留包级兼容入口，测试和旧的内部调用方可直接使用默认客户端。
 func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt string, opts *CheckOptions) (extractedText, rawBody string, status int, err error) {
+	return callProviderWithHTTPClient(ctx, provider, endpoint, apiKey, model, prompt, opts, monitorHTTPClient)
+}
+
+func callProviderWithHTTPClient(ctx context.Context, provider, endpoint, apiKey, model, prompt string, opts *CheckOptions, httpClient *http.Client) (extractedText, rawBody string, status int, err error) {
 	requestedAPIMode := checkAPIMode(opts)
 	if err := validateAPIMode(provider, requestedAPIMode); err != nil {
 		return "", "", 0, err
@@ -294,7 +319,7 @@ func callProvider(ctx context.Context, provider, endpoint, apiKey, model, prompt
 	}
 	headers := mergeHeaders(adapter.buildHeaders(apiKey), opts)
 	full := joinURL(endpoint, adapter.buildPath(model))
-	respBytes, status, err := postRawJSON(ctx, full, body, headers)
+	respBytes, status, err := postRawJSONWithHTTPClient(ctx, full, body, headers, httpClient)
 	if err != nil {
 		return "", "", status, err
 	}
@@ -458,6 +483,11 @@ var bodyMergeKeyDenyList = map[string]map[string]bool{
 	MonitorProviderKimi:     {"model": true, "messages": true, "stream": true},
 	MonitorProviderZhipu:    {"model": true, "messages": true, "stream": true},
 	MonitorProviderDeepseek: {"model": true, "messages": true, "stream": true},
+	MonitorProviderQwen:     {"model": true, "messages": true, "stream": true},
+	MonitorProviderGLM:      {"model": true, "messages": true, "stream": true},
+	MonitorProviderDoubao:   {"model": true, "messages": true, "stream": true},
+	MonitorProviderMiniMax:  {"model": true, "messages": true, "stream": true},
+	MonitorProviderMiMo:     {"model": true, "messages": true, "stream": true},
 }
 
 func checkAPIMode(opts *CheckOptions) string {
@@ -479,7 +509,9 @@ func bodyMergeDenyKey(provider, apiMode string) string {
 func isOpenAICompatibleChatProvider(provider string) bool {
 	switch provider {
 	case MonitorProviderOpenAI, MonitorProviderGrok,
-		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek:
+		MonitorProviderKimi, MonitorProviderZhipu, MonitorProviderDeepseek,
+		MonitorProviderQwen, MonitorProviderGLM, MonitorProviderDoubao,
+		MonitorProviderMiniMax, MonitorProviderMiMo:
 		return true
 	default:
 		return false
@@ -527,7 +559,13 @@ func hasNonEmptyBodyValue(v any) bool {
 
 // postRawJSON 发送 POST + 已序列化好的 JSON 字节，限制响应体大小，返回响应字节、HTTP status、错误。
 // adapter 自行 marshal 是为了精确控制字段顺序与类型，所以这里直接收 []byte 而不是 any。
+//
+//nolint:unused // 保留包级兼容入口，避免移除既有测试/内部调用契约。
 func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers map[string]string) ([]byte, int, error) {
+	return postRawJSONWithHTTPClient(ctx, fullURL, payload, headers, monitorHTTPClient)
+}
+
+func postRawJSONWithHTTPClient(ctx context.Context, fullURL string, payload []byte, headers map[string]string, httpClient *http.Client) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(payload))
 	if err != nil {
 		return nil, 0, fmt.Errorf("build request: %w", err)
@@ -538,7 +576,10 @@ func postRawJSON(ctx context.Context, fullURL string, payload []byte, headers ma
 		req.Header.Set(k, v)
 	}
 
-	resp, err := monitorHTTPClient.Do(req)
+	if httpClient == nil {
+		httpClient = monitorHTTPClient
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, fmt.Errorf("do request: %w", err)
 	}

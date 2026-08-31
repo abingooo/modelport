@@ -1,6 +1,6 @@
-# Sub2API Docker Image
+# ModelPort Container Image
 
-Sub2API is an AI API Gateway Platform for distributing and managing AI product subscription API quotas.
+ModelPort is a multi-model AI API gateway based on Sub2API `v0.1.183`. The formal image is published from `abingooo/modelport` to GHCR.
 
 ## Quick Start
 
@@ -10,7 +10,7 @@ docker run -d \
   -p 8080:8080 \
   -e DATABASE_URL="postgres://user:pass@host:5432/sub2api" \
   -e REDIS_URL="redis://host:6379" \
-  weishaw/sub2api:latest
+  ghcr.io/abingooo/modelport:custom-v0.1.183.1
 ```
 
 The image defaults to the unprivileged `sub2api` user (UID/GID `1000:1000`).
@@ -32,7 +32,7 @@ version: '3.8'
 
 services:
   sub2api:
-    image: weishaw/sub2api:latest
+    image: ghcr.io/abingooo/modelport:custom-v0.1.183.1
     ports:
       - "8080:8080"
     environment:
@@ -73,16 +73,16 @@ volumes:
 ## Supported Architectures
 
 - `linux/amd64`
-- `linux/arm64`
 
 ## Tags
 
-- `latest` - Latest stable release
-- `x.y.z` - Specific version
-- `x.y` - Latest patch of minor version
-- `x` - Latest minor of major version
+- `custom-v0.1.183.1` - Immutable four-part ModelPort release
+- `sha-<40-character-commit>` - Immutable publication commit anchor
+
+ModelPort does not publish `latest`, major, or minor floating tags. For production, use the exact digest recorded in the matching GitHub Release.
 
 ## Links
 
-- [GitHub Repository](https://github.com/weishaw/sub2api)
-- [Documentation](https://github.com/weishaw/sub2api#readme)
+- [GitHub Repository](https://github.com/abingooo/modelport)
+- [Documentation](https://github.com/abingooo/modelport#readme)
+- [Upstream Sub2API `v0.1.183`](https://github.com/Wei-Shaw/sub2api/tree/v0.1.183)

@@ -5,6 +5,7 @@ import (
 	cryptorand "crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"math/big"
 	"sort"
@@ -396,6 +397,7 @@ func (s *LotteryService) drawDueCampaignsWithTimeouts(listTimeout, drawTimeout t
 	ids, err := s.repo.ListDueScheduledCampaignIDs(listCtx, time.Now().UTC(), 20)
 	listCancel()
 	if err != nil {
+		slog.Warn("lottery.scheduler.list_due_failed", "error", err)
 		return
 	}
 	for _, campaignID := range ids {
@@ -405,8 +407,11 @@ func (s *LotteryService) drawDueCampaignsWithTimeouts(listTimeout, drawTimeout t
 		default:
 		}
 		drawCtx, drawCancel := context.WithTimeout(context.Background(), drawTimeout)
-		_, _ = s.DrawScheduled(drawCtx, campaignID, nil)
+		_, err = s.DrawScheduled(drawCtx, campaignID, nil)
 		drawCancel()
+		if err != nil {
+			slog.Warn("lottery.scheduler.draw_failed", "campaign_id", campaignID, "error", err)
+		}
 	}
 }
 

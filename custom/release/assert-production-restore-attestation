@@ -1,0 +1,80 @@
+#!/bin/sh
+set -eu
+
+version="${1:?ModelPort version is required}"
+candidate_revision="${2:?candidate revision is required}"
+upstream_revision="${3:?upstream revision is required}"
+attestation_sha256="${4:?restore attestation SHA-256 is required}"
+recorded_at="${5:?restore attestation UTC timestamp is required}"
+approved_attestation_sha256="${6:?approved restore attestation SHA-256 is required}"
+approved_binding_sha256="${7:?approved restore attestation binding SHA-256 is required}"
+max_age_seconds="${8:?restore attestation maximum age is required}"
+manual_update_confirmation="${9:?manual update confirmation is required}"
+
+fail() {
+  printf 'Production restore attestation validation failed: %s\n' "$1" >&2
+  exit 1
+}
+
+printf '%s\n' "${version}" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' || \
+  fail 'invalid ModelPort version'
+printf '%s\n' "${candidate_revision}" | grep -Eq '^[0-9a-f]{40}$' || \
+  fail 'invalid candidate revision'
+printf '%s\n' "${upstream_revision}" | grep -Eq '^[0-9a-f]{40}$' || \
+  fail 'invalid upstream revision'
+printf '%s\n' "${attestation_sha256}" | grep -Eq '^[0-9a-f]{64}$' || \
+  fail 'invalid restore attestation SHA-256'
+printf '%s\n' "${approved_attestation_sha256}" | grep -Eq '^[0-9a-f]{64}$' || \
+  fail 'invalid approved restore attestation SHA-256'
+printf '%s\n' "${approved_binding_sha256}" | grep -Eq '^[0-9a-f]{64}$' || \
+  fail 'invalid approved restore attestation binding SHA-256'
+printf '%s\n' "${recorded_at}" | grep -Eq \
+  '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' || \
+  fail 'invalid restore attestation UTC timestamp'
+printf '%s\n' "${max_age_seconds}" | grep -Eq '^[1-9][0-9]*$' || \
+  fail 'invalid restore attestation maximum age'
+printf '%s\n' "${max_age_seconds}" | awk '$1 <= 86400 { exit 0 } { exit 1 }' || \
+  fail 'restore attestation maximum age exceeds 24 hours'
+
+[ "${manual_update_confirmation}" = true ] || \
+  fail 'manual production update boundary was not confirmed'
+[ "${attestation_sha256}" = "${approved_attestation_sha256}" ] || \
+  fail 'restore attestation SHA-256 does not match the approved value'
+
+attestation_binding="$(jq -cn \
+  --arg sha256 "${attestation_sha256}" \
+  --arg version "${version}" \
+  --arg candidate_revision "${candidate_revision}" \
+  --arg upstream_revision "${upstream_revision}" \
+  --arg recorded_at "${recorded_at}" \
+  '{schema_version:1,sha256:$sha256,version:$version,
+    candidate_revision:$candidate_revision,upstream_revision:$upstream_revision,
+    recorded_at:$recorded_at}')" || fail 'could not construct the restore attestation binding'
+attestation_binding_sha256="$(printf '%s' "${attestation_binding}" | \
+  /bin/sh custom/release/sha256-stdin)" || \
+  fail 'could not calculate the restore attestation binding SHA-256'
+[ "${attestation_binding_sha256}" = "${approved_binding_sha256}" ] || \
+  fail 'restore attestation binding does not match the approved value'
+
+if canonical_recorded_at="$(date -u -d "${recorded_at}" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"; then
+  attestation_epoch="$(date -u -d "${recorded_at}" '+%s')"
+elif canonical_recorded_at="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' \
+  "${recorded_at}" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)"; then
+  attestation_epoch="$(date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "${recorded_at}" '+%s')"
+else
+  fail 'restore attestation timestamp could not be parsed'
+fi
+[ "${canonical_recorded_at}" = "${recorded_at}" ] || \
+  fail 'restore attestation timestamp is not canonical UTC RFC3339 seconds'
+
+git cat-file -e "${candidate_revision}^{commit}" 2>/dev/null || \
+  fail 'candidate revision is not available in the checkout'
+commit_epoch="$(git show -s --format=%ct "${candidate_revision}")"
+now_epoch="$(date -u '+%s')"
+[ "${attestation_epoch}" -ge "${commit_epoch}" ] || \
+  fail 'restore attestation predates the candidate commit'
+[ "${attestation_epoch}" -le "${now_epoch}" ] || \
+  fail 'restore attestation timestamp is in the future'
+age_seconds=$((now_epoch - attestation_epoch))
+[ "${age_seconds}" -le "${max_age_seconds}" ] || \
+  fail 'restore attestation is older than the allowed release window'

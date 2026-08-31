@@ -201,18 +201,18 @@ func upsertInstructionAutomaticHashTx(
 	if !created {
 		var status string
 		var existingFrom, existingUntil sql.NullTime
+		var databaseNow time.Time
 		if err = tx.QueryRowContext(ctx, `
-				SELECT h.id, h.status, h.valid_from, h.valid_until
+				SELECT h.id, h.status, h.valid_from, h.valid_until, clock_timestamp()
 				FROM instruction_audit_hashes h
 				WHERE h.digest = $1 FOR UPDATE`, digest).Scan(
-			&hashID, &status, &existingFrom, &existingUntil,
+			&hashID, &status, &existingFrom, &existingUntil, &databaseNow,
 		); err != nil {
 			return 0, err
 		}
 		status = strings.TrimSpace(status)
-		now := time.Now().UTC()
-		if status != "active" || (existingFrom.Valid && now.Before(existingFrom.Time)) ||
-			(existingUntil.Valid && !now.Before(existingUntil.Time)) {
+		if status != "active" || (existingFrom.Valid && databaseNow.Before(existingFrom.Time)) ||
+			(existingUntil.Valid && !databaseNow.Before(existingUntil.Time)) {
 			return 0, errInstructionAIAutomaticHashUnavailable
 		}
 	}

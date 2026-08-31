@@ -190,6 +190,16 @@ def main() -> int:
     missing_exceptions = []
     expired_exceptions = []
 
+    # An exception is a time-bounded approval, not a historical record.  Keep
+    # stale entries from silently remaining in the policy when the package is
+    # no longer present in the current audit output.
+    for key, exc in exception_index.items():
+        if exc["expires_on"] < today:
+            package, advisory = key
+            expired_exceptions.append(
+                (package, exc["severity"], advisory, exc["expires_on"].isoformat())
+            )
+
     # 去重处理：同一包名 + advisory 可能在不同字段重复出现。
     seen = set()
     for name, severity, advisory_id, title in iter_vulns(audit):
@@ -215,11 +225,6 @@ def main() -> int:
                 "Exception severity mismatch: "
                 f"{name} ({advisory_id}) expected {sev}, got {exc['severity']}"
             )
-        if exc["expires_on"] and exc["expires_on"] < today:
-            expired_exceptions.append(
-                (name, sev, advisory_id, exc["expires_on"].isoformat())
-            )
-
     if missing_exceptions:
         errors.append("High/Critical vulnerabilities missing exceptions:")
         for name, sev, advisory_id, title in missing_exceptions:

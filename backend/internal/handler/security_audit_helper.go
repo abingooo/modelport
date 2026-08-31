@@ -158,6 +158,9 @@ func runSecurityAuditWithInstructionPayload(c *gin.Context, reqLog *zap.Logger, 
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
 	request.InstructionBody = instructionBody
 	request.InstructionAuditExcluded = request.InstructionAuditExcluded || instructionExcluded
+	if !securityaudit.InstructionV2RouteAllowed(request) {
+		request.InstructionAuditExcluded = true
+	}
 	request.InstructionAuditCompleted = instructionCompleted
 	if isSecurityAuditWebSocketStage(request.Stage) {
 		if turnNo, ok := securityAuditWSTurn(c); ok {
@@ -224,6 +227,9 @@ func runInstructionAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securi
 	request := buildSecurityAuditRequest(c, apiKey, subject, protocol, model, body, stage)
 	request.InstructionBody = body
 	request.InstructionAuditExcluded = request.InstructionAuditExcluded || excluded
+	if !securityaudit.InstructionV2RouteAllowed(request) {
+		request.InstructionAuditExcluded = true
+	}
 	if originalModel, ok := service.RequestedPublicModelFromContext(c.Request.Context()); ok {
 		request.Model = originalModel
 		request.InstructionModelOverride = true
@@ -333,8 +339,12 @@ func buildSecurityAuditRequest(c *gin.Context, apiKey *service.APIKey, subject m
 	if request.Stage == "" {
 		request.Stage = "http"
 	}
-	request.InstructionAuditExcluded = request.Protocol == service.ContentModerationProtocolOpenAIResponses &&
-		request.Stage == "http" && service.IsOpenAIResponsesCompactPath(c)
+	// The protocol is reused by tokenization, Live/WebRTC, and other
+	// compatibility routes. Keep the V2 boundary at the concrete endpoint and
+	// stage as a second guard; Prompt Audit still runs for excluded requests.
+	if !securityaudit.InstructionV2RouteAllowed(request) {
+		request.InstructionAuditExcluded = true
+	}
 	return request
 }
 

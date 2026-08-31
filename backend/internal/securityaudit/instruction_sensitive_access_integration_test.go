@@ -23,8 +23,9 @@ func insertInstructionSensitiveTestGrant(
 	var grantID int64
 	require.NoError(t, db.QueryRow(`
 		INSERT INTO instruction_audit_sensitive_access_grants
-			(subject_user_id, subject_email_snapshot, grant_source, grant_reason)
-		SELECT id, email, $2, 'test authorization' FROM users WHERE id = $1
+			(subject_user_id, subject_email_snapshot, grant_source, grant_reason, granted_at)
+		SELECT id, email, $2, 'test authorization', NOW() - INTERVAL '1 minute'
+		FROM users WHERE id = $1
 		RETURNING id`, userID, source).Scan(&grantID))
 	return grantID
 }
@@ -150,6 +151,12 @@ func TestInstructionSensitiveGrantLifecycleAndLastHolderProtection(t *testing.T)
 	)
 	require.NoError(t, err)
 	require.Greater(t, replacement.ID, targetGrant.ID)
+	require.Eventually(t, func() bool {
+		capability, capabilityErr := instructionService.GetInstructionSensitiveCapability(
+			context.Background(), targetID, service.AuditAuthMethodJWT,
+		)
+		return capabilityErr == nil && capability.HasAccess
+	}, time.Second, 10*time.Millisecond)
 	targetContext := instructionSensitiveTestContext(t, db, targetID)
 
 	_, err = instructionService.RevokeInstructionSensitiveAccess(

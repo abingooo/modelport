@@ -166,7 +166,7 @@ tagged_image="${image_repository}:${image_tag}"
 digest_url="https://github.com/${release_repository}/releases/download/${release_tag}/manifest-digest.txt"
 revision_url="https://github.com/${release_repository}/releases/download/${release_tag}/release-revision.txt"
 release_api_url="https://api.github.com/repos/${release_repository}/releases/tags/${release_tag}"
-tag_api_url="https://api.github.com/repos/${release_repository}/git/ref/tags/${release_tag}"
+tag_ref_api_url="https://api.github.com/repos/${release_repository}/git/ref/tags/${release_tag}"
 expected_digest="$(curl --fail --silent --show-error --location --max-time 30 \
   --proto '=https' --proto-redir '=https' "${digest_url}")"
 expected_digest="$(printf '%s' "${expected_digest}" | tr -d '\r\n')"
@@ -187,11 +187,32 @@ printf '%s' "${release_json}" | jq -e \
   --arg tag "${release_tag}" --arg revision "${expected_revision}" \
   '.tag_name == $tag and .target_commitish == $revision and .draft == false and .immutable == true' \
   >/dev/null || { echo "Release ${release_tag} is not immutable or does not match its revision" >&2; exit 1; }
-tag_json="$(curl --fail --silent --show-error --location --max-time 30 \
-  --proto '=https' --proto-redir '=https' "${tag_api_url}")"
-printf '%s' "${tag_json}" | jq -e --arg revision "${expected_revision}" \
-  '.object.type == "commit" and .object.sha == $revision' >/dev/null || {
-  echo "Git tag ${release_tag} does not point to ${expected_revision}" >&2
+tag_ref_json="$(curl --fail --silent --show-error --location --max-time 30 \
+  --proto '=https' --proto-redir '=https' "${tag_ref_api_url}")"
+tag_object_sha="$(printf '%s' "${tag_ref_json}" | jq -ser \
+  --arg ref "refs/tags/${release_tag}" '
+    select(length == 1 and (.[0] | type) == "object" and
+      .[0].ref == $ref and .[0].object.type == "tag" and
+      (.[0].object.sha | type) == "string" and
+      (.[0].object.sha | length) == 40 and
+      (.[0].object.sha | test("^[0-9a-f]{40}$"))) |
+    .[0].object.sha
+  ')" || {
+  echo "Git tag ref refs/tags/${release_tag} is not the expected annotated tag" >&2
+  exit 1
+}
+tag_object_api_url="https://api.github.com/repos/${release_repository}/git/tags/${tag_object_sha}"
+tag_object_json="$(curl --fail --silent --show-error --location --max-time 30 \
+  --proto '=https' --proto-redir '=https' "${tag_object_api_url}")"
+printf '%s' "${tag_object_json}" | jq -se \
+  --arg tag_object_sha "${tag_object_sha}" \
+  --arg tag "${release_tag}" \
+  --arg revision "${expected_revision}" '
+    length == 1 and (.[0] | type) == "object" and
+    .[0].sha == $tag_object_sha and .[0].tag == $tag and
+    .[0].object.type == "commit" and .[0].object.sha == $revision
+  ' >/dev/null || {
+  echo "Annotated Git tag ${release_tag} does not resolve uniquely to ${expected_revision}" >&2
   exit 1
 }
 

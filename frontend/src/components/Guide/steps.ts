@@ -1,4 +1,18 @@
 import { DriveStep } from 'driver.js'
+import { DEFAULT_SITE_NAME } from '@/utils/branding'
+
+type Translate = (key: string, named?: Record<string, string>) => string
+
+function escapedSiteName(siteName: string): string {
+  const replacements: Record<string, string> = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }
+  return (siteName.trim() || DEFAULT_SITE_NAME).replace(/[&<>"']/g, character => replacements[character])
+}
 
 /**
  * 管理员完整引导流程
@@ -6,13 +20,18 @@ import { DriveStep } from 'driver.js'
  * @param t 国际化函数
  * @param isSimpleMode 是否为简易模式（简易模式下会过滤分组相关步骤）
  */
-export const getAdminSteps = (t: (key: string) => string, isSimpleMode = false): DriveStep[] => {
+export const getAdminSteps = (
+  t: Translate,
+  isSimpleMode = false,
+  siteName: string = DEFAULT_SITE_NAME
+): DriveStep[] => {
+  const brand = { siteName: escapedSiteName(siteName) }
   const allSteps: DriveStep[] = [
   // ========== 欢迎介绍 ==========
   {
     popover: {
-      title: t('onboarding.admin.welcome.title'),
-      description: t('onboarding.admin.welcome.description'),
+      title: t('onboarding.admin.welcome.title', brand),
+      description: t('onboarding.admin.welcome.description', brand),
       align: 'center',
       nextBtnText: t('onboarding.admin.welcome.nextBtn'),
       prevBtnText: t('onboarding.admin.welcome.prevBtn')
@@ -24,7 +43,7 @@ export const getAdminSteps = (t: (key: string) => string, isSimpleMode = false):
     element: '#sidebar-group-manage',
     popover: {
       title: t('onboarding.admin.groupManage.title'),
-      description: t('onboarding.admin.groupManage.description'),
+      description: t('onboarding.admin.groupManage.description', brand),
       side: 'right',
       align: 'center',
       showButtons: ['close'],
@@ -246,11 +265,16 @@ export const getAdminSteps = (t: (key: string) => string, isSimpleMode = false):
 /**
  * 普通用户引导流程
  */
-export const getUserSteps = (t: (key: string) => string): DriveStep[] => [
+export const getUserSteps = (
+  t: Translate,
+  siteName: string = DEFAULT_SITE_NAME
+): DriveStep[] => {
+  const brand = { siteName: escapedSiteName(siteName) }
+  return [
   {
     popover: {
-      title: t('onboarding.user.welcome.title'),
-      description: t('onboarding.user.welcome.description'),
+      title: t('onboarding.user.welcome.title', brand),
+      description: t('onboarding.user.welcome.description', brand),
       align: 'center',
       nextBtnText: t('onboarding.user.welcome.nextBtn'),
       prevBtnText: t('onboarding.user.welcome.prevBtn')
@@ -306,4 +330,5 @@ export const getUserSteps = (t: (key: string) => string): DriveStep[] => [
       showButtons: ['close']
     }
   }
-]
+  ]
+}

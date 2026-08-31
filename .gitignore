@@ -127,6 +127,9 @@ CLAUDE.md
 scripts
 !backend/scripts/
 !backend/scripts/resolve-version.sh
+!frontend/scripts/
+frontend/scripts/*
+!frontend/scripts/serve-visual.mjs
 .code-review-state
 #openspec/
 code-reviews/
@@ -137,6 +140,9 @@ deploy/docker-compose.override.yml
 vite.config.js
 docs/*
 !docs/MODELPORT_REBUILD_V0.1.183.1_CN.md
+!docs/MODELPORT_GOAL_PROMPT_CN.md
+!docs/MODELPORT_PRODUCTION_UPGRADE_RUNBOOK_CN.md
+!docs/MODELPORT_COMPLETION_MATRIX_CN.md
 !docs/releases/
 !docs/releases/*.md
 !docs/PAYMENT.md
@@ -155,6 +161,9 @@ docs/screenshots/*
 .serena/
 .codex/
 frontend/coverage/
+frontend/.playwright-dist/
+frontend/playwright-report/
+frontend/test-results/
 aicodex
 output/
 .codegraph/

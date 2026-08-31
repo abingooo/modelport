@@ -60,15 +60,8 @@ describe('instruction audit V2 API', () => {
     expect(client.post).toHaveBeenCalledWith('/admin/instruction-audit/ai-nodes/6/test', {})
   })
 
-  it('normalizes Prompt Audit supplement flags and persists the direct client switch', async () => {
-    client.get.mockResolvedValueOnce({ data: [{ id: 1 }, { id: 2, prompt_audit_enabled: true }] })
-    const profiles = await instructionAuditV2API.listClientProfiles()
-    expect(profiles.map((profile) => profile.prompt_audit_enabled)).toEqual([false, true])
-
-    client.put.mockResolvedValueOnce({ data: { id: 1, prompt_audit_enabled: true } })
-    const updated = await instructionAuditV2API.setClientPromptAudit(1, true)
-    expect(client.put).toHaveBeenCalledWith('/admin/instruction-audit/client-profiles/1/prompt-audit', { enabled: true })
-    expect(updated.prompt_audit_enabled).toBe(true)
+  it('does not expose a per-client Prompt Audit write contract', () => {
+    expect(instructionAuditV2API).not.toHaveProperty('setClientPromptAudit')
   })
 
   it('normalizes null scope collections returned for global trusted hashes', async () => {

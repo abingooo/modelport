@@ -269,6 +269,12 @@ import {
   PROVIDER_KIMI,
   PROVIDER_ZHIPU,
   PROVIDER_DEEPSEEK,
+  PROVIDER_QWEN,
+  PROVIDER_GLM,
+  PROVIDER_DOUBAO,
+  PROVIDER_MINIMAX,
+  PROVIDER_MIMO,
+  PROBE_ONLY_PROVIDERS,
   API_MODE_CHAT_COMPLETIONS,
   API_MODE_RESPONSES,
   CHECK_MODE_PROBE,
@@ -473,7 +479,14 @@ const providerOptions = computed<ProviderOption[]>(() => [
   { value: PROVIDER_KIMI, label: t('monitorCommon.providers.kimi') },
   { value: PROVIDER_ZHIPU, label: t('monitorCommon.providers.zhipu') },
   { value: PROVIDER_DEEPSEEK, label: t('monitorCommon.providers.deepseek') },
+  { value: PROVIDER_QWEN, label: t('monitorCommon.providers.qwen') },
+  { value: PROVIDER_GLM, label: t('monitorCommon.providers.glm') },
+  { value: PROVIDER_DOUBAO, label: t('monitorCommon.providers.doubao') },
+  { value: PROVIDER_MINIMAX, label: t('monitorCommon.providers.minimax') },
+  { value: PROVIDER_MIMO, label: t('monitorCommon.providers.mimo') },
 ])
+
+const providerIsProbeOnly = computed(() => PROBE_ONLY_PROVIDERS.includes(form.provider))
 
 // 国产 provider 预填的官方 endpoint（仅探活侧；配额模式 endpoint 可留空）。
 const PROVIDER_DEFAULT_ENDPOINTS: Partial<Record<Provider, string>> = {
@@ -501,14 +514,14 @@ const checkModeOptions = computed<CheckModeOption[]>(() => [
     value: CHECK_MODE_QUOTA,
     label: t('admin.channelMonitor.form.checkModeQuota'),
     hint: t('admin.channelMonitor.form.checkModeQuotaHint'),
-    disabled: false,
+    disabled: providerIsProbeOnly.value,
   },
   {
     value: CHECK_MODE_QUOTA_PROBE,
     label: t('admin.channelMonitor.form.checkModeQuotaProbe'),
     hint: t('admin.channelMonitor.form.checkModeQuotaProbeHint'),
     // antigravity 无探活 adapter，只支持配额模式。
-    disabled: form.provider === PROVIDER_ANTIGRAVITY,
+    disabled: form.provider === PROVIDER_ANTIGRAVITY || providerIsProbeOnly.value,
   },
 ])
 
@@ -674,6 +687,10 @@ function selectProvider(provider: Provider) {
   // antigravity 仅配额模式：切到它时强制 quota（checkModeOptions 同步禁用其余项）。
   if (provider === PROVIDER_ANTIGRAVITY && form.check_mode !== CHECK_MODE_QUOTA) {
     form.check_mode = CHECK_MODE_QUOTA
+  }
+  if (PROBE_ONLY_PROVIDERS.includes(provider) && form.check_mode !== CHECK_MODE_PROBE) {
+    form.check_mode = CHECK_MODE_PROBE
+    if (form.primary_model.trim() === 'quota') form.primary_model = ''
   }
   // 对称还原：从 antigravity 切走时撤掉强制 quota，否则编辑存量 antigravity
   // 监控换平台后仍停留在 quota（目标平台未必支持），update 会携带残留配置。

@@ -9,7 +9,7 @@ import (
 // 渠道监控参数校验与归一化辅助函数。
 // 校验失败一律返回 channel_monitor_const.go 中预定义的 Err* 错误，错误信息不含具体 IP/hostname，避免泄露内网拓扑。
 
-// monitorProviders 渠道监控支持的全部 provider（与迁移 226 的 CHECK 约束一致）。
+// monitorProviders 渠道监控支持的全部 provider（与迁移 236 的 CHECK 约束一致）。
 // 不再以 adapter 表为唯一来源：antigravity 没有探活 adapter，但支持配额模式。
 //
 //nolint:gochecknoglobals // 静态查表，初始化后不变。
@@ -22,6 +22,11 @@ var monitorProviders = map[string]struct{}{
 	MonitorProviderKimi:        {},
 	MonitorProviderZhipu:       {},
 	MonitorProviderDeepseek:    {},
+	MonitorProviderQwen:        {},
+	MonitorProviderGLM:         {},
+	MonitorProviderDoubao:      {},
+	MonitorProviderMiniMax:     {},
+	MonitorProviderMiMo:        {},
 }
 
 // probeCapableProviders 支持探活（probe / quota_probe）的 provider。
@@ -36,6 +41,27 @@ var probeCapableProviders = map[string]struct{}{
 	MonitorProviderKimi:      {},
 	MonitorProviderZhipu:     {},
 	MonitorProviderDeepseek:  {},
+	MonitorProviderQwen:      {},
+	MonitorProviderGLM:       {},
+	MonitorProviderDoubao:    {},
+	MonitorProviderMiniMax:   {},
+	MonitorProviderMiMo:      {},
+}
+
+// quotaCapableProviders use the v0.1.183 account-usage integrations. Legacy
+// ModelPort providers have probe adapters only; accepting quota modes for them
+// would create monitors that fail permanently at runtime.
+//
+//nolint:gochecknoglobals // static lookup table, immutable after initialization.
+var quotaCapableProviders = map[string]struct{}{
+	MonitorProviderOpenAI:      {},
+	MonitorProviderAnthropic:   {},
+	MonitorProviderGemini:      {},
+	MonitorProviderGrok:        {},
+	MonitorProviderAntigravity: {},
+	MonitorProviderKimi:        {},
+	MonitorProviderZhipu:       {},
+	MonitorProviderDeepseek:    {},
 }
 
 // validateProvider 校验 provider 字符串。
@@ -49,6 +75,11 @@ func validateProvider(p string) error {
 // providerSupportsProbe 该 provider 是否注册了探活 adapter（antigravity 为 false）。
 func providerSupportsProbe(p string) bool {
 	_, ok := probeCapableProviders[p]
+	return ok
+}
+
+func providerSupportsQuota(p string) bool {
+	_, ok := quotaCapableProviders[p]
 	return ok
 }
 
@@ -74,11 +105,19 @@ func monitorCheckModeUsesQuota(checkMode string) bool {
 func validateCheckMode(provider, checkMode string) error {
 	checkMode = defaultCheckMode(checkMode)
 	switch checkMode {
-	case MonitorCheckModeProbe, MonitorCheckModeQuota, MonitorCheckModeQuotaProbe:
+	case MonitorCheckModeProbe:
+		if !providerSupportsProbe(provider) {
+			return ErrChannelMonitorInvalidCheckMode
+		}
+	case MonitorCheckModeQuota:
+		if !providerSupportsQuota(provider) {
+			return ErrChannelMonitorInvalidCheckMode
+		}
+	case MonitorCheckModeQuotaProbe:
+		if !providerSupportsProbe(provider) || !providerSupportsQuota(provider) {
+			return ErrChannelMonitorInvalidCheckMode
+		}
 	default:
-		return ErrChannelMonitorInvalidCheckMode
-	}
-	if checkMode != MonitorCheckModeQuota && !providerSupportsProbe(provider) {
 		return ErrChannelMonitorInvalidCheckMode
 	}
 	return nil

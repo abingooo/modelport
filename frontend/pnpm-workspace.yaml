@@ -1,0 +1,13 @@
+# pnpm 11 reads this workspace-level configuration. Keep the matching
+# package.json block for the pnpm 9 CI/Docker toolchain until it is upgraded.
+# The two lists must remain identical.
+packages:
+  - '.'
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+overrides:
+  js-cookie: 3.0.7
+  'form-data@<4.0.6': '>=4.0.6'
+  'postcss@<8.5.18': '>=8.5.18'
+  'dompurify@<3.4.14': '>=3.4.14'
