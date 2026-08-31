@@ -606,10 +606,12 @@ target_jobs.each do |job_name|
     end
     raise 'late Immutable Releases preflight must be immediately before the publisher' unless
       immutable_preflight_line && publisher_line == immutable_preflight_line + 1
-    expected_immutable_token = '${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}'
+    expected_release_token = '${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}'
+    raise 'create-only publisher must use the protected release admin token' unless
+      steps.fetch(release_write_step).fetch('env', {})['GH_TOKEN'] == expected_release_token
     raise 'late Immutable Releases preflight token is missing' unless
       steps.fetch(release_write_step).fetch('env', {})['IMMUTABLE_RELEASES_TOKEN'] ==
-        expected_immutable_token
+        expected_release_token
     raise 'late Immutable Releases preflight must use the protected admin token' unless
       release_write_run.include?('GH_TOKEN="${IMMUTABLE_RELEASES_TOKEN}"')
   end

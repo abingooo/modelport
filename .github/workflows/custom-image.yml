@@ -1243,8 +1243,8 @@ jobs:
         id: github-release
         shell: bash
         env:
-          GH_TOKEN: ${{ github.token }}
-          IMMUTABLE_RELEASES_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}
+          IMMUTABLE_RELEASES_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
           VERSION: ${{ needs.quality.outputs.version }}
         run: |
