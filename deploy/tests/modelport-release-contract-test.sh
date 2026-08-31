@@ -35,6 +35,7 @@ crypto_compat_manifest=backend/testdata/modelport_crypto_compat_v1.json
 crypto_compat_harness=backend/testdata/modelport_crypto_compat_generator_test.go
 version=$(tr -d '[:space:]' < custom/VERSION)
 expected_upstream_sha=e8cb019fabf8b55199436229044cbf9aa7a82564
+upstream_repository=https://github.com/Wei-Shaw/sub2api.git
 expected_gitleaks_version=8.30.1
 expected_gitleaks_linux_x64_sha256=551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 expected_govulncheck_version=v1.7.0
@@ -103,6 +104,11 @@ done
   fail 'backend and custom versions differ'
 [ "$(tr -d '[:space:]' < backend/cmd/server/UPSTREAM_VERSION)" = '0.1.183' ] || \
   fail 'upstream version is not 0.1.183'
+if ! git rev-parse --verify --quiet 'v0.1.183^{commit}' >/dev/null; then
+  git fetch --no-tags "$upstream_repository" \
+    'refs/tags/v0.1.183:refs/tags/v0.1.183' >/dev/null 2>&1 || \
+    fail 'could not fetch the locked Sub2API v0.1.183 tag'
+fi
 [ "$(git rev-parse 'v0.1.183^{commit}')" = "$expected_upstream_sha" ] || \
   fail 'Sub2API v0.1.183 does not resolve to the locked upstream commit'
 [ -s "docs/releases/${version}.md" ] || fail 'release notes are missing'
