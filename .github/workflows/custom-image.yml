@@ -352,7 +352,7 @@ jobs:
             | sha256sum --check --strict -
           tar --extract --gzip --file "${actionlint_archive}" \
             --directory "${tool_root}" actionlint
-          test "$("${actionlint_bin}" -version)" = "${ACTIONLINT_VERSION}"
+          "${actionlint_bin}" -version | grep -Fqx "${ACTIONLINT_VERSION}"
           "${actionlint_bin}" .github/workflows/*.yml
 
           curl --fail --silent --show-error --location --retry 3 --retry-all-errors \
