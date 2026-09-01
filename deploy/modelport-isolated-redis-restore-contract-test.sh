@@ -511,6 +511,14 @@ printf '%s\r\n' \
   "\$${#fixture_secret}" \
   "$fixture_secret" \
   > "$aof_input"
+python3 - "$rdb_input" "$aof_input" <<'PY'
+import os
+import sys
+
+fixture_epoch = 1787875200  # 2026-08-28T00:00:00Z
+for fixture_path in sys.argv[1:]:
+    os.utime(fixture_path, (fixture_epoch, fixture_epoch))
+PY
 rdb_sha="$(sha256_file "$rdb_input")"
 aof_sha="$(sha256_file "$aof_input")"
 
@@ -613,6 +621,7 @@ run_success() {
       .input.expected_sha256 == $sha and
       .input.disposable_copy_sha256 == $sha and
       .input.path_recorded == false and
+      .input.source_mtime_utc == "2026-08-28T00:00:00Z" and
       .input.complete_legacy_aof_confirmed == $expected_aof and
       (.input.size_bytes | type == "number") and .input.size_bytes > 0 and
       .rpo.boundary_utc == "2026-08-28T00:00:00Z" and
@@ -964,6 +973,7 @@ expect_pre_docker_failure \
 
 unavailable_image_report="$external_dir/unavailable-image.json"
 expect_runtime_failure rdb image_unavailable "$rdb_input" "$rdb_sha" "$unavailable_image_report"
+assert_contains '[image_unavailable]' "$stderr_log"
 assert_contains 'image inspect --format' "$docker_log"
 assert_not_contains 'network create' "$docker_log"
 assert_no_owned_resources

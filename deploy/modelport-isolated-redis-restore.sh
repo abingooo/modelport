@@ -150,7 +150,7 @@ report_parent_is_bound() {
 file_identity() {
   local path="$1"
   local value=''
-  if value="$(stat -c '%d:%i' -- "$path" 2>/dev/null)" && [[ "$value" =~ ^[0-9]+:[0-9]+$ ]]; then
+  if value="$(stat -Lc '%d:%i' -- "$path" 2>/dev/null)" && [[ "$value" =~ ^[0-9]+:[0-9]+$ ]]; then
     printf '%s' "$value"
     return 0
   fi
@@ -178,7 +178,7 @@ sha256_file() {
 file_mtime_epoch() {
   local path="$1"
   local value=''
-  if value="$(stat -c '%Y' -- "$path" 2>/dev/null)" && [[ "$value" =~ ^[0-9]+$ ]]; then
+  if value="$(stat -Lc '%Y' -- "$path" 2>/dev/null)" && [[ "$value" =~ ^[0-9]+$ ]]; then
     printf '%s' "$value"
     return 0
   fi

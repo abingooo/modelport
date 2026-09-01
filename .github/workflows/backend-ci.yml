@@ -46,6 +46,8 @@ jobs:
           go version | grep -q 'go1.27.0'
       - name: Verify historical ModelPort crypto compatibility vectors
         run: /bin/sh backend/scripts/verify-modelport-crypto-compat-vectors.sh
+      - name: Verify Linux Redis restore contract
+        run: /bin/bash deploy/modelport-isolated-redis-restore-contract-test.sh
       - name: Unit tests
         working-directory: backend
         run: make test-unit
