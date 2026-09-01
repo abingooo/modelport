@@ -67,6 +67,8 @@ concurrency:
 env:
   RELEASE_IMAGE: ghcr.io/abingooo/modelport
   EXPECTED_REPOSITORY: abingooo/modelport
+  EXPECTED_RELEASE_OWNER_ID: '206009240'
+  EXPECTED_RELEASE_OWNER_LOGIN: abingooo
   UPSTREAM_SHA: e8cb019fabf8b55199436229044cbf9aa7a82564
   LEGACY_MODELPORT_TAG: custom-v0.1.176.2
   LEGACY_MODELPORT_SHA: b6cb4d0c8b47d7561631ab61418e1b6fdeb379bc
@@ -109,7 +111,7 @@ jobs:
         id: release
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}
           INPUT_VERSION: ${{ inputs.version }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
@@ -137,6 +139,10 @@ jobs:
           [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_ACTOR_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"
+          test "${GITHUB_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"
+          test "${INPUT_GO_VEX_OWNER_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"
           test "${GITHUB_REF}" = "refs/heads/production"
           test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
@@ -197,7 +203,7 @@ jobs:
             exit 1
           fi
           /bin/sh custom/release/assert-production-release-environment \
-            "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
+            "${GITHUB_REPOSITORY}" "${EXPECTED_RELEASE_OWNER_ID}"
           /bin/sh custom/release/assert-github-slots-absent \
             origin "${tag}" "${GITHUB_REPOSITORY}"
           {
@@ -755,7 +761,7 @@ jobs:
       - name: Revalidate protected environment, OpenVEX, and deployment evidence
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}
           VERSION: ${{ needs.quality.outputs.version }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
           PRODUCTION_DEPLOYMENT_MODE: ${{ inputs.production_deployment_mode }}
@@ -779,6 +785,10 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_ACTOR_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"
+          test "${GITHUB_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"
+          test "${INPUT_GO_VEX_OWNER_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"
           test "${GITHUB_REF}" = "refs/heads/production"
           test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
@@ -794,7 +804,7 @@ jobs:
             "${APPROVED_GO_VEX_BINDING_SHA256}" "${GO_VEX_MAX_VALIDITY_SECONDS}" \
             "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-release-environment \
-            "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
+            "${GITHUB_REPOSITORY}" "${EXPECTED_RELEASE_OWNER_ID}"
           case "${PRODUCTION_DEPLOYMENT_MODE}" in
             existing_upgrade)
               test -z "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}"
@@ -1170,7 +1180,7 @@ jobs:
       - name: Revalidate protected environment, OpenVEX, attestation, and Release slots
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}
+          GH_TOKEN: ${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}
           RELEASE_TAG: ${{ needs.quality.outputs.tag }}
           VERSION: ${{ needs.quality.outputs.version }}
           EXPECTED_SHA: ${{ inputs.expected_sha }}
@@ -1194,6 +1204,10 @@ jobs:
         run: |
           set -euo pipefail
           test "${GITHUB_REPOSITORY}" = "${EXPECTED_REPOSITORY}"
+          test "${GITHUB_ACTOR_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"
+          test "${GITHUB_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"
+          test "${GITHUB_TRIGGERING_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"
+          test "${INPUT_GO_VEX_OWNER_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"
           test "${GITHUB_REF}" = "refs/heads/production"
           test "${GITHUB_SHA}" = "${EXPECTED_SHA}"
           test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
@@ -1206,7 +1220,7 @@ jobs:
             "${APPROVED_GO_VEX_BINDING_SHA256}" "${GO_VEX_MAX_VALIDITY_SECONDS}" \
             "${GO_VEX_MIN_REMAINING_SECONDS}"
           /bin/sh custom/release/assert-production-release-environment \
-            "${GITHUB_REPOSITORY}" "${INPUT_GO_VEX_OWNER_ID}"
+            "${GITHUB_REPOSITORY}" "${EXPECTED_RELEASE_OWNER_ID}"
           case "${PRODUCTION_DEPLOYMENT_MODE}" in
             existing_upgrade)
               test -z "${INPUT_FIRST_INSTALL_ATTESTATION_SHA256}"

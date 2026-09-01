@@ -3,6 +3,7 @@ set -eu
 
 repository="${1:?GitHub repository is required}"
 security_owner_id="${2:?security owner GitHub user ID is required}"
+expected_repository=abingooo/modelport
 environment_name=modelport-production-release
 
 fail() {
@@ -12,9 +13,21 @@ fail() {
 
 printf '%s\n' "${repository}" | grep -Eq \
   '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$' || fail 'invalid GitHub repository'
+[ "${repository}" = "${expected_repository}" ] || fail 'unexpected GitHub repository'
 printf '%s\n' "${security_owner_id}" | grep -Eq '^[1-9][0-9]*$' || \
   fail 'invalid security owner GitHub user ID'
 [ -n "${GH_TOKEN:-}" ] || fail 'GH_TOKEN is required'
+
+authenticated_user_json="$(gh api --method GET user)" || \
+  fail 'could not authenticate the protected release token'
+printf '%s' "${authenticated_user_json}" | jq -e \
+  --argjson security_owner_id "${security_owner_id}" '
+  type == "object" and
+  (.id | type) == "number" and
+  (.id > 0) and
+  (.id == (.id | floor)) and
+  .id == $security_owner_id
+' >/dev/null || fail 'protected release token must belong to the approved single owner'
 
 environment_json="$(gh api --method GET \
   "repos/${repository}/environments/${environment_name}")" || \
@@ -26,10 +39,13 @@ printf '%s' "${environment_json}" | jq -e \
   type == "object" and
   .name == $environment_name and
   .can_admins_bypass == false and
+  (.deployment_branch_policy | type) == "object" and
+  .deployment_branch_policy.protected_branches == false and
+  .deployment_branch_policy.custom_branch_policies == true and
   (.protection_rules | type) == "array" and
   ([.protection_rules[] | select(.type == "required_reviewers")] | length) == 1 and
   ([.protection_rules[] | select(.type == "required_reviewers")][0] |
-    .prevent_self_review == true and
+    .prevent_self_review == false and
     (.reviewers | type) == "array" and
     (.reviewers | length) == 1 and
     all(.reviewers[];
@@ -40,4 +56,21 @@ printf '%s' "${environment_json}" | jq -e \
       (.reviewer.id == (.reviewer.id | floor)) and
       .reviewer.id == $security_owner_id))
 ' >/dev/null || \
-  fail 'modelport-production-release must require only the approved security owner without administrator bypass'
+  fail 'modelport-production-release must require the approved single-owner reviewer without administrator bypass'
+
+deployment_policies_json="$(gh api --method GET \
+  "repos/${repository}/environments/${environment_name}/deployment-branch-policies?per_page=100")" || \
+  fail 'could not query the protected Environment deployment branch policies'
+
+printf '%s' "${deployment_policies_json}" | jq -e '
+  type == "object" and
+  (.total_count | type) == "number" and
+  .total_count == 1 and
+  (.branch_policies | type) == "array" and
+  (.branch_policies | length) == 1 and
+  (.branch_policies[0] |
+    type == "object" and
+    .name == "production" and
+    .type == "branch")
+' >/dev/null || \
+  fail 'modelport-production-release must allow only the production branch'

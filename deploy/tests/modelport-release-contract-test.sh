@@ -508,7 +508,7 @@ target_jobs.each do |job_name|
   attestation_step = restore_attestation_step
   vex_step = runs.index { |run| run.include?(vex_validator) }
   environment_step_definition = steps.fetch(environment_step)
-  expected_token = '${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN || github.token }}'
+  expected_token = '${{ secrets.MODELPORT_RELEASE_ADMIN_TOKEN }}'
   raise "#{job_name} Environment query token is missing" unless
     environment_step_definition.fetch('env', {})['GH_TOKEN'] == expected_token
   validation_environment = environment_step_definition.fetch('env', {})
@@ -535,6 +535,17 @@ target_jobs.each do |job_name|
       validation_environment[name] == expected_value
   end
   validation_run = runs.fetch(attestation_step)
+  required_single_owner_checks = [
+    'test "${GITHUB_ACTOR_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"',
+    'test "${GITHUB_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"',
+    'test "${GITHUB_TRIGGERING_ACTOR}" = "${EXPECTED_RELEASE_OWNER_LOGIN}"',
+    'test "${INPUT_GO_VEX_OWNER_ID}" = "${EXPECTED_RELEASE_OWNER_ID}"',
+    '"${GITHUB_REPOSITORY}" "${EXPECTED_RELEASE_OWNER_ID}"'
+  ]
+  required_single_owner_checks.each do |fragment|
+    raise "#{job_name} single-owner release check is missing: #{fragment}" unless
+      validation_run.include?(fragment)
+  end
   raise "#{job_name} must reject a missing or unknown production deployment mode" unless
     validation_run.include?('case "${PRODUCTION_DEPLOYMENT_MODE}" in') &&
       validation_run.include?('Unsupported production deployment mode:')
@@ -678,6 +689,13 @@ grep -Fqx '  GO_VEX_MAX_VALIDITY_SECONDS: 7776000' "$workflow" || \
   fail 'OpenVEX approval must expire within 90 days'
 grep -Fqx '  GO_VEX_MIN_REMAINING_SECONDS: 7200' "$workflow" || \
   fail 'OpenVEX approval must remain valid across the longest publication job'
+grep -Fqx "  EXPECTED_RELEASE_OWNER_ID: '206009240'" "$workflow" || \
+  fail 'release security owner ID must be fixed to the repository owner'
+grep -Fqx '  EXPECTED_RELEASE_OWNER_LOGIN: abingooo' "$workflow" || \
+  fail 'release security owner login must be fixed to the repository owner'
+if grep -Fq 'MODELPORT_RELEASE_ADMIN_TOKEN || github.token' "$workflow"; then
+  fail 'protected release checks must not fall back to the built-in GitHub token'
+fi
 grep -Fq '.note.go.buildid|.note.gnu.build-id) continue ;;' "$workflow" || \
   fail 'binary parity may exclude only the explicit build-id note allowlist'
 grep -Fq 'unexpected allocated note section:' "$workflow" || \
@@ -687,13 +705,20 @@ grep -Fq 'candidate_revision:$candidate_revision,upstream_revision:$upstream_rev
   fail 'public restore attestation must bind candidate and upstream revisions'
 grep -Fq '.can_admins_bypass == false' "$release_environment_check" || \
   fail 'production release environment must disable administrator bypass'
-grep -Fq '.prevent_self_review == true' "$release_environment_check" || \
-  fail 'production release environment must prevent self review'
+grep -Fq '.prevent_self_review == false' "$release_environment_check" || \
+  fail 'production release environment must allow the single owner to perform the manual review'
 grep -Fq '(.reviewers | length) == 1' "$release_environment_check" || \
   fail 'production release environment must have exactly one approved reviewer'
 grep -Fq '.reviewer.id == $security_owner_id' "$release_environment_check" || \
   fail 'production release environment reviewer must match the approved security owner'
-grep -Fq 'modelport-production-release must require only the approved security owner without administrator bypass' \
+grep -Fq '.deployment_branch_policy.custom_branch_policies == true' \
+  "$release_environment_check" || \
+  fail 'production release environment must require a custom deployment branch policy'
+grep -Fq '.name == "production"' "$release_environment_check" || \
+  fail 'production release environment must allow only the production branch'
+grep -Fq 'gh api --method GET user' "$release_environment_check" || \
+  fail 'protected release token owner check is missing'
+grep -Fq 'modelport-production-release must require the approved single-owner reviewer without administrator bypass' \
   "$release_environment_check" || \
   fail 'security-owner required reviewer preflight is missing'
 grep -Fq 'production-deployment-evidence.json' "$workflow" || \
@@ -1211,48 +1236,111 @@ esac
 EOF
 cat > "$mock_bin/gh" <<'EOF'
 #!/bin/sh
-[ "$#" -eq 4 ] && [ "$1" = api ] && [ "$2" = --method ] && [ "$3" = GET ] && \
-  [ "$4" = 'repos/abingooo/modelport/environments/modelport-production-release' ] || exit 64
-case "${MODELPORT_TEST_GH_ENV_MODE:-valid}" in
-  valid)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":123,"login":"independent-reviewer"}}]}]}'
+[ "$#" -eq 4 ] && [ "$1" = api ] && [ "$2" = --method ] && [ "$3" = GET ] || exit 64
+case "$4" in
+  user)
+    case "${MODELPORT_TEST_GH_USER_MODE:-valid}" in
+      valid) printf '{"id":%s,"login":"single-owner"}\n' "${MODELPORT_TEST_GH_USER_ID:-123}" ;;
+      wrong-id) printf '%s\n' '{"id":456,"login":"wrong-owner"}' ;;
+      id-zero) printf '%s\n' '{"id":0}' ;;
+      id-fractional) printf '%s\n' '{"id":1.5}' ;;
+      id-string) printf '%s\n' '{"id":"123"}' ;;
+      missing-id) printf '%s\n' '{"login":"single-owner"}' ;;
+      malformed) printf '%s\n' 'not-json' ;;
+      api-error) exit 1 ;;
+      *) exit 65 ;;
+    esac
     ;;
-  admin-bypass)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":true,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+  repos/abingooo/modelport/environments/modelport-production-release)
+    case "${MODELPORT_TEST_GH_ENV_MODE:-valid}" in
+      valid)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123,"login":"single-owner-reviewer"}}]}]}'
+        ;;
+      admin-bypass)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":true,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      admin-bypass-missing)
+        printf '%s\n' '{"name":"modelport-production-release","deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      admin-bypass-null)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":null,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      admin-bypass-string)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":"false","deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      prevent-self-review)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      prevent-self-review-missing)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      prevent-self-review-null)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":null,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      prevent-self-review-string)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":"false","reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      no-reviewer)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[]}]}'
+        ;;
+      two-reviewers)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}},{"type":"User","reviewer":{"id":456}}]}]}'
+        ;;
+      team-reviewer)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"Team","reviewer":{"id":123}}]}]}'
+        ;;
+      app-reviewer)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"App","reviewer":{"id":123}}]}]}'
+        ;;
+      no-required-reviewer-rule)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"wait_timer","wait_timer":0}]}'
+        ;;
+      duplicate-required-reviewer-rule)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]},{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"Team","reviewer":{"id":456}}]}]}'
+        ;;
+      wrong-name)
+        printf '%s\n' '{"name":"another-environment","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      branch-policy-missing)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      branch-policy-protected-only)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":true,"custom_branch_policies":false},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+        ;;
+      malformed-reviewer)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{}}]}]}'
+        ;;
+      reviewer-id-zero)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":0}}]}]}'
+        ;;
+      reviewer-id-negative)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":-1}}]}]}'
+        ;;
+      reviewer-id-fractional)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":1.5}}]}]}'
+        ;;
+      reviewer-id-string)
+        printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true},"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":"123"}}]}]}'
+        ;;
+      malformed) printf '%s\n' 'not-json' ;;
+      api-error) exit 1 ;;
+      *) exit 65 ;;
+    esac
     ;;
-  self-review)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":false,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
+  'repos/abingooo/modelport/environments/modelport-production-release/deployment-branch-policies?per_page=100')
+    case "${MODELPORT_TEST_GH_POLICY_MODE:-valid}" in
+      valid) printf '%s\n' '{"total_count":1,"branch_policies":[{"id":1,"name":"production","type":"branch"}]}' ;;
+      empty) printf '%s\n' '{"total_count":0,"branch_policies":[]}' ;;
+      extra) printf '%s\n' '{"total_count":2,"branch_policies":[{"id":1,"name":"production","type":"branch"},{"id":2,"name":"main","type":"branch"}]}' ;;
+      wildcard) printf '%s\n' '{"total_count":1,"branch_policies":[{"id":1,"name":"*","type":"branch"}]}' ;;
+      tag) printf '%s\n' '{"total_count":1,"branch_policies":[{"id":1,"name":"production","type":"tag"}]}' ;;
+      count-mismatch) printf '%s\n' '{"total_count":2,"branch_policies":[{"id":1,"name":"production","type":"branch"}]}' ;;
+      malformed) printf '%s\n' 'not-json' ;;
+      api-error) exit 1 ;;
+      *) exit 65 ;;
+    esac
     ;;
-  no-reviewer)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[]}]}'
-    ;;
-  no-required-reviewer-rule)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"wait_timer","wait_timer":0}]}'
-    ;;
-  duplicate-required-reviewer-rule)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":123}}]},{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"Team","reviewer":{"id":456}}]}]}'
-    ;;
-  wrong-name)
-    printf '%s\n' '{"name":"another-environment","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":123}}]}]}'
-    ;;
-  malformed-reviewer)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{}}]}]}'
-    ;;
-  reviewer-id-zero)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":0}}]}]}'
-    ;;
-  reviewer-id-negative)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":-1}}]}]}'
-    ;;
-  reviewer-id-fractional)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":1.5}}]}]}'
-    ;;
-  reviewer-id-string)
-    printf '%s\n' '{"name":"modelport-production-release","can_admins_bypass":false,"protection_rules":[{"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":"123"}}]}]}'
-    ;;
-  malformed) printf '%s\n' 'not-json' ;;
-  api-error) exit 1 ;;
-  *) exit 65 ;;
+  *) exit 64 ;;
 esac
 EOF
 chmod 0755 "$mock_bin/git" "$mock_bin/curl" "$mock_bin/docker" "$mock_bin/gh"
@@ -1287,12 +1375,26 @@ if PATH="$mock_bin:$PATH" GH_TOKEN='' MODELPORT_TEST_GH_ENV_MODE=valid \
   fail 'production release Environment query accepted a missing token'
 fi
 if PATH="$mock_bin:$PATH" GH_TOKEN=modelport-test-token MODELPORT_TEST_GH_ENV_MODE=valid \
+  /bin/sh "$release_environment_check" another/modelport 123 >/dev/null 2>&1; then
+  fail 'production release Environment query accepted another repository'
+fi
+if PATH="$mock_bin:$PATH" GH_TOKEN=modelport-test-token \
+  MODELPORT_TEST_GH_USER_ID=456 MODELPORT_TEST_GH_ENV_MODE=valid \
   /bin/sh "$release_environment_check" abingooo/modelport 456 >/dev/null 2>&1; then
   fail 'production release Environment accepted a reviewer other than the approved security owner'
 fi
+for user_mode in wrong-id id-zero id-fractional id-string missing-id malformed api-error; do
+  if MODELPORT_TEST_GH_USER_MODE="$user_mode" \
+    run_environment_check >/dev/null 2>&1; then
+    fail "unsafe protected release token identity was accepted: $user_mode"
+  fi
+done
 for environment_mode in \
-  admin-bypass self-review no-reviewer no-required-reviewer-rule \
-  duplicate-required-reviewer-rule wrong-name malformed-reviewer malformed api-error; do
+  admin-bypass admin-bypass-missing admin-bypass-null admin-bypass-string \
+  prevent-self-review prevent-self-review-missing prevent-self-review-null \
+  prevent-self-review-string no-reviewer two-reviewers team-reviewer app-reviewer \
+  no-required-reviewer-rule duplicate-required-reviewer-rule wrong-name \
+  branch-policy-missing branch-policy-protected-only malformed-reviewer malformed api-error; do
   if MODELPORT_TEST_GH_ENV_MODE="$environment_mode" \
     run_environment_check >/dev/null 2>&1; then
     fail "unsafe production release Environment was accepted: $environment_mode"
@@ -1303,6 +1405,12 @@ for environment_mode in reviewer-id-zero reviewer-id-negative \
   if MODELPORT_TEST_GH_ENV_MODE="$environment_mode" \
     run_environment_check >/dev/null 2>&1; then
     fail "non-positive or non-integral reviewer ID was accepted: $environment_mode"
+  fi
+done
+for policy_mode in empty extra wildcard tag count-mismatch malformed api-error; do
+  if MODELPORT_TEST_GH_POLICY_MODE="$policy_mode" \
+    run_environment_check >/dev/null 2>&1; then
+    fail "unsafe production deployment branch policy was accepted: $policy_mode"
   fi
 done
 

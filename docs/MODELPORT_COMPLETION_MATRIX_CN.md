@@ -48,8 +48,8 @@
 | 226 约束与 checksum 兼容 | `passed` | `migrations_runner_manifest_parser_test.go`、`channel_monitor_quota_mode_migration_test.go` 和隔离 PostgreSQL 迁移测试；当前 raw SHA-256 `ebbe62cedfd602a67f6a3e08a705e5982f314a668ee681e1eebc63ca1c639733`、Runner trimmed SHA-256 `ea9926655a2cf71a23b0f54597f7f57d59fca8d5fb1b5fe45c779acd0a57f784` | parser 要求已验证 CHECK 只绑定目标列，且表达式是单一正向 `IN`/`ANY` 精确集合；这是必要的非密码学迁移适配，不改变指令审核加密。 |
 | `existing_upgrade` 生产只读审计 | `blocked` | 当前没有用户提供的专用 SSH 别名、轮换后 Agent 和独立主机指纹 | 选择既有升级路径时需用户明确授权后才能连接；只读审计不得修改生产。`first_install` 公开发布路径不要求也不授权该审计。 |
 | `existing_upgrade` 生产备份 | `blocked` | Runbook 与备份工具/契约测试已存在 | 选择既有升级路径时仍缺审计后的规模、空间、目标挂载、RPO/一致性、独立加密安排和逐项备份确认。 |
-| `existing_upgrade` 真实生产隔离恢复 | `blocked` | `deploy/modelport-isolated-restore.sh`、Redis restore 工具及合成/空库 drill | 尚无真实生产快照和恢复证明；不得以合成结果替代。仅对独立批准的 `first_install` 路径为 `N/A`，绝不标记为 `passed`。 |
-| `first_install` 首次部署无存量数据证明 | `blocked` | `not-run`；当前没有受保护的仓库外证明、哈希或候选绑定 | 证明只能断言本次发布不迁移既有 ModelPort 生产数据集或 ModelPort 所有的 PostgreSQL、Redis、持久资产、部署状态、更新状态；须仓库外加密、记录不早于候选且不超过 24 小时、绑定版本/候选/上游、受 Environment 独立审批，并记录现有恢复为 `N/A`、`production_update_performed=false`。用户或执行者不能自我批准；证明不代表服务器或无关服务已审计/修改，冲突预检属于以后实际部署阶段。 |
+| `existing_upgrade` 真实生产隔离恢复 | `blocked` | `deploy/modelport-isolated-restore.sh`、Redis restore 工具及合成/空库 drill | 尚无真实生产快照和恢复证明；不得以合成结果替代。仅对明确批准的 `first_install` 路径为 `N/A`，绝不标记为 `passed`。 |
+| `first_install` 首次部署无存量数据证明 | `blocked` | `not-run`；当前没有受保护的仓库外证明、哈希或候选绑定 | 证明只能断言本次发布不迁移既有 ModelPort 生产数据集或 ModelPort 所有的 PostgreSQL、Redis、持久资产、部署状态、更新状态；须仓库外加密、记录不早于候选且不超过 24 小时、绑定版本/候选/上游，并由唯一 security-owner reviewer 在 Environment 中显式批准，记录现有恢复为 `N/A`、`production_update_performed=false`。当前单账号模式允许所有者自审，但不能绕过 required reviewer；证明不代表服务器或无关服务已审计/修改，冲突预检属于以后实际部署阶段。 |
 
 ## 历史兼容字段
 
@@ -69,18 +69,19 @@
 | Go 模块级漏洞可达性 | `passed` | `CVE-2026-46603` / `GO-2026-6222` 只影响未进入发布依赖闭包的 `x/image/vp8l`，候选闭包中的 `x/image` 仅有 `draw` 与 `math/f64`，头像入口只注册 GIF/JPEG/PNG；`GO-2026-5932` 只影响未进入闭包的 `x/crypto/openpgp*`；`GO-2026-5158`（OpenTelemetry）未进入发布入口调用链。精确源码扫描及符号保留诊断二进制均为 0 | 正式镜像使用 `-s -w`；govulncheck 无法提取符号时会按 `go.mod` 精度保守报告上述三项并退出 3，该结果不是实际符号可达性证据。`x/image` 项有 `v0.45.0` 修复，`openpgp` 项无修复版；本次不为消除工具退化结果扩大 `v0.1.183` 的依赖差异。 |
 | 安全 owner 可达性例外/VEX | `blocked` | 技术可达性证据已完成；`.github/audit-exceptions.yml` 当前为空 | 公开发布前仍需真实安全 owner 记录范围、理由、缓解措施、有效期和批准；占位 owner 或空例外列表不能视为批准。 |
 | 正式候选镜像构建 | `pending` | 旧候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 的 `linux/amd64` 镜像曾通过架构、非 root、健康、版本和 PostgreSQL/Redis smoke，但该镜像早于当前 Dockerfile 诊断 target 与发布门修改 | 必须从最终冻结提交重新构建并重新完成镜像、govulncheck、Trivy、SBOM 与 smoke，旧候选证据不能转移。 |
-| 公开发布验证 | `not-run` | create-only publisher、Release/GHCR 契约与 deployment evidence 校验脚本待最终修改纳入 Git 后重跑；用户已明确本次对标 `v0.1.183` 完成开发发布 | 仍没有受保护 GitHub Environment、唯一 security-owner reviewer、获批 OpenVEX，也没有 `existing_upgrade` 的真实恢复证明或 `first_install` 的受保护无存量迁移证明；所选路径门槛未满足前不得写入 GitHub/GHCR。 |
+| 公开发布验证 | `not-run` | `modelport-production-release` 已配置唯一 `@abingooo` reviewer、允许单账号人工自审、禁止管理员绕过且只允许 `production`；create-only publisher、Release/GHCR 契约与 deployment evidence 校验脚本待最终修改纳入 Git 后重跑 | 仍缺最终候选绑定的获批 OpenVEX 和 `first_install` 受保护无存量迁移证明；这些门槛和最终 CI 未满足前不得写入 Tag、Release 或 GHCR 正式槽位。 |
 | `linux/amd64` 发布镜像 smoke | `blocked` | 已被后续修改取代的候选提交 `2b005c81fab60395e71b5128195055926b5502f0` 曾在本地 ARM64 Colima 通过 QEMU 隔离 smoke：容器 healthy、`/health`/设置/API 契约和非 root UID 已核对；既有视觉门覆盖首页 | 最终冻结提交尚未在 GitHub 原生 amd64 runner 重跑；这是 `first_install` 必需的 CI release evidence，不代表任何目标服务器已验证，也不能替代以后用户手动操作后的实例健康检查。 |
 
 ## 当前发布结论
 
 当前状态为 `blocked-before-public-release`：本地实现、测试、迁移工具和加密兼容门已有证据，但以下事项仍不能由本地代码或意图文件替代：
 
-1. 尚未选定并满足一条完整生产证据路径：`existing_upgrade` 仍缺只读审计授权、连接条件、备份安排和真实隔离恢复证明；替代的 `first_install` 路径也没有仓库外加密、24 小时内、候选绑定且由 Environment 独立审批的无存量迁移证明。两者不能拼接，现有恢复在 `first_install` 下只能是 `N/A`。
+1. 尚未选定并满足一条完整生产证据路径：`existing_upgrade` 仍缺只读审计授权、连接条件、备份安排和真实隔离恢复证明；替代的 `first_install` 路径也没有仓库外加密、24 小时内、候选绑定且由 Environment required reviewer 显式审批的无存量迁移证明。两者不能拼接，现有恢复在 `first_install` 下只能是 `N/A`。
 2. 获准的下游 live 测试实例、专用 Key、模型和费用上限。
 3. 针对模块级不可达漏洞的真实安全 owner 可达性例外/VEX 记录。
 4. 正式 runner 生成的 registry digest、SBOM/provenance/signature、干净数据库迁移/幂等性、发布镜像 smoke 和公开发布验证。
-5. 受保护发布 Environment 和与 OpenVEX owner ID 完全一致的唯一 security-owner reviewer。用户已确认本次按 `v0.1.183` 完成开发发布，但该确认不能替代所选部署证据与审批门槛，用户或执行者也不能自我批准。
+
+已满足但正式运行仍会重新校验的仓库外门槛：受保护发布 Environment 已配置唯一 `@abingooo` reviewer（numeric ID `206009240`），允许该所有者人工自审、禁止管理员绕过，且 deployment policy 仅允许 `production`。用户在对话中的发布确认仍不能替代所选部署证据或 GitHub Environment 的显式审批。
 
 注：已有 `v0.1.184` 只读比较仅作范围排除记录；本次不继续评估或对齐，且不阻止 `v0.1.183` 的开发、验证和发布。
 

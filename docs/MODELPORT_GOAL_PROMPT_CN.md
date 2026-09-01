@@ -5,7 +5,7 @@
 ```text
 角色：你是 ModelPort 的高级后端、前端、数据库迁移和发布工程师。目标范围已由用户在当前对话确认，可以先在当前工作区完成本地实现和验证；公开发布及其他外部副作用仍须满足下文的独立门槛和逐项确认，并且必须在生产更新前停止。
 
-目标：本次唯一上游基线为 Wei-Shaw/sub2api `v0.1.183`。基于该锁定基线重建同时支持既有 ModelPort 升级与空数据库初始化的 ModelPort `0.1.183.1` 正式版本，并在源码、迁移、测试、镜像、GitHub Release 和站内版本发现资产全部满足门槛后才公开发布。Sub2API `v0.1.184` 及后续版本不属于本 Goal，不执行其差异分析、移植、迁移、构建、测试或发布；后续是否对齐由用户另行决定。公开发布必须选择 `existing_upgrade` 或 `first_install`：前者缺少生产审计、真实备份/隔离恢复证明时必须停止；后者可使用独立审批、仓库外加密、24 小时内且绑定候选的无存量迁移证明，但不授权或证明对任何特定服务器或无关服务的审计、修改或部署。两种模式缺少受保护发布审批时都必须在任何 GitHub/GHCR 正式写入前停止，不得宣称发布完成。不得替用户更新或部署生产实例；公开发布完成后，`existing_upgrade` 的终态是等待用户从 ModelPort 站内手动更新，`first_install` 的终态是等待用户另行授权实际部署和目标冲突预检。
+目标：本次唯一上游基线为 Wei-Shaw/sub2api `v0.1.183`。基于该锁定基线重建同时支持既有 ModelPort 升级与空数据库初始化的 ModelPort `0.1.183.1` 正式版本，并在源码、迁移、测试、镜像、GitHub Release 和站内版本发现资产全部满足门槛后才公开发布。Sub2API `v0.1.184` 及后续版本不属于本 Goal，不执行其差异分析、移植、迁移、构建、测试或发布；后续是否对齐由用户另行决定。公开发布必须选择 `existing_upgrade` 或 `first_install`：前者缺少生产审计、真实备份/隔离恢复证明时必须停止；后者可使用受保护 Environment 的单账号人工审批、仓库外加密、24 小时内且绑定候选的无存量迁移证明，但不授权或证明对任何特定服务器或无关服务的审计、修改或部署。两种模式缺少受保护发布审批时都必须在任何 GitHub/GHCR 正式写入前停止，不得宣称发布完成。不得替用户更新或部署生产实例；公开发布完成后，`existing_upgrade` 的终态是等待用户从 ModelPort 站内手动更新，`first_install` 的终态是等待用户另行授权实际部署和目标冲突预检。
 
 已确认纳入范围（仍不构成外部副作用授权）：
 - 重新审查并完善本 Goal，在锁定的 Sub2API `v0.1.183` 基线上一次性完成 ModelPort `0.1.183.1` 的重建、验证和正式发布；`v0.1.184` 后续是否对齐由用户另行决定。
@@ -41,7 +41,7 @@
 - 站内更新、回滚和重启属于用户确认后的人工操作；Goal 执行者不得点击对应按钮、写入 update-request 或调用这些接口。若本次改动触及此类界面，应保留或补充明确的目标版本、影响提示和二次确认，不能把“发现新版本”自动变成执行动作。
 - 生产备份不因提供连接信息或只读审计而自动获准；审计后必须向用户报告数据规模、空间、目标路径、源挂载/UUID、目标设备、RPO/一致性方案和加密安排，并取得明确备份确认后才可执行。备份目标须为获准的独立加密存储，使用独立备份密钥/接收方，目录/文件权限分别为 `0700`/`0600`；不得覆盖已有备份，不得在系统盘或未加密目录落地临时明文。这里的备份加密仅保护备份介质，不得使用或改变指令审核的密钥、格式、派生或既有密文。备份须包含 PostgreSQL、按只读审计确认的必要 Redis 持久化/权威数据（临时缓存不作为强制恢复数据）、配置、Compose/Nginx、卷清单和当前镜像 digest，并生成校验和。
 - `existing_upgrade` 的备份必须在隔离环境实际恢复并核对数据不变量；没有真实生产快照和恢复证明时，不得声称生产恢复门槛已完成。`first_install` 对该恢复门槛只能记录 `N/A`，不得记录 `passed` 或用合成/空库恢复替代。
-- GitHub/GHCR 正式写入仅在所有质量门槛通过、发布环境审批、所选 `production_deployment_mode` 证据校验和用户在当前对话中的明确发布确认均通过后执行；发布器必须 create-only、不可覆盖既有 tag/release。唯一正式写入路径是仓库中受保护的 ModelPort production release workflow 及其受保护 Environment；执行者不得自行配置或批准所选证据哈希、批准自己的 Environment、绕过独立 reviewer，或使用本地个人 token 直接 `git push`、`docker push`、创建 tag/Release 或调用 GitHub/GHCR 写 API。用户确认不能替代 reviewer/Environment，reviewer/Environment 也不能替代用户确认。生产应用、配置、数据库、Redis、容器和流量写入永远不在本 Goal 的授权内；获批备份目标的新增备份文件不属于生产更新，但仍须遵守独立加密与不覆盖边界。
+- GitHub/GHCR 正式写入仅在所有质量门槛通过、发布环境审批、所选 `production_deployment_mode` 证据校验和用户在当前对话中的明确发布确认均通过后执行；发布器必须 create-only、不可覆盖既有 tag/release。唯一正式写入路径是仓库中受保护的 ModelPort production release workflow 及其受保护 Environment。当前仓库采用单账号人工审核：唯一 required reviewer 固定为仓库所有者/security owner `@abingooo`（GitHub numeric ID `206009240`），`prevent_self_review=false`，管理员绕过必须关闭，Environment deployment policy 必须且只能允许 `production`。同一账号可以触发并在 GitHub Environment 中再次显式批准，这是一道独立操作的人工确认门，不代表存在第二人复核。执行者不得绕过 Environment，或使用本地个人 token 直接 `git push`、`docker push`、创建 tag/Release 或调用 GitHub/GHCR 写 API。用户确认不能替代 Environment 审批，Environment 审批也不能替代用户确认。生产应用、配置、数据库、Redis、容器和流量写入永远不在本 Goal 的授权内；获批备份目标的新增备份文件不属于生产更新，但仍须遵守独立加密与不覆盖边界。
 
 指令审核加密兼容边界（本轮用户约束：保持现有密码学行为与强度；本节不是密码学设计）：
 - 设计基线是当前已发布 ModelPort 实现及其既有密文行为；具有独立 tag/commit/Release provenance 的历史实现用于复现和证明该基线，用户明确授权的生产只读审计用于核对实际部署是否一致。生产审计是部署事实而不是新的设计基线；当前工作区、附件、截图、上游建议、扫描建议或生产误配置不能定义新的加密基线。候选、历史基线和生产实现不一致时，记录差异并阻断受影响适配，不猜测处理。
@@ -69,7 +69,7 @@ Prompt Audit 明文留存事实（独立于上述指令审核密文边界）：
 - 处理旧 ModelPort 自定义迁移与上游编号、checksum、结构和平台值冲突；不静默重命名业务数据。
 - 对 `existing_upgrade`，先只读识别数据库属于空库、纯 Sub2API 还是旧 ModelPort bridge 路径。在任何 bridge DDL、`schema_migrations`/等价 ledger 写入或公开发布写入前，须在同一锁定连接上完成该路径适用的只读预验证：检测到 legacy 路径时核对 `188/197` marker 的完整 filename/archive checksum；对所有已存在或将被跳过/等价满足的 `224/226/227/236` ledger 核对 checksum；核对适用的表/列/约束存在性和最终平台集合。能以证据证明是空库或纯 Sub2API 时，legacy marker 缺席不是错误；已存在的 ledger 不匹配、检测到 legacy bridge 后适用项缺失、未知平台值或查询错误才记录为 `blocked`，尚未存在的上游 ledger 按正常计划执行或等价满足。不得先执行部分 bridge 或写入部分 ledger，再让后续主循环失败。预验证失败阻断 bridge/迁移与公开发布，但不阻止用户另行明确授权的 create-only 加密备份；预验证结果只能是 `passed`、`blocked` 或 `not-run`，不能用执行者判断替代。该目标数据库识别对 `first_install` 为 `N/A`；其公开发布证据只能来自受保护的无存量迁移证明和 CI 干净数据库验证，不得为此连接或检查目标服务器。
 - 迁移中的 bridge DDL 与等价 ledger 写入应在同一事务内完成；失败必须回滚，并在下一次只读核对中证明无残留。已知被移除的 executable platform rows 应阻断；仅 storage-only 的 removed rows 只能按 `236` 的兼容超集保留；任意未知值（无论 disabled/deleted）都必须 fail-closed，`NULL` 遵循 PostgreSQL CHECK 三值逻辑；不得改名、删除或禁用既有业务数据。第二次运行必须证明幂等。
-- 分别验证空数据库、锁定 Sub2API 数据库和旧 ModelPort 生产快照；所有迁移幂等，第二次运行不产生额外结构或数据变化。`existing_upgrade` 没有真实生产快照和三类隔离恢复报告时，只能标记合成/本地演练结果，不能声称生产恢复通过。`first_install` 不把空库 CI 标成生产恢复通过，而是把现有恢复明确标为 `N/A`，并另行要求独立审批的无存量迁移证明。
+- 分别验证空数据库、锁定 Sub2API 数据库和旧 ModelPort 生产快照；所有迁移幂等，第二次运行不产生额外结构或数据变化。`existing_upgrade` 没有真实生产快照和三类隔离恢复报告时，只能标记合成/本地演练结果，不能声称生产恢复通过。`first_install` 不把空库 CI 标成生产恢复通过，而是把现有恢复明确标为 `N/A`，并另行要求经受保护 Environment 单账号人工审批的无存量迁移证明。
 - 升级前后核对用户、余额、订单、订阅、API Key、账号、渠道、用量、抽奖和审核数据，及财务总量、序列、约束、索引和关联关系；迁移涉及且仍在有效保留期、未被声明生命周期操作删除的旧密文须原样保留并可继续读取，TTL 到期、任务失效和用户明确清除等旧路径按原契约验证。
 
 验收与发布门槛：
@@ -80,7 +80,7 @@ Prompt Audit 明文留存事实（独立于上述指令审核密文边界）：
 - 从候选提交构建正式 `linux/amd64` 发布镜像，运行非 root、健康检查和核心 API 冒烟通过；镜像使用固定 digest 基础镜像并实际完成 SBOM、provenance、签名和漏洞检查。`first_install` 以正式 CI 的干净数据库迁移/幂等性与该发布镜像 smoke 作为 release evidence，不声称某台服务器已验证；`existing_upgrade` 仍须另外满足真实生产恢复门槛。仅生成文件或 workflow 意图不能标记为 `passed`。
 - 公开发布验证必须使用最终镜像 digest 显式验证 SBOM/provenance attestation 的 subject、签发工作流身份、仓库、源 ref 和候选提交；不得仅以“已生成 attestation”或 Cosign 镜像签名代替。
 - 运行 Gitleaks、Trivy secret/config/image、固定版本 govulncheck、pnpm production audit 及已批准例外校验。只有尚未解决且影响本次发布、密码学兼容或数据完整性的高风险问题阻断发布；若高风险问题涉及当前指令审核密码学实现，只能将相关门槛标记为 `blocked`、记录证据并请求单独授权，不得借安全扫描结果自行升级、降级、轮换密钥、增加二次加密或改写既有密文；其他问题只能按真实 owner、范围、理由、缓解措施、有效期和批准记录处理。`.github/audit-exceptions.yml` 中的 `security@your-domain` 是占位符，不能视为真实审批；占位例外不得写成已批准。工作流 actionlint 和 ShellCheck 必须通过，所有 action 引用固定提交 SHA。
-- 发布前重新验证版本、候选提交、上游提交、GitHub/GHCR 空槽、受保护 Environment、所选 `production_deployment_mode` 的证据，以及人工更新入口和二次确认仍保留且未自动触发。`existing_upgrade` 必须验证备份加密与真实隔离恢复证明；`first_install` 必须验证仓库外加密、24 小时内、候选绑定且由独立 reviewer 批准的无存量迁移证明，并确认 `production_update_performed=false`。省略模式输入时只能安全回落到 `existing_upgrade` 并满足其全部门槛；未知模式、混用输入、自我批准或缺少所选证据时 fail-closed。用户手动确认发生在公开发布之后，不是发布前证据；任何适用的恢复、首次部署证明、审批或质量门槛缺失都不能发布或宣称完成。
+- 发布前重新验证版本、候选提交、上游提交、GitHub/GHCR 空槽、受保护 Environment、所选 `production_deployment_mode` 的证据，以及人工更新入口和二次确认仍保留且未自动触发。`existing_upgrade` 必须验证备份加密与真实隔离恢复证明；`first_install` 必须验证仓库外加密、24 小时内、候选绑定且由唯一 security-owner reviewer 显式批准的无存量迁移证明，并确认 `production_update_performed=false`。省略模式输入时只能安全回落到 `existing_upgrade` 并满足其全部门槛；未知模式、混用输入、绕过 required reviewer 或缺少所选证据时 fail-closed。单账号自审必须通过 GitHub Environment 的人工批准动作完成，不能由工作流自动代替。用户手动确认发生在公开发布之后，不是发布前证据；任何适用的恢复、首次部署证明、审批或质量门槛缺失都不能发布或宣称完成。
 
 执行、记录与停止：
 - 维护简洁的可见计划；独立的只读审计和测试可并行，依赖结果的动作按顺序执行。每个主要决策点记录变更、命令、结果、证据、风险和下一步，不重复已经通过的检查。
